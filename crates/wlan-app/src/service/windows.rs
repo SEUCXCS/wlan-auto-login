@@ -53,16 +53,7 @@ unsafe extern "system" fn service_main(_: u32, _: *mut windows_sys::core::PWSTR)
     let result = std::panic::catch_unwind(|| {
         let runtime = tokio::runtime::Runtime::new()?;
         report(SERVICE_RUNNING, 0);
-        let args = crate::cli::Cli {
-            user: false,
-            system: true,
-            command: crate::cli::Command::Daemon {
-                command: None,
-                background: true,
-                service: true,
-            },
-        };
-        let result = runtime.block_on(crate::entry(args));
+        let result = runtime.block_on(crate::app::run_service());
         runtime.shutdown_timeout(crate::shutdown::RUNTIME_GRACE);
         Ok::<_, anyhow::Error>(result)
     });

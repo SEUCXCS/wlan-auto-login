@@ -1,4 +1,6 @@
+use crate::config::{Paths, private_dir, write_private};
 use anyhow::Result;
+use std::fs;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::{
     fmt::{FmtContext, FormatEvent, FormatFields, format::Writer, writer::BoxMakeWriter},
@@ -72,4 +74,20 @@ pub fn init(file: Option<std::fs::File>) -> Result<()> {
         .event_format(Format)
         .try_init()
         .map_err(|error| anyhow::anyhow!("无法初始化日志：{error}"))
+}
+
+pub(crate) fn background_log(paths: &Paths) -> Result<fs::File> {
+    let path = paths.config.join("daemon.log");
+    if fs::metadata(&path).is_ok_and(|m| m.len() > 2 * 1024 * 1024) {
+        write_private(&path, b"")?;
+    }
+    private_dir(&paths.config)?;
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    Ok(options.open(path)?)
 }

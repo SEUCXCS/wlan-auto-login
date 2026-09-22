@@ -61,7 +61,7 @@ impl Shutdown {
         };
         #[cfg(windows)]
         let received = tokio::select! {
-            _ = crate::windows_service::stop_signal() => Some(()),
+            _ = crate::service::windows::stop_signal() => Some(()),
             value = async {
                 match &mut self.console {
                     Some(signals) => tokio::select! {

@@ -79,7 +79,7 @@ fn pipe(address: &str, first: bool, scope: crate::scope::Scope) -> Result<Stream
     // User IPC remains restricted to the current user's SID and LocalSystem.
     // PIPE_REJECT_REMOTE_CLIENTS is available on Windows 7.
     let sid = match scope {
-        crate::scope::Scope::User => crate::platform::current_sid()?,
+        crate::scope::Scope::User => crate::scope::current_sid()?,
         crate::scope::Scope::System => "BA".into(),
     };
     let sddl: Vec<u16> = format!("D:P(A;;GA;;;{sid})(A;;GA;;;SY)")

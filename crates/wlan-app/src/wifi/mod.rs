@@ -6,8 +6,6 @@ use linux::Monitor as NativeMonitor;
 mod windows;
 #[cfg(target_os = "windows")]
 use windows::Monitor as NativeMonitor;
-#[cfg(target_os = "windows")]
-pub use windows::current_sid;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]

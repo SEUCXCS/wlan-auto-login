@@ -1,8 +1,12 @@
+//! Run the automatic-login loop and coordinate its event sources.
+mod policy;
+use policy::Policy;
+
 use crate::{
     config::{Paths, Preferences},
     control, credentials,
-    platform::Monitor,
     shutdown::{Shutdown, until_stopped},
+    wifi::Monitor,
 };
 use anyhow::{Context, Result, bail};
 use cxxy_wlanlogin_lib::{AuthState, Client};
@@ -10,73 +14,6 @@ use std::time::{Duration, Instant};
 
 const INTERVAL: Duration = Duration::from_secs(30);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
-
-#[derive(Default)]
-struct Policy {
-    initialized: bool,
-    session: Option<String>,
-    pending_connection: bool,
-    credential_blocked: bool,
-    revision: u64,
-    failures: u32,
-    retry_at: Option<Instant>,
-}
-
-impl Policy {
-    fn update(&mut self, session: Option<String>, control: &mut control::State) -> bool {
-        let changed = self.session != session;
-        let saved_changed = control.session != session;
-        if saved_changed {
-            // Native notification generations restart with the monitor. Preserve
-            // a manual pause on the same interface during a daemon restart.
-            let same_interface_on_restart = !self.initialized
-                && control
-                    .session
-                    .as_deref()
-                    .zip(session.as_deref())
-                    .is_some_and(|(old, new)| old.split('#').next() == new.split('#').next());
-            if !same_interface_on_restart {
-                control.paused = false;
-            }
-            control.session = session.clone();
-        }
-        self.initialized = true;
-        if changed {
-            self.session = session.clone();
-            self.pending_connection = session.is_some();
-            self.failures = 0;
-            self.retry_at = None;
-        }
-        if self.revision != control.revision {
-            self.revision = control.revision;
-            self.credential_blocked = false;
-            self.failures = 0;
-            self.retry_at = None;
-        }
-        changed || saved_changed
-    }
-    fn should_check(&self, control: &control::State, now: Instant) -> bool {
-        self.session.is_some()
-            && !control.paused
-            && !self.credential_blocked
-            && self.retry_at.is_none_or(|at| now >= at)
-    }
-    fn should_login(&self, auth: AuthState) -> bool {
-        auth == AuthState::Offline || (self.pending_connection && auth == AuthState::Unknown)
-    }
-    fn success(&mut self) {
-        self.pending_connection = false;
-        self.failures = 0;
-        self.retry_at = None;
-    }
-    fn failure(&mut self, now: Instant) {
-        self.failures = self.failures.saturating_add(1);
-        let seconds = 30u64
-            .saturating_mul(1u64 << self.failures.saturating_sub(1).min(4))
-            .min(300);
-        self.retry_at = Some(now + Duration::from_secs(seconds));
-    }
-}
 
 fn ensure_scope(paths: &Paths) -> Result<()> {
     // User daemons yield when a system installation exists. A boot service must
@@ -140,7 +77,7 @@ async fn run_loop(client: &Client, paths: &Paths, wake: &tokio::sync::Notify) ->
             match Monitor::new().await {
                 Ok(value) => {
                     monitor = Some(value);
-                    policy.initialized = false;
+                    policy.monitor_restarted();
                 }
                 Err(e) => tracing::warn!("网络监听暂不可用，30 秒后重试：{e:#}"),
             }
@@ -181,12 +118,12 @@ async fn tick(
     let session = monitor.snapshot().await?;
     let _operation = control::operation_lock(paths).await?;
     let mut state = control::State::load(paths)?;
-    let previous_revision = policy.revision;
+    let previous_revision = policy.revision();
     let changed = policy.update(session, &mut state);
     if changed {
         state.save(paths)?;
     }
-    if !scheduled && !changed && policy.revision == previous_revision {
+    if !scheduled && !changed && policy.revision() == previous_revision {
         return Ok(());
     }
     if !policy.should_check(&state, Instant::now()) {
@@ -206,7 +143,7 @@ async fn tick(
         return Ok(());
     }
     // Recheck the Wi-Fi immediately before sending credentials after an await.
-    if monitor.snapshot().await? != policy.session {
+    if monitor.snapshot().await?.as_deref() != policy.session() {
         return Ok(());
     }
     let line = Preferences::load(paths)?.line;
@@ -219,7 +156,7 @@ async fn tick(
             credential_rejected: true,
             ..
         }) => {
-            policy.credential_blocked = true;
+            policy.reject_credentials();
             tracing::error!(
                 "账号或密码被拒绝；暂停自动重试，请执行 login --interactive --remember-me 更新凭据"
             );
@@ -265,84 +202,5 @@ mod tests {
             tokio::time::timeout(Duration::from_millis(200), control::operation_lock(&paths))
                 .await??;
         Ok(())
-    }
-    #[test]
-    fn disconnected_paused_and_invalid_credentials_never_login() {
-        let mut policy = Policy::default();
-        let mut state = control::State::default();
-        let now = Instant::now();
-        assert!(!policy.should_check(&state, now));
-        policy.update(Some("wifi-1".into()), &mut state);
-        assert!(policy.should_check(&state, now));
-        state.paused = true;
-        assert!(!policy.should_check(&state, now));
-        policy.update(Some("wifi-2".into()), &mut state);
-        assert!(!state.paused);
-        policy.credential_blocked = true;
-        assert!(!policy.should_check(&state, now));
-        state.resume();
-        policy.update(Some("wifi-2".into()), &mut state);
-        assert!(policy.should_check(&state, now));
-    }
-    #[test]
-    fn unknown_status_only_allows_initial_connection_login() {
-        let mut policy = Policy::default();
-        let mut state = control::State::default();
-        policy.update(Some("wifi-1".into()), &mut state);
-        assert!(policy.should_login(AuthState::Unknown));
-        assert!(!policy.should_login(AuthState::Online));
-        policy.success();
-        assert!(!policy.should_login(AuthState::Unknown));
-        assert!(policy.should_login(AuthState::Offline));
-    }
-    #[test]
-    fn retry_backoff_is_bounded_and_cleared_on_reconnection() {
-        let mut policy = Policy::default();
-        let mut state = control::State::default();
-        policy.update(Some("wifi-1".into()), &mut state);
-        let now = Instant::now();
-        for _ in 0..20 {
-            policy.failure(now);
-        }
-        assert!(!policy.should_check(&state, now + Duration::from_secs(299)));
-        assert!(policy.should_check(&state, now + Duration::from_secs(300)));
-        policy.update(Some("wifi-2".into()), &mut state);
-        assert!(policy.should_check(&state, now));
-    }
-    #[test]
-    fn native_monitor_restart_does_not_clear_manual_pause() {
-        let mut state = control::State {
-            paused: true,
-            session: Some("interface#7".into()),
-            revision: 0,
-        };
-        let mut policy = Policy::default();
-        policy.update(Some("interface#0".into()), &mut state);
-        assert!(state.paused);
-        policy.update(None, &mut state);
-        policy.update(Some("interface#1".into()), &mut state);
-        assert!(!state.paused);
-    }
-
-    #[test]
-    fn successful_check_does_not_delay_the_next_scheduled_tick() {
-        let mut policy = Policy::default();
-        let mut state = control::State::default();
-        policy.update(Some("wifi-1".into()), &mut state);
-        let scheduled = Instant::now() + INTERVAL;
-        policy.success();
-        assert!(policy.should_check(&state, scheduled));
-    }
-
-    #[test]
-    fn restart_on_same_connection_preserves_manual_logout() {
-        let mut state = control::State {
-            paused: true,
-            session: Some("wifi-1".into()),
-            revision: 0,
-        };
-        let mut policy = Policy::default();
-        policy.update(Some("wifi-1".into()), &mut state);
-        assert!(!policy.should_check(&state, Instant::now()));
     }
 }

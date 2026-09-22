@@ -148,7 +148,7 @@ pub fn restrict_windows(path: &Path, public: bool) -> Result<()> {
     let identity = if crate::scope::elevated()? {
         "BA".into()
     } else {
-        crate::platform::current_sid()?
+        crate::scope::current_sid()?
     };
     let read = if public { "(A;OICI;GRGX;;;BU)" } else { "" };
     let sddl: Vec<u16> = format!("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{identity}){read}")

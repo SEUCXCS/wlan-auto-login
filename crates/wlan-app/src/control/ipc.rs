@@ -1,82 +1,12 @@
+use super::transport;
 use crate::config::{Paths, private_dir, write_private};
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::{
-    fs::{self, File, OpenOptions},
-    path::Path,
-    time::Duration,
-};
+use std::{fs, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::mpsc,
 };
-
-#[derive(Default, Clone, Serialize, Deserialize)]
-pub struct State {
-    pub paused: bool,
-    pub session: Option<String>,
-    pub revision: u64,
-}
-
-impl State {
-    pub fn load(paths: &Paths) -> Result<Self> {
-        match fs::read(paths.config.join("control.json")) {
-            Ok(bytes) => serde_json::from_slice(&bytes).context("后台控制状态损坏"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e.into()),
-        }
-    }
-    pub fn save(&self, paths: &Paths) -> Result<()> {
-        write_private(
-            &paths.config.join("control.json"),
-            &serde_json::to_vec(self)?,
-        )
-    }
-    pub fn resume(&mut self) {
-        self.paused = false;
-        self.revision = self.revision.wrapping_add(1);
-    }
-}
-
-fn open_lock(path: &Path) -> Result<File> {
-    if let Some(parent) = path.parent() {
-        private_dir(parent)?;
-    }
-    let mut options = OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    Ok(options.open(path)?)
-}
-
-pub fn singleton(paths: &Paths) -> Result<File> {
-    let file = open_lock(&paths.runtime.join("daemon.lock"))?;
-    fs2::FileExt::try_lock_exclusive(&file).context("daemon 已在运行")?;
-    Ok(file)
-}
-
-pub fn service_lock(paths: &Paths) -> Result<File> {
-    let file = open_lock(&paths.config.join("service.lock"))?;
-    fs2::FileExt::try_lock_exclusive(&file).context("另一项服务管理操作正在运行")?;
-    Ok(file)
-}
-
-pub async fn operation_lock(paths: &Paths) -> Result<File> {
-    let file = open_lock(&paths.runtime.join("operation.lock"))?;
-    for _ in 0..250 {
-        match fs2::FileExt::try_lock_exclusive(&file) {
-            Ok(()) => return Ok(file),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                tokio::time::sleep(Duration::from_millis(100)).await
-            }
-            Err(e) => return Err(e.into()),
-        }
-    }
-    bail!("另一项登录或注销操作尚未结束，请稍后重试")
-}
 
 #[derive(Serialize, Deserialize)]
 struct Endpoint {
@@ -110,7 +40,7 @@ pub async fn serve(paths: &Paths) -> Result<(Server, mpsc::Receiver<Signal>)> {
     getrandom::fill(&mut random).map_err(|e| anyhow::anyhow!("无法生成控制令牌: {e}"))?;
     let token: String = random.iter().map(|v| format!("{v:02x}")).collect();
     private_dir(&paths.runtime)?;
-    let (mut listener, address) = crate::transport::Listener::bind(paths, &token)?;
+    let (mut listener, address) = transport::Listener::bind(paths, &token)?;
     let endpoint = Endpoint {
         address,
         token: token.clone(),
@@ -167,7 +97,7 @@ async fn send(paths: &Paths, command: u8) {
     let _ = tokio::time::timeout(Duration::from_secs(1), async {
         let endpoint: Endpoint =
             serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json"))?)?;
-        let mut socket = crate::transport::connect(&endpoint.address).await?;
+        let mut socket = transport::connect(&endpoint.address).await?;
         socket.write_all(endpoint.token.as_bytes()).await?;
         socket.write_all(&[command]).await?;
         Ok::<(), anyhow::Error>(())
@@ -185,7 +115,7 @@ mod tests {
         let (_server, mut receiver) = serve(&paths).await?;
         let endpoint: Endpoint =
             serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json"))?)?;
-        let mut stranger = crate::transport::connect(&endpoint.address).await?;
+        let mut stranger = transport::connect(&endpoint.address).await?;
         stranger.write_all(&[b'x'; 64]).await?;
         assert!(
             tokio::time::timeout(Duration::from_millis(100), receiver.recv())
@@ -208,34 +138,6 @@ mod tests {
                 0o600
             );
         }
-        Ok(())
-    }
-    #[tokio::test]
-    async fn instance_lock_is_exclusive_and_released_on_drop() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let paths = Paths::test(dir.path());
-        let lock = singleton(&paths)?;
-        assert!(singleton(&paths).is_err());
-        drop(lock);
-        assert!(singleton(&paths).is_ok());
-        Ok(())
-    }
-    #[test]
-    fn pause_survives_restart_and_explicit_login_resumes() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let paths = Paths::test(dir.path());
-        State {
-            paused: true,
-            session: Some("connection-1".into()),
-            revision: 0,
-        }
-        .save(&paths)?;
-        let mut state = State::load(&paths)?;
-        assert!(state.paused);
-        state.resume();
-        state.save(&paths)?;
-        assert!(!State::load(&paths)?.paused);
-        assert_eq!(State::load(&paths)?.revision, 1);
         Ok(())
     }
 }
