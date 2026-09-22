@@ -12,15 +12,20 @@ use std::{
 
 const LABEL: &str = "org.seucxcs.cxxy-wlanlogin";
 
+mod status;
+use status::Manager;
+pub use status::status;
+
+#[derive(Clone, Debug)]
 struct Invocation {
-    program: &'static str,
+    program: OsString,
     args: Vec<OsString>,
     optional: bool,
 }
 impl Invocation {
-    fn new(program: &'static str, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> Self {
+    fn new(program: impl AsRef<OsStr>, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> Self {
         Self {
-            program,
+            program: program.as_ref().to_owned(),
             args: args.into_iter().map(|v| v.as_ref().to_owned()).collect(),
             optional: false,
         }
@@ -30,18 +35,45 @@ impl Invocation {
         self
     }
     async fn run(&self) -> Result<()> {
-        let mut command = tokio::process::Command::new(self.program);
+        let result = self.output().await?;
+        if !self.optional {
+            result.check(self)?;
+        }
+        Ok(())
+    }
+    async fn output(&self) -> Result<CommandOutput> {
+        let mut command = tokio::process::Command::new(&self.program);
         command.args(&self.args).kill_on_drop(true);
         #[cfg(windows)]
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW, available on Win7.
         let result = tokio::time::timeout(Duration::from_secs(30), command.output())
             .await
             .context("服务管理命令超时")??;
-        if !result.status.success() && !self.optional {
+        Ok(CommandOutput {
+            success: result.status.success(),
+            stdout: String::from_utf8_lossy(&result.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&result.stderr).into_owned(),
+        })
+    }
+}
+
+struct CommandOutput {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+impl CommandOutput {
+    fn check(&self, command: &Invocation) -> Result<()> {
+        if !self.success {
             bail!(
-                "{} 执行失败：{}",
-                self.program,
-                String::from_utf8_lossy(&result.stderr).trim()
+                "{} {:?} 执行失败：{}",
+                command.program.to_string_lossy(),
+                command.args,
+                if self.stderr.trim().is_empty() {
+                    self.stdout.trim()
+                } else {
+                    self.stderr.trim()
+                }
             );
         }
         Ok(())
@@ -49,6 +81,7 @@ impl Invocation {
 }
 
 struct Plan {
+    manager: Manager,
     executable: PathBuf,
     definition: PathBuf,
     content: String,
@@ -266,6 +299,7 @@ fn linux_plan(executable: PathBuf, definition: PathBuf) -> Result<Plan> {
     );
     let reload = || Invocation::new("systemctl", ["--user", "daemon-reload"]);
     Ok(Plan {
+        manager: Manager::Systemd,
         executable,
         definition,
         content,
@@ -335,6 +369,10 @@ fn macos_plan(executable: PathBuf, definition: PathBuf, log: PathBuf, uid: u32) 
     let bootout =
         || Invocation::new("launchctl", [OsStr::new("bootout"), OsStr::new(&target)]).optional();
     Ok(Plan {
+        manager: Manager::Launchd {
+            domain: domain.clone(),
+            target: target.clone(),
+        },
         executable,
         content,
         stop: vec![bootout()],
@@ -375,6 +413,7 @@ fn windows_plan(executable: PathBuf, definition: PathBuf, sid: &str) -> Result<P
 "#
     );
     Ok(Plan {
+        manager: Manager::TaskScheduler { name: name.clone() },
         executable,
         content,
         stop: vec![Invocation::new("schtasks", ["/End", "/TN", &name]).optional()],
@@ -485,6 +524,7 @@ mod tests {
         fs::copy(&definition, &original)?;
         fs::write(&source, "new executable")?;
         let plan = Plan {
+            manager: Manager::Systemd,
             executable: executable.clone(),
             definition: definition.clone(),
             content: format!("# {LABEL} new service"),
@@ -515,6 +555,7 @@ mod tests {
         let executable = dir.path().join("bin/daemon");
         let definition = dir.path().join("service");
         let plan = Plan {
+            manager: Manager::Systemd,
             executable: executable.clone(),
             definition: definition.clone(),
             content: format!("# {LABEL}"),

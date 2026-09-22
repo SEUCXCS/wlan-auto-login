@@ -74,9 +74,12 @@ macOS 和部分 Windows 版本可能要求位置权限才能读取 Wi-Fi SSID；
 
 ```sh
 cxxy-wlanlogin-cli daemon
+cxxy-wlanlogin-cli daemon status
 ```
 
 此命令在前台运行同一个后台循环，可用于查看日志；首次运行前必须通过 `login --remember-me` 或离线 `login` 保存过凭据。安装服务会自动使用 daemon 模式。
+
+`daemon status` 查询已安装的系统服务，显示安装与运行状态、服务名称、程序位置、服务文件、已安装副本版本及当前 CLI 版本，并按平台提供 PID、启用状态和最近退出结果。版本通过安装副本的 `--version` 读取。未安装也可查询；服务管理器不可用时明确显示“未知”并返回错误，不会误报为已停止。单独运行的前台 `daemon` 不计入系统服务的运行状态。
 
 - 启动时检查当前 Wi-Fi，并订阅系统网络事件：Linux 使用 NetworkManager D-Bus，Windows 使用 Native WLAN，macOS 使用 CoreWLAN 和 SystemConfiguration。
 - 只在 SSID 精确等于 `Student_CX` 时查询认证接口。离开目标网络时停止门户轮询。

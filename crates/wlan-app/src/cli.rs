@@ -14,8 +14,11 @@ pub enum Command {
     Login(LoginArgs),
     /// 注销当前校园网会话
     Logout,
-    /// 使用已保存凭据在前台运行后台登录循环
+    /// 直接运行后台登录循环，或管理已安装的系统服务
+    #[command(subcommand_negates_reqs = true, args_conflicts_with_subcommands = true)]
     Daemon {
+        #[command(subcommand)]
+        command: Option<DaemonCommand>,
         #[arg(long, hide = true)]
         background: bool,
     },
@@ -23,6 +26,12 @@ pub enum Command {
     Install(LoginArgs),
     /// 停止并卸载后台服务，保留已保存的账号密码
     Uninstall,
+}
+
+#[derive(Subcommand, Debug, PartialEq, Eq)]
+pub enum DaemonCommand {
+    /// 查看系统服务的安装、运行状态和已安装版本
+    Status,
 }
 
 #[derive(Args, Default)]
@@ -56,6 +65,28 @@ pub struct LoginArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn daemon_without_subcommand_still_runs_the_process() {
+        for arguments in [vec!["app", "daemon"], vec!["app", "daemon", "--background"]] {
+            assert!(matches!(
+                Cli::try_parse_from(arguments),
+                Ok(Cli {
+                    command: Command::Daemon { command: None, .. }
+                })
+            ));
+        }
+        assert!(matches!(
+            Cli::try_parse_from(["app", "daemon", "status"]),
+            Ok(Cli {
+                command: Command::Daemon {
+                    command: Some(DaemonCommand::Status),
+                    background: false
+                }
+            })
+        ));
+        assert!(Cli::try_parse_from(["app", "daemon", "--background", "status"]).is_err());
+    }
+
     #[test]
     fn explicit_tui_and_non_interactive_are_mutually_exclusive() {
         assert!(

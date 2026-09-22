@@ -27,7 +27,14 @@ async fn main() -> std::process::ExitCode {
 async fn run(args: cli::Cli) -> Result<()> {
     let client = Client::new(PortalConfig::default())?;
     match args.command {
-        cli::Command::Daemon { background } => {
+        cli::Command::Daemon {
+            command: Some(cli::DaemonCommand::Status),
+            ..
+        } => service::status(&config::Paths::new()?).await,
+        cli::Command::Daemon {
+            command: None,
+            background,
+        } => {
             let paths = config::Paths::new()?;
             let filter = tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "info".into());
