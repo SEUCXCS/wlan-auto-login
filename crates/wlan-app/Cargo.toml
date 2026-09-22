@@ -18,12 +18,25 @@ ratatui.workspace = true
 crossterm.workspace = true
 directories.workspace = true
 tempfile.workspace = true
+fs2.workspace = true
+futures-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+getrandom.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { workspace = true, features = ["sync-secret-service", "crypto-rust"] }
+zbus = { version = "4.4", default-features = false, features = ["tokio"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { workspace = true, features = ["apple-native"] }
+dispatch2 = "0.3"
+objc2 = "0.6"
+objc2-core-wlan = "0.3"
+objc2-foundation = "0.3"
+objc2-core-foundation = "0.3"
+objc2-system-configuration = "0.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { workspace = true, features = ["windows-native"] }
+windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_WiFi", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }

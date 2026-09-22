@@ -1,7 +1,11 @@
 mod cli;
 mod config;
+mod control;
 mod credentials;
+mod daemon;
 mod login;
+mod platform;
+mod transport;
 mod tui;
 
 use anyhow::Result;
@@ -22,9 +26,29 @@ async fn main() -> std::process::ExitCode {
 async fn run(args: cli::Cli) -> Result<()> {
     let client = Client::new(PortalConfig::default())?;
     match args.command {
+        cli::Command::Daemon => {
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "info".into()),
+                )
+                .with_writer(std::io::stderr)
+                .init();
+            daemon::run(&client, &config::Paths::new()?).await
+        }
         cli::Command::Login(args) => login::run(&client, &config::Paths::new()?, args, false).await,
         cli::Command::Logout => {
-            client.logout().await?;
+            let paths = config::Paths::new()?;
+            let _operation = control::operation_lock(&paths).await?;
+            let previous = control::State::load(&paths)?;
+            let mut paused = previous.clone();
+            paused.paused = true;
+            paused.save(&paths)?;
+            if let Err(error) = client.logout().await {
+                previous.save(&paths)?;
+                return Err(error.into());
+            }
+            control::wake(&paths).await;
             println!("已注销");
             Ok(())
         }

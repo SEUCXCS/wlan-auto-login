@@ -14,6 +14,8 @@ pub enum Command {
     Login(LoginArgs),
     /// 注销当前校园网会话
     Logout,
+    /// 使用已保存凭据在前台运行后台登录循环
+    Daemon,
 }
 
 #[derive(Args, Default)]

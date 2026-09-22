@@ -23,6 +23,12 @@ keyring = { version = "3.6", default-features = false }
 directories = "6"
 tempfile = "3"
 
+fs2 = "0.4"
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+getrandom = "0.4"
+
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 

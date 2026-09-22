@@ -87,6 +87,7 @@ pub async fn run(
         if interactive {
             form = tui::prompt(form, force_remember, warning.take())?;
         }
+        let _operation = crate::control::operation_lock(paths).await?;
         match client.login(&form.credentials, form.line).await {
             Ok(()) => {
                 if form.remember {
@@ -95,6 +96,10 @@ pub async fn run(
                         .context("已登录，但保存凭据失败；后台服务尚不能安装")?;
                 }
                 Preferences { line: form.line }.save(paths)?;
+                let mut state = crate::control::State::load(paths)?;
+                state.resume();
+                state.save(paths)?;
+                crate::control::wake(paths).await;
                 println!(
                     "登录成功（{}）{}",
                     form.line.label(),
