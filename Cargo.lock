@@ -508,6 +508,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "keyring",
+ "libc",
  "objc2",
  "objc2-core-foundation",
  "objc2-core-wlan",

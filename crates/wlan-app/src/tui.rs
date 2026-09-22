@@ -44,27 +44,81 @@ pub fn prompt(mut form: Form, force_remember: bool, mut message: Option<String>)
                 return;
             }
             let width = area.width.min(76);
-            let content = Rect::new((area.width-width)/2, 1, width, area.height-2);
-            let rows = Layout::vertical([Constraint::Length(2), Constraint::Length(3), Constraint::Length(3), Constraint::Length(3), Constraint::Length(3), Constraint::Length(3), Constraint::Min(3)]).split(content);
-            frame.render_widget(Paragraph::new("Student_CX 校园网登录\nTab 切换 · ←/→ 选线路 · Space 勾选 · Esc 取消"), rows[0]);
+            let content = Rect::new((area.width - width) / 2, 1, width, area.height - 2);
+            let rows = Layout::vertical([
+                Constraint::Length(2),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Min(3),
+            ])
+            .split(content);
+            frame.render_widget(
+                Paragraph::new(
+                    "Student_CX 校园网登录\nTab 切换 · ←/→ 选线路 · Space 勾选 · Esc 取消",
+                ),
+                rows[0],
+            );
             let password = "•".repeat(form.credentials.password.chars().count());
-            let remember = if form.remember { "[x] Remember me" } else { "[ ] Remember me" };
-            let values = [form.credentials.username.as_str(), password.as_str(), remember, form.line.label(), "登录"];
+            let remember = if form.remember {
+                "[x] Remember me"
+            } else {
+                "[ ] Remember me"
+            };
+            let values = [
+                form.credentials.username.as_str(),
+                password.as_str(),
+                remember,
+                form.line.label(),
+                "登录",
+            ];
             let titles = ["账号", "密码", "保存凭据", "线路（← / →）", "Enter 提交"];
             for i in 0..5 {
-                fields[i] = rows[i+1];
-                let style = if focus == i { Style::default().fg(Color::Cyan) } else { Style::default() };
+                fields[i] = rows[i + 1];
+                let style = if focus == i {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default()
+                };
                 let text_width = ratatui::text::Line::from(values[i]).width();
                 let inner_width = fields[i].width.saturating_sub(3) as usize;
-                let scroll = if i < 2 { text_width.saturating_sub(inner_width) as u16 } else { 0 };
-                frame.render_widget(Paragraph::new(values[i]).scroll((0, scroll)).block(Block::default().borders(Borders::ALL).title(titles[i]).border_style(style)), fields[i]);
+                let scroll = if i < 2 {
+                    text_width.saturating_sub(inner_width) as u16
+                } else {
+                    0
+                };
+                frame.render_widget(
+                    Paragraph::new(values[i]).scroll((0, scroll)).block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(titles[i])
+                            .border_style(style),
+                    ),
+                    fields[i],
+                );
                 if focus == i && i < 2 {
-                    frame.set_cursor_position(Position::new(fields[i].x+1+(text_width.min(inner_width) as u16), fields[i].y+1));
+                    frame.set_cursor_position(Position::new(
+                        fields[i].x + 1 + (text_width.min(inner_width) as u16),
+                        fields[i].y + 1,
+                    ));
                 }
             }
-            let mut notice = if force_remember { "⚠ 安装后台服务必须保存账号和密码到系统密钥管理器。Remember me 已强制开启，无法取消。\n".to_owned() } else { String::new() };
-            if let Some(message) = &message { notice.push_str(message); }
-            frame.render_widget(Paragraph::new(notice).style(Style::default().fg(Color::Yellow)).wrap(Wrap { trim: false }), rows[6]);
+            let mut notice = if force_remember {
+                "⚠ 安装服务必须保存账号和密码。\nRemember me 已开启，无法取消。\n".to_owned()
+            } else {
+                String::new()
+            };
+            if let Some(message) = &message {
+                notice.push_str(message);
+            }
+            frame.render_widget(
+                Paragraph::new(notice)
+                    .style(Style::default().fg(Color::Yellow))
+                    .wrap(Wrap { trim: false }),
+                rows[6],
+            );
         })?;
         if !event::poll(Duration::from_millis(100))? {
             continue;

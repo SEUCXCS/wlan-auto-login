@@ -58,6 +58,12 @@ pub fn singleton(paths: &Paths) -> Result<File> {
     Ok(file)
 }
 
+pub fn service_lock(paths: &Paths) -> Result<File> {
+    let file = open_lock(&paths.config.join("service.lock"))?;
+    fs2::FileExt::try_lock_exclusive(&file).context("另一项服务安装或卸载操作正在运行")?;
+    Ok(file)
+}
+
 pub async fn operation_lock(paths: &Paths) -> Result<File> {
     let file = open_lock(&paths.config.join("operation.lock"))?;
     for _ in 0..250 {
@@ -93,7 +99,13 @@ impl Drop for Server {
     }
 }
 
-pub async fn serve(paths: &Paths) -> Result<(Server, mpsc::Receiver<()>)> {
+#[derive(Debug, PartialEq, Eq)]
+pub enum Signal {
+    Wake,
+    Stop,
+}
+
+pub async fn serve(paths: &Paths) -> Result<(Server, mpsc::Receiver<Signal>)> {
     let mut random = [0u8; 32];
     getrandom::fill(&mut random).map_err(|e| anyhow::anyhow!("无法生成控制令牌: {e}"))?;
     let token: String = random.iter().map(|v| format!("{v:02x}")).collect();
@@ -114,7 +126,22 @@ pub async fn serve(paths: &Paths) -> Result<(Server, mpsc::Receiver<()>)> {
                 Ok(Ok(_))
             ) && bytes == token.as_bytes()
             {
-                let _ = sender.try_send(());
+                let mut command = [0];
+                if matches!(
+                    tokio::time::timeout(Duration::from_secs(1), socket.read_exact(&mut command))
+                        .await,
+                    Ok(Ok(_))
+                ) {
+                    match command[0] {
+                        b'w' => {
+                            let _ = sender.try_send(Signal::Wake);
+                        }
+                        b's' => {
+                            let _ = sender.send(Signal::Stop).await;
+                        }
+                        _ => continue,
+                    }
+                }
                 let _ = socket.write_all(b"ok").await;
             }
         }
@@ -131,11 +158,18 @@ pub async fn serve(paths: &Paths) -> Result<(Server, mpsc::Receiver<()>)> {
 }
 
 pub async fn wake(paths: &Paths) {
+    send(paths, b'w').await;
+}
+pub async fn stop(paths: &Paths) {
+    send(paths, b's').await;
+}
+async fn send(paths: &Paths, command: u8) {
     let _ = tokio::time::timeout(Duration::from_secs(1), async {
         let endpoint: Endpoint =
             serde_json::from_slice(&fs::read(paths.config.join("daemon-endpoint.json"))?)?;
         let mut socket = crate::transport::connect(&endpoint.address).await?;
         socket.write_all(endpoint.token.as_bytes()).await?;
+        socket.write_all(&[command]).await?;
         Ok::<(), anyhow::Error>(())
     })
     .await;
@@ -163,7 +197,7 @@ mod tests {
         wake(&paths).await;
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(1), receiver.recv()).await?,
-            Some(())
+            Some(Signal::Wake)
         );
         #[cfg(unix)]
         {

@@ -5,7 +5,7 @@ pub use linux::Monitor;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
-pub use windows::Monitor;
+pub use windows::{Monitor, current_sid};
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]

@@ -153,3 +153,51 @@ unsafe extern "system" fn changed(data: *mut L2_NOTIFICATION_DATA, context: *mut
         events.notify.notify_one();
     }
 }
+
+pub fn current_sid() -> Result<String> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, LocalFree},
+        Security::{
+            Authorization::ConvertSidToStringSidW, GetTokenInformation, TOKEN_QUERY, TOKEN_USER,
+            TokenUser,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+    // SAFETY: the token and SID buffers live through each API call; the word
+    // buffer is pointer-aligned and all Windows allocations/handles are freed.
+    unsafe {
+        let mut token = ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let result = (|| {
+            let mut size = 0;
+            GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut size);
+            let mut buffer = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+            if GetTokenInformation(
+                token,
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                size,
+                &mut size,
+            ) == 0
+            {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let user = &*buffer.as_ptr().cast::<TOKEN_USER>();
+            let mut string = ptr::null_mut();
+            if ConvertSidToStringSidW(user.User.Sid, &mut string) == 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let mut length = 0;
+            while *string.add(length) != 0 {
+                length += 1;
+            }
+            let sid = String::from_utf16_lossy(std::slice::from_raw_parts(string, length));
+            LocalFree(string.cast());
+            Ok(sid)
+        })();
+        CloseHandle(token);
+        result
+    }
+}

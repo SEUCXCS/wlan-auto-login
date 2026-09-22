@@ -94,7 +94,7 @@ pub async fn run(client: &Client, paths: &Paths) -> Result<()> {
         }
         tokio::select! {
             _ = interval.tick() => {},
-            _ = wake.recv() => {},
+            signal = wake.recv() => { if signal == Some(control::Signal::Stop) { return Ok(()); } },
             event = async { match &mut monitor { Some(m) => m.changed().await, None => std::future::pending().await } } => {
                 if let Err(e) = event { tracing::warn!("网络事件订阅断开：{e:#}"); monitor = None; }
                 // Merge bursts of state/DHCP notifications.
@@ -149,7 +149,9 @@ async fn tick(
             ..
         }) => {
             policy.credential_blocked = true;
-            tracing::error!("账号或密码被拒绝；暂停自动重试，请执行 login --remember-me 更新凭据");
+            tracing::error!(
+                "账号或密码被拒绝；暂停自动重试，请执行 login --interactive --remember-me 更新凭据"
+            );
         }
         Err(e) => return Err(e.into()),
     }

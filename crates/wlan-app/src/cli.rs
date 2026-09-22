@@ -15,7 +15,14 @@ pub enum Command {
     /// 注销当前校园网会话
     Logout,
     /// 使用已保存凭据在前台运行后台登录循环
-    Daemon,
+    Daemon {
+        #[arg(long, hide = true)]
+        background: bool,
+    },
+    /// 安装用户登录后自动启动的服务；首次登录强制保存凭据
+    Install(LoginArgs),
+    /// 停止并卸载后台服务，保留已保存的账号密码
+    Uninstall,
 }
 
 #[derive(Args, Default)]
@@ -38,6 +45,9 @@ pub struct LoginArgs {
     /// 登录成功后将账号和密码保存至系统密钥管理器
     #[arg(long)]
     pub remember_me: bool,
+    /// 即使已有保存的凭据，也打开 TUI 以修改账号、密码或线路
+    #[arg(long, alias = "tui", conflicts_with = "non_interactive")]
+    pub interactive: bool,
     /// 缺少凭据时直接报错，不打开 TUI
     #[arg(long)]
     pub non_interactive: bool,

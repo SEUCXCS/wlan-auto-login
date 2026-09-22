@@ -73,9 +73,10 @@ fn pipe(address: &str, first: bool) -> Result<Stream> {
             SECURITY_ATTRIBUTES,
         },
     };
-    // Protected ACL: only the object's owner and LocalSystem. OWNER RIGHTS
-    // and PIPE_REJECT_REMOTE_CLIENTS are available on Windows 7.
-    let sddl: Vec<u16> = "D:P(A;;GA;;;OW)(A;;GA;;;SY)"
+    // Protected ACL: only the current user's SID and LocalSystem.
+    // PIPE_REJECT_REMOTE_CLIENTS is available on Windows 7.
+    let sid = crate::platform::current_sid()?;
+    let sddl: Vec<u16> = format!("D:P(A;;GA;;;{sid})(A;;GA;;;SY)")
         .encode_utf16()
         .chain(Some(0))
         .collect();
