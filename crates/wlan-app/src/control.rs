@@ -60,7 +60,7 @@ pub fn singleton(paths: &Paths) -> Result<File> {
 
 pub fn service_lock(paths: &Paths) -> Result<File> {
     let file = open_lock(&paths.config.join("service.lock"))?;
-    fs2::FileExt::try_lock_exclusive(&file).context("另一项服务安装或卸载操作正在运行")?;
+    fs2::FileExt::try_lock_exclusive(&file).context("另一项服务管理操作正在运行")?;
     Ok(file)
 }
 

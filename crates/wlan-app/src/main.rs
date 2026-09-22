@@ -28,9 +28,19 @@ async fn run(args: cli::Cli) -> Result<()> {
     let client = Client::new(PortalConfig::default())?;
     match args.command {
         cli::Command::Daemon {
-            command: Some(cli::DaemonCommand::Status),
+            command: Some(command),
             ..
-        } => service::status(&config::Paths::new()?).await,
+        } => {
+            let paths = config::Paths::new()?;
+            match command {
+                cli::DaemonCommand::Status => service::status(&paths).await,
+                cli::DaemonCommand::Start => service::manage(&paths, service::Action::Start).await,
+                cli::DaemonCommand::Stop => service::manage(&paths, service::Action::Stop).await,
+                cli::DaemonCommand::Restart => {
+                    service::manage(&paths, service::Action::Restart).await
+                }
+            }
+        }
         cli::Command::Daemon {
             command: None,
             background,

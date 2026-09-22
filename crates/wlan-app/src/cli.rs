@@ -30,6 +30,12 @@ pub enum Command {
 
 #[derive(Subcommand, Debug, PartialEq, Eq)]
 pub enum DaemonCommand {
+    /// 启动已安装的系统服务
+    Start,
+    /// 停止已安装的系统服务，保留安装和自动启动设置
+    Stop,
+    /// 重启已安装的系统服务
+    Restart,
     /// 查看系统服务的安装、运行状态和已安装版本
     Status,
 }
@@ -85,6 +91,21 @@ mod tests {
             })
         ));
         assert!(Cli::try_parse_from(["app", "daemon", "--background", "status"]).is_err());
+    }
+
+    #[test]
+    fn daemon_service_controls_are_subcommands() {
+        for (argument, expected) in [
+            ("start", DaemonCommand::Start),
+            ("stop", DaemonCommand::Stop),
+            ("restart", DaemonCommand::Restart),
+        ] {
+            let parsed = Cli::try_parse_from(["app", "daemon", argument]);
+            assert!(matches!(parsed, Ok(Cli {
+                command: Command::Daemon { command: Some(command), background: false }
+            }) if command == expected));
+            assert!(Cli::try_parse_from(["app", "daemon", "--background", argument]).is_err());
+        }
     }
 
     #[test]

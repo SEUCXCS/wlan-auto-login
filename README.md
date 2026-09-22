@@ -74,10 +74,17 @@ macOS 和部分 Windows 版本可能要求位置权限才能读取 Wi-Fi SSID；
 
 ```sh
 cxxy-wlanlogin-cli daemon
+cxxy-wlanlogin-cli daemon start
+cxxy-wlanlogin-cli daemon stop
+cxxy-wlanlogin-cli daemon restart
 cxxy-wlanlogin-cli daemon status
 ```
 
-此命令在前台运行同一个后台循环，可用于查看日志；首次运行前必须通过 `login --remember-me` 或离线 `login` 保存过凭据。安装服务会自动使用 daemon 模式。
+不带子命令的 `daemon` 仍在当前进程运行后台循环，可用于查看日志；首次运行前必须通过 `login --remember-me` 或离线 `login` 保存过凭据。安装服务会自动使用此模式。
+
+`daemon start`、`stop`、`restart` 分别启动、停止和重启已安装的系统服务。**未执行 `install`、安装文件不完整或系统注册丢失时，三者均报错，不会隐式安装。** 已停止的服务可以直接 `restart`。它们只调用系统服务管理器，不读取密码、不发送门户请求，也不通过 IPC 操作单独启动的前台 daemon。启动后的服务按下方自动登录规则运行。
+
+`stop` 保留安装和用户登录时自动启动的设置，下次登录系统仍会启动；永久移除使用 `uninstall`。Linux 使用 `systemctl --user start/stop/restart`；macOS 停止时 `bootout`，再次启动时加载已有 plist，已加载服务使用 `kickstart`；Windows 使用计划任务 `/Run` 和 `/End`，重启会等待旧任务退出后再启动。
 
 `daemon status` 查询已安装的系统服务，显示安装与运行状态、服务名称、程序位置、服务文件、已安装副本版本及当前 CLI 版本，并按平台提供 PID、启用状态和最近退出结果。版本通过安装副本的 `--version` 读取。未安装也可查询；服务管理器不可用时明确显示“未知”并返回错误，不会误报为已停止。单独运行的前台 `daemon` 不计入系统服务的运行状态。
 
@@ -121,7 +128,7 @@ client.login(&credentials, Line::Free1).await?;
 
 ## Windows 7
 
-通信使用 Windows 7 已有的命名管道，不依赖 Windows 的 AF_UNIX 支持；计划任务使用 1.2 schema 和当前用户的 InteractiveToken。
+通信使用 Windows 7 已有的命名管道，不依赖 Windows 的 AF_UNIX 支持；计划任务使用 1.2 schema 和当前用户的 InteractiveToken。服务状态通过系统 PowerShell 调用 Task Scheduler COM API，兼容 PowerShell 2 的语法，不依赖本地化的 `schtasks` 状态文本。
 
 普通 `x86_64-pc-windows-*` 构建不能作为 Win7 兼容产物。应使用 Rust 的专用 `x86_64-win7-windows-*` target 和重建的标准库，例如在相应编译工具链环境中：
 

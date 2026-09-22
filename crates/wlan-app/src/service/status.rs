@@ -31,6 +31,7 @@ impl Runner for SystemRunner {
 pub(super) struct ServiceState {
     pub registered: bool,
     pub running: bool,
+    pub pending: bool,
     pub enabled: Option<bool>,
     pub state: String,
     pub pid: Option<u32>,
@@ -42,6 +43,7 @@ impl ServiceState {
         Self {
             registered: false,
             running: false,
+            pending: false,
             enabled: None,
             state: "未注册/未加载".into(),
             pid: None,
@@ -151,6 +153,8 @@ async fn report(plan: &Plan, runner: &impl Runner) -> Result<(String, Option<any
                 "运行状态：{}（{}）",
                 if state.running {
                     "运行中"
+                } else if state.pending {
+                    "正在启动/停止"
                 } else {
                     "未运行"
                 },
@@ -312,6 +316,7 @@ fn parse_systemd(text: &str) -> Result<ServiceState> {
     Ok(ServiceState {
         registered: true,
         running: matches!(*active, "active" | "reloading") && pid.is_some(),
+        pending: matches!(*active, "activating" | "deactivating"),
         enabled: values
             .get("UnitFileState")
             .map(|value| matches!(*value, "enabled" | "enabled-runtime")),
@@ -349,6 +354,7 @@ fn parse_launchd(text: &str) -> Result<ServiceState> {
     Ok(ServiceState {
         registered: true,
         running: *state == "running" && pid.is_some(),
+        pending: matches!(*state, "spawn scheduled" | "spawning"),
         enabled: None,
         state: (*state).into(),
         pid,
@@ -416,7 +422,7 @@ fn parse_windows(text: &str) -> Result<ServiceState> {
         _ => anyhow::bail!("计划任务响应缺少有效的 Installed 字段"),
     }
     let state = match values.get("State") {
-        Some(&"0") => "未知",
+        Some(&"0") => anyhow::bail!("计划任务状态未知"),
         Some(&"1") => "已禁用",
         Some(&"2") => "等待调度",
         Some(&"3") => "就绪",
@@ -426,6 +432,7 @@ fn parse_windows(text: &str) -> Result<ServiceState> {
     Ok(ServiceState {
         registered: true,
         running: values.get("State") == Some(&"4"),
+        pending: values.get("State") == Some(&"2"),
         enabled: match values.get("Enabled") {
             Some(&"0") => Some(false),
             Some(&"1") => Some(true),
@@ -515,7 +522,7 @@ pub(super) mod tests {
 
     #[test]
     fn windows_numeric_states_do_not_depend_on_system_language() -> Result<()> {
-        for number in 0..=4 {
+        for number in 1..=4 {
             let state = parse_windows(&format!(
                 "Installed=1\r\nState={number}\r\nEnabled=1\r\nLastTaskResult=0\r\n"
             ))?;
@@ -523,6 +530,7 @@ pub(super) mod tests {
             assert_eq!(state.running, number == 4);
         }
         assert!(!parse_windows("Installed=0")?.registered);
+        assert!(parse_windows("Installed=1\nState=0").is_err());
         assert!(parse_windows("Installed=1\nState=5").is_err());
         assert!(parse_windows("access denied").is_err());
         let command = windows_query("task'with-quote");

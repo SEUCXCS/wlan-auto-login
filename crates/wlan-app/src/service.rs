@@ -15,6 +15,8 @@ const LABEL: &str = "org.seucxcs.cxxy-wlanlogin";
 mod status;
 use status::Manager;
 pub use status::status;
+mod lifecycle;
+pub use lifecycle::{Action, manage};
 
 #[derive(Clone, Debug)]
 struct Invocation {
