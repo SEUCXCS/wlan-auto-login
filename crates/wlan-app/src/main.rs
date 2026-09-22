@@ -1,3 +1,3 @@
 fn main() {
-    println!("{}-cli", cxxy_wlanlogin_lib::project_name());
+    println!("cxxy-wlanlogin-cli");
 }
