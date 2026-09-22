@@ -1,0 +1,10 @@
+[package]
+name = "cxxy-wlanlogin-cli"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cxxy-wlanlogin-lib.workspace = true

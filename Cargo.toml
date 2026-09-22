@@ -1,16 +1,17 @@
-[package]
-name = "cxxy-wlanlogin"
+[workspace]
+members = ["crates/wlan-api", "crates/wlan-app"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[lib]
-name = "cxxy_wlanlogin_lib"
-path = "src/lib.rs"
+[workspace.dependencies]
+cxxy-wlanlogin-lib = { path = "crates/wlan-api" }
 
-[[bin]]
-name = "cxxy-wlanlogin-cli"
-path = "src/main.rs"
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
 
-[dependencies]
-clap = { version = "4.6.7", features = ["derive"] }
-reqwest = { version = "0.13.5", features = ["json", "blocking"] }
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
