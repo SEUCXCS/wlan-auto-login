@@ -120,6 +120,9 @@ pub async fn status(paths: &Paths, discover: bool) -> Result<()> {
 
 async fn report(plan: &Plan, runner: &impl Runner) -> Result<(String, Option<anyhow::Error>)> {
     let files = Artifacts::read(plan)?;
+    if !files.any() {
+        return Ok(("🔴 安装状态：未安装".into(), None));
+    }
     // A fresh checkout is not an installation and needs no running service manager.
     let state = if files.any() {
         Some(plan.manager.query(runner).await)
@@ -127,45 +130,32 @@ async fn report(plan: &Plan, runner: &impl Runner) -> Result<(String, Option<any
         None
     };
     let registration_missing = matches!(&state, Some(Ok(state)) if !plan.manager.installed(state));
-    let installed = if !files.any() {
-        "未安装"
-    } else if !files.complete() || registration_missing {
-        "安装不完整，请重新执行 install"
+    let installed = if !files.complete() || registration_missing {
+        "🔴 安装状态：安装不完整，请重新执行 install"
+    } else if matches!(&state, Some(Err(_))) {
+        "🔴 安装状态：无法确认"
     } else {
-        "已安装"
+        "🟢 安装状态：已安装"
     };
     let mut lines = vec![
-        format!("安装状态：{installed}"),
+        installed.into(),
+        format!("安装范围：{}", plan.scope.label()),
         format!("服务管理器：{}", plan.manager.label()),
         format!("服务名称：{}", plan.manager.name()),
-        format!(
-            "程序位置：{}{}",
-            plan.executable.display(),
-            if files.executable {
-                ""
-            } else {
-                "（不存在）"
-            }
-        ),
-        format!(
-            "服务文件：{}{}",
-            plan.definition.display(),
-            if files.definition {
-                ""
-            } else {
-                "（不存在）"
-            }
-        ),
         format!("当前 CLI 版本：{}", env!("CARGO_PKG_VERSION")),
     ];
+    if files.executable {
+        lines.push(format!("安装位置：{}", plan.executable.display()));
+    }
+    if files.definition {
+        lines.push(format!("服务文件：{}", plan.definition.display()));
+    }
     if files.complete() {
         let version = installed_version(plan, runner).await;
         lines.push(match version {
             Ok(version) => format!("已安装版本：{version}"),
             Err(error) => format!("已安装版本：未知（{error:#}）"),
         });
-    } else {
-        lines.push("已安装版本：不可用".into());
     }
     let mut query_error = None;
     match state {
@@ -644,6 +634,41 @@ pub(super) mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn system_reports_only_actual_artifacts_and_confirmed_registration() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let plan =
+            super::super::linux_system_plan(dir.path().join("daemon"), dir.path().join("service"))?;
+        let runner = FakeRunner::default();
+        assert_eq!(report(&plan, &runner).await?.0, "🔴 安装状态：未安装");
+        assert!(runner.calls.borrow().is_empty());
+        fs::write(&plan.definition, &plan.content)?;
+        let runner = FakeRunner::new([(true, RUNNING)]);
+        let (text, _) = report(&plan, &runner).await?;
+        assert!(text.starts_with("🔴 安装状态：安装不完整，请重新执行 install\n安装范围：系统\n"));
+        assert!(!text.contains("安装位置："));
+        assert!(!text.contains("已安装版本："));
+        fs::write(&plan.executable, "mock executable, never run")?;
+        let runner = FakeRunner::new([(true, RUNNING), (true, "cxxy-wlanlogin-cli 0.0.9")]);
+        assert!(
+            report(&plan, &runner)
+                .await?
+                .0
+                .starts_with("🟢 安装状态：已安装\n安装范围：系统\n")
+        );
+        let runner = FakeRunner::new([
+            (false, "LoadState=not-found"),
+            (true, "cxxy-wlanlogin-cli 0.0.9"),
+        ]);
+        assert!(
+            report(&plan, &runner)
+                .await?
+                .0
+                .starts_with("🔴 安装状态：安装不完整")
+        );
+        Ok(())
+    }
+
     #[test]
     fn scm_numeric_states_are_independent_of_locale() -> Result<()> {
         for number in 1..=7 {
@@ -664,7 +689,7 @@ pub(super) mod tests {
         let plan = super::super::linux_plan(dir.path().join("daemon"), dir.path().join("service"))?;
         let runner = FakeRunner::default();
         let (text, error) = report(&plan, &runner).await?;
-        assert!(text.contains("安装状态：未安装"));
+        assert_eq!(text, "🔴 安装状态：未安装");
         assert!(error.is_none());
         assert!(runner.calls.borrow().is_empty());
         assert!(!plan.definition.exists());
@@ -681,6 +706,7 @@ pub(super) mod tests {
         let (text, error) = report(&plan, &runner).await?;
         assert!(error.is_none());
         assert!(text.contains("安装状态：已安装"));
+        assert!(text.starts_with("🟢 安装状态：已安装\n安装范围：用户\n"));
         assert!(text.contains("运行状态：运行中"));
         assert!(text.contains("已安装版本：0.0.9"));
         assert!(text.contains(&format!("当前 CLI 版本：{}", env!("CARGO_PKG_VERSION"))));

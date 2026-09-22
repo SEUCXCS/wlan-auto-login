@@ -114,7 +114,20 @@ cxxy-wlanlogin-cli daemon status
 
 `stop` 保留自动启动设置：用户服务下次登录系统仍会启动，系统服务下次开机仍会启动；永久移除使用 `uninstall`。Linux 使用所选范围的 `systemctl`；macOS 使用相应的 `gui/<uid>` 或 `system` launchd 域；Windows 用户服务使用 Task Scheduler，系统服务使用 SCM。Windows 重启会等待旧服务停止后再启动，停止失败则不继续启动。
 
-`daemon status` 查询所选范围的安装与运行状态。普通用户未指定范围时查找用户和系统安装；提权默认查询系统范围，显式 `--user` / `--system` 只查询所选范围。单独运行的前台 `daemon` 不计入服务运行状态。
+`daemon status` 只读查询实际安装。普通用户未指定范围时查找用户和系统安装；提权默认查询系统范围，显式 `--user` / `--system` 只查询所选范围。未发现任何安装文件时只输出：
+
+```text
+🔴 安装状态：未安装
+```
+
+不会显示推测的范围、安装位置或已安装版本。已确认安装时，前两行固定为：
+
+```text
+🟢 安装状态：已安装
+安装范围：系统
+```
+
+用户安装第二行为 `安装范围：用户`。后续显示服务名称、实际存在的安装文件、已安装副本版本及运行状态；版本通过副本的 `--version` 读取。安装残缺或注册丢失显示“安装不完整”；管理器不可用显示“无法确认”及“运行状态：未知”，并返回错误。单独运行的前台 `daemon` 不计入系统服务运行状态。
 
 - 启动时检查当前 Wi-Fi，并订阅系统网络事件：Linux 使用 NetworkManager D-Bus，Windows 使用 Native WLAN，macOS 使用 CoreWLAN 和 SystemConfiguration。
 - 只在 SSID 精确等于 `Student_CX` 时查询认证接口。离开目标网络时停止门户轮询。
