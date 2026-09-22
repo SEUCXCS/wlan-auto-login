@@ -8,6 +8,7 @@ mod login;
 mod platform;
 mod scope;
 mod service;
+mod shutdown;
 mod transport;
 mod tui;
 #[cfg(windows)]
@@ -31,7 +32,11 @@ fn main() -> std::process::ExitCode {
         return windows_service::dispatch();
     }
     match tokio::runtime::Runtime::new() {
-        Ok(runtime) => runtime.block_on(entry(args)),
+        Ok(runtime) => {
+            let result = runtime.block_on(entry(args));
+            runtime.shutdown_timeout(shutdown::RUNTIME_GRACE);
+            result
+        }
         Err(error) => {
             let _ = logging::init(None);
             tracing::error!("无法创建运行时：{error}");

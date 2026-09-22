@@ -62,7 +62,9 @@ unsafe extern "system" fn service_main(_: u32, _: *mut windows_sys::core::PWSTR)
                 service: true,
             },
         };
-        Ok::<_, anyhow::Error>(runtime.block_on(crate::entry(args)))
+        let result = runtime.block_on(crate::entry(args));
+        runtime.shutdown_timeout(crate::shutdown::RUNTIME_GRACE);
+        Ok::<_, anyhow::Error>(result)
     });
     let code = match result {
         Ok(Ok(code)) if code == std::process::ExitCode::SUCCESS => 0,

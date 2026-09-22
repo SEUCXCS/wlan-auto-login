@@ -1,4 +1,4 @@
-use super::TARGET_SSID;
+use super::{TARGET_SSID, worker::Worker};
 use anyhow::{Result, bail};
 use std::{
     ffi::c_void,
@@ -16,13 +16,48 @@ struct Events {
     generation: AtomicU64,
 }
 
-pub struct Monitor {
+struct NativeMonitor {
     handle: HANDLE,
+    events: Arc<Events>,
+}
+
+pub struct Monitor {
+    worker: Worker<Option<String>>,
     events: Arc<Events>,
 }
 
 impl Monitor {
     pub async fn new() -> Result<Self> {
+        let events = Arc::new(Events {
+            notify: Notify::new(),
+            generation: AtomicU64::new(0),
+        });
+        let notifications = events.clone();
+        let worker = Worker::new(move || {
+            let mut native = None;
+            move || {
+                let monitor = match &mut native {
+                    Some(monitor) => monitor,
+                    slot @ None => slot.insert(NativeMonitor::new(notifications.clone())?),
+                };
+                monitor.snapshot()
+            }
+        })?;
+        Ok(Self { worker, events })
+    }
+
+    pub async fn snapshot(&self) -> Result<Option<String>> {
+        self.worker.query().await
+    }
+
+    pub async fn changed(&mut self) -> Result<()> {
+        self.events.notify.notified().await;
+        Ok(())
+    }
+}
+
+impl NativeMonitor {
+    fn new(events: Arc<Events>) -> Result<Self> {
         let mut handle = ptr::null_mut();
         let mut version = 0;
         // SAFETY: the API initializes the output handle/version; pointers live for the call.
@@ -30,13 +65,7 @@ impl Monitor {
         if result != 0 {
             bail!("WlanOpenHandle 失败: {result}");
         }
-        let monitor = Self {
-            handle,
-            events: Arc::new(Events {
-                notify: Notify::new(),
-                generation: AtomicU64::new(0),
-            }),
-        };
+        let monitor = Self { handle, events };
         // SAFETY: the Arc allocation remains alive until WlanCloseHandle has drained callbacks.
         let result = unsafe {
             WlanRegisterNotification(
@@ -55,7 +84,7 @@ impl Monitor {
         Ok(monitor)
     }
 
-    pub async fn snapshot(&self) -> Result<Option<String>> {
+    fn snapshot(&self) -> Result<Option<String>> {
         // SAFETY: all allocations returned by WLAN are freed via WlanFreeMemory;
         // arrays are bounded by the counts supplied by the API.
         unsafe {
@@ -113,13 +142,9 @@ impl Monitor {
             Ok(None)
         }
     }
-    pub async fn changed(&mut self) -> Result<()> {
-        self.events.notify.notified().await;
-        Ok(())
-    }
 }
 
-impl Drop for Monitor {
+impl Drop for NativeMonitor {
     fn drop(&mut self) {
         // SAFETY: this is our live handle. Closing outside a callback waits for callbacks.
         unsafe {

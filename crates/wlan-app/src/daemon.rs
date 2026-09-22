@@ -2,12 +2,14 @@ use crate::{
     config::{Paths, Preferences},
     control, credentials,
     platform::Monitor,
+    shutdown::{Shutdown, until_stopped},
 };
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use cxxy_wlanlogin_lib::{AuthState, Client};
 use std::time::{Duration, Instant};
 
 const INTERVAL: Duration = Duration::from_secs(30);
+const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 struct Policy {
@@ -86,15 +88,42 @@ fn ensure_scope(paths: &Paths) -> Result<()> {
 }
 
 pub async fn run(client: &Client, paths: &Paths) -> Result<()> {
+    let mut shutdown = Shutdown::new()?;
+    until_stopped(run_inner(client, paths), shutdown.wait()).await
+}
+
+async fn run_inner(client: &Client, paths: &Paths) -> Result<()> {
     ensure_scope(paths)?;
     credentials::prepare_daemon()?;
     let _singleton = control::singleton(paths)?;
-    let (_server, mut wake) = control::serve(paths).await?;
+    let (_server, mut commands) = control::serve(paths).await?;
+    let wake = tokio::sync::Notify::new();
+    until_stopped(
+        run_loop(client, paths, &wake),
+        control_stop(&mut commands, &wake),
+    )
+    .await
+}
+
+async fn control_stop(
+    commands: &mut tokio::sync::mpsc::Receiver<control::Signal>,
+    wake: &tokio::sync::Notify,
+) -> Result<()> {
+    while let Some(command) = commands.recv().await {
+        match command {
+            control::Signal::Stop => return Ok(()),
+            control::Signal::Wake => wake.notify_one(),
+        }
+    }
+    bail!("本地控制通道已关闭")
+}
+
+async fn run_loop(client: &Client, paths: &Paths, wake: &tokio::sync::Notify) -> Result<()> {
     let mut policy = Policy::default();
-    let store = credentials::ScopedStore::new(paths, None)?;
+    let mut store = credentials::BackgroundReader::new(paths)?;
     // NoEntry is different from a locked/unavailable keyring: the latter may
     // become available after the desktop session finishes unlocking.
-    match store.load_background().await {
+    match store.load().await {
         Ok(None) => bail!("请先执行 login --remember-me 保存账号和密码，再启动 daemon"),
         Ok(Some(_)) => {}
         Err(e) => tracing::warn!("暂时无法读取密钥，等待解锁：{e:#}"),
@@ -117,27 +146,26 @@ pub async fn run(client: &Client, paths: &Paths) -> Result<()> {
             }
         }
         if let Some(monitor) = &monitor
-            && let Err(e) = tick(client, paths, monitor, &store, &mut policy, scheduled).await
+            && let Err(e) = tokio::time::timeout(
+                CHECK_TIMEOUT,
+                tick(client, paths, monitor, &mut store, &mut policy, scheduled),
+            )
+            .await
+            .context("本轮网络检查超时")
+            .and_then(|result| result)
         {
             policy.failure(Instant::now());
             tracing::warn!("本次检查未完成，稍后重试：{e:#}");
         }
         tokio::select! {
             _ = interval.tick() => { scheduled = true; },
-            signal = wake.recv() => {
-                match signal {
-                    Some(control::Signal::Stop) => return Ok(()),
-                    Some(control::Signal::Wake) => scheduled = true,
-                    None => bail!("本地控制通道已关闭"),
-                }
-            },
+            _ = wake.notified() => { scheduled = true; },
             event = async { match &mut monitor { Some(m) => m.changed().await, None => std::future::pending().await } } => {
                 if let Err(e) = event { tracing::warn!("网络事件订阅断开：{e:#}"); monitor = None; }
                 scheduled = false;
                 // Merge bursts of state/DHCP notifications.
                 tokio::time::sleep(Duration::from_millis(400)).await;
             },
-            _ = shutdown() => { tracing::info!("daemon 已停止"); return Ok(()); }
         }
     }
 }
@@ -146,7 +174,7 @@ async fn tick(
     client: &Client,
     paths: &Paths,
     monitor: &Monitor,
-    store: &credentials::ScopedStore,
+    store: &mut credentials::BackgroundReader,
     policy: &mut Policy,
     scheduled: bool,
 ) -> Result<()> {
@@ -165,7 +193,7 @@ async fn tick(
         return Ok(());
     }
     let saved = store
-        .load_background()
+        .load()
         .await?
         .ok_or_else(|| anyhow::anyhow!("保存的凭据已不存在，请重新执行 login --remember-me"))?;
     let status = client.status().await?;
@@ -201,30 +229,43 @@ async fn tick(
     Ok(())
 }
 
-async fn shutdown() {
-    #[cfg(windows)]
-    {
-        tokio::select! {
-            _ = crate::windows_service::stop_signal() => {},
-            _ = tokio::signal::ctrl_c() => {},
-        }
-    }
-    #[cfg(unix)]
-    {
-        if let Ok(mut terminate) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
-            return;
-        }
-    }
-    #[cfg(not(windows))]
-    let _ = tokio::signal::ctrl_c().await;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ipc_stop_cancels_busy_check_even_after_wake_burst() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::test(dir.path());
+        let (_server, mut commands) = control::serve(&paths).await?;
+        let wake = tokio::sync::Notify::new();
+        let ready = tokio::sync::Notify::new();
+        let work = async {
+            let _lock = control::operation_lock(&paths).await?;
+            ready.notify_one();
+            std::future::pending::<Result<()>>().await
+        };
+        let send_stop = async {
+            ready.notified().await;
+            for _ in 0..8 {
+                control::wake(&paths).await;
+            }
+            control::stop(&paths).await;
+        };
+        let (result, ()) = tokio::join!(
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                until_stopped(work, control_stop(&mut commands, &wake))
+            ),
+            send_stop,
+        );
+        result??;
+        // Cancellation releases the login/logout lock, not just the wait future.
+        let _lock =
+            tokio::time::timeout(Duration::from_millis(200), control::operation_lock(&paths))
+                .await??;
+        Ok(())
+    }
     #[test]
     fn disconnected_paused_and_invalid_credentials_never_login() {
         let mut policy = Policy::default();

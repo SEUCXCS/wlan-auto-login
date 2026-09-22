@@ -1,4 +1,4 @@
-use super::TARGET_SSID;
+use super::{TARGET_SSID, worker::Worker};
 use anyhow::{Context, Result, bail};
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2_core_foundation::{CFArray, CFRetained, CFString};
@@ -19,9 +19,13 @@ struct Events {
     generation: AtomicU64,
     observed: Mutex<Option<String>>,
 }
-pub struct Monitor {
+struct NativeMonitor {
     store: CFRetained<SCDynamicStore>,
     _queue: DispatchRetained<DispatchQueue>,
+    events: Arc<Events>,
+}
+pub struct Monitor {
+    worker: Worker<Option<String>>,
     events: Arc<Events>,
 }
 impl Monitor {
@@ -31,6 +35,29 @@ impl Monitor {
             generation: AtomicU64::new(0),
             observed: Mutex::new(None),
         });
+        let notifications = events.clone();
+        let worker = Worker::new(move || {
+            let mut native = None;
+            move || {
+                let monitor = match &mut native {
+                    Some(monitor) => monitor,
+                    slot @ None => slot.insert(NativeMonitor::new(notifications.clone())?),
+                };
+                monitor.snapshot()
+            }
+        })?;
+        Ok(Self { worker, events })
+    }
+    pub async fn snapshot(&self) -> Result<Option<String>> {
+        self.worker.query().await
+    }
+    pub async fn changed(&mut self) -> Result<()> {
+        self.events.notify.notified().await;
+        Ok(())
+    }
+}
+impl NativeMonitor {
+    fn new(events: Arc<Events>) -> Result<Self> {
         let mut context = SCDynamicStoreContext {
             version: 0,
             info: Arc::as_ptr(&events).cast_mut().cast(),
@@ -67,15 +94,11 @@ impl Monitor {
             events,
         })
     }
-    pub async fn snapshot(&self) -> Result<Option<String>> {
+    fn snapshot(&self) -> Result<Option<String>> {
         let identity = current_interface()?;
         self.events.observe(&identity);
         Ok(identity
             .map(|name| format!("{name}#{}", self.events.generation.load(Ordering::Relaxed))))
-    }
-    pub async fn changed(&mut self) -> Result<()> {
-        self.events.notify.notified().await;
-        Ok(())
     }
 }
 impl Events {
@@ -115,7 +138,7 @@ fn current_interface() -> Result<Option<String>> {
     })
 }
 
-impl Drop for Monitor {
+impl Drop for NativeMonitor {
     fn drop(&mut self) {
         unsafe {
             self.store.set_dispatch_queue(None);

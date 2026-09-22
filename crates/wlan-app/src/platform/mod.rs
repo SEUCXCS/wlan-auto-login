@@ -1,19 +1,48 @@
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::Monitor;
+use linux::Monitor as NativeMonitor;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
-pub use windows::{Monitor, current_sid};
+use windows::Monitor as NativeMonitor;
+#[cfg(target_os = "windows")]
+pub use windows::current_sid;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::Monitor;
+use macos::Monitor as NativeMonitor;
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+mod worker;
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 compile_error!("Supported platforms: Linux, macOS and Windows");
 
 pub const TARGET_SSID: &[u8] = b"Student_CX";
+
+const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+pub struct Monitor(NativeMonitor);
+
+impl Monitor {
+    pub async fn new() -> anyhow::Result<Self> {
+        use anyhow::Context;
+        tokio::time::timeout(QUERY_TIMEOUT, NativeMonitor::new())
+            .await
+            .context("初始化 Wi-Fi 监听超时")?
+            .map(Self)
+    }
+
+    pub async fn snapshot(&self) -> anyhow::Result<Option<String>> {
+        use anyhow::Context;
+        tokio::time::timeout(QUERY_TIMEOUT, self.0.snapshot())
+            .await
+            .context("读取 Wi-Fi 状态超时")?
+    }
+
+    pub async fn changed(&mut self) -> anyhow::Result<()> {
+        self.0.changed().await
+    }
+}
 
 /// Only an explicitly identified Student_CX connection returns a session.
 pub trait WifiConnection {
