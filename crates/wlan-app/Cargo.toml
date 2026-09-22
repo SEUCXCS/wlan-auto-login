@@ -8,3 +8,22 @@ workspace = true
 
 [dependencies]
 cxxy-wlanlogin-lib.workspace = true
+tokio.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+directories.workspace = true
+tempfile.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { workspace = true, features = ["sync-secret-service", "crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { workspace = true, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }
