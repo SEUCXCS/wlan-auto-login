@@ -17,14 +17,44 @@ where
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> std::fmt::Result {
-        write!(
-            writer,
-            "[{} {}] ",
-            event.metadata().level(),
-            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-        )?;
+        write!(writer, "[{} {}] ", event.metadata().level(), local_time())?;
         context.format_fields(writer.by_ref(), event)?;
         writeln!(writer)
+    }
+}
+
+fn local_time() -> String {
+    #[cfg(unix)]
+    {
+        // SAFETY: libc writes to our thread-local tm buffer; localtime_r is thread safe.
+        unsafe {
+            let now = libc::time(std::ptr::null_mut());
+            let mut value: libc::tm = std::mem::zeroed();
+            if libc::localtime_r(&now, &mut value).is_null() {
+                return "时间不可用".into();
+            }
+            format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                value.tm_year + 1900,
+                value.tm_mon + 1,
+                value.tm_mday,
+                value.tm_hour,
+                value.tm_min,
+                value.tm_sec
+            )
+        }
+    }
+    #[cfg(windows)]
+    {
+        // SAFETY: GetLocalTime fills the correctly sized SYSTEMTIME buffer (Win7 supported).
+        unsafe {
+            let mut value = std::mem::zeroed();
+            windows_sys::Win32::System::SystemInformation::GetLocalTime(&mut value);
+            format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                value.wYear, value.wMonth, value.wDay, value.wHour, value.wMinute, value.wSecond
+            )
+        }
     }
 }
 
