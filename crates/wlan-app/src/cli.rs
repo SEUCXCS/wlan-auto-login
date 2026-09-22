@@ -46,6 +46,18 @@ pub enum DaemonCommand {
     Restart,
     /// 查看系统服务的安装、运行状态和已安装版本
     Status,
+    /// 查看已安装服务的日志
+    Logs(LogsArgs),
+}
+
+#[derive(Args, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogsArgs {
+    /// 显示最近的日志行数；0 表示不显示历史日志
+    #[arg(short = 'n', long, default_value_t = 100)]
+    pub lines: u32,
+    /// 持续查看新日志，按 Ctrl+C 退出
+    #[arg(short, long)]
+    pub follow: bool,
 }
 
 #[derive(Args, Default)]
@@ -89,11 +101,38 @@ mod tests {
             vec!["app", "daemon", "start", "--system"],
             vec!["app", "--user", "daemon"],
             vec!["app", "--system", "install"],
+            vec!["app", "daemon", "logs", "--system"],
         ] {
             assert!(Cli::try_parse_from(args).is_ok());
         }
         assert!(Cli::try_parse_from(["app", "--user", "--system", "install"]).is_err());
     }
+    #[test]
+    fn log_options_parse_without_starting_a_daemon() {
+        for (arguments, expected) in [
+            (
+                vec!["app", "daemon", "logs"],
+                LogsArgs {
+                    lines: 100,
+                    follow: false,
+                },
+            ),
+            (
+                vec!["app", "--system", "daemon", "logs", "-n", "0", "-f"],
+                LogsArgs {
+                    lines: 0,
+                    follow: true,
+                },
+            ),
+        ] {
+            assert!(matches!(Cli::try_parse_from(arguments), Ok(Cli {
+                command: Command::Daemon { command: Some(DaemonCommand::Logs(options)), .. }, ..
+            }) if options == expected));
+        }
+        assert!(Cli::try_parse_from(["app", "daemon", "logs", "-n", "-1"]).is_err());
+        assert!(Cli::try_parse_from(["app", "daemon", "--background", "logs"]).is_err());
+    }
+
     #[test]
     fn daemon_without_subcommand_still_runs_the_process() {
         for arguments in [vec!["app", "daemon"], vec!["app", "daemon", "--background"]] {

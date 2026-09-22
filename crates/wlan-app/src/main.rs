@@ -84,7 +84,7 @@ async fn run(args: cli::Cli, paths: config::Paths) -> Result<()> {
     if !matches!(
         args.command,
         cli::Command::Daemon {
-            command: Some(cli::DaemonCommand::Status),
+            command: Some(cli::DaemonCommand::Status | cli::DaemonCommand::Logs(_)),
             ..
         }
     ) {
@@ -97,6 +97,7 @@ async fn run(args: cli::Cli, paths: config::Paths) -> Result<()> {
             ..
         } => match command {
             cli::DaemonCommand::Status => service::status(&paths, !args.user && !args.system).await,
+            cli::DaemonCommand::Logs(options) => service::logs(&paths, options).await,
             cli::DaemonCommand::Start => service::manage(&paths, service::Action::Start).await,
             cli::DaemonCommand::Stop => service::manage(&paths, service::Action::Stop).await,
             cli::DaemonCommand::Restart => service::manage(&paths, service::Action::Restart).await,

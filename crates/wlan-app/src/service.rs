@@ -17,6 +17,8 @@ use status::Manager;
 pub use status::status;
 mod lifecycle;
 pub use lifecycle::{Action, manage};
+mod logs;
+pub use logs::logs;
 
 #[derive(Clone, Debug)]
 struct Invocation {

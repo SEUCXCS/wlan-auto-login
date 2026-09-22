@@ -44,11 +44,15 @@ cxxy-wlanlogin-cli logout                       # 注销，并暂停当前连接
 ```sh
 cxxy-wlanlogin-cli install          # 安装并启动后台服务
 cxxy-wlanlogin-cli daemon status    # 查看安装与运行状态
+cxxy-wlanlogin-cli daemon logs      # 查看最近 100 行服务日志
+cxxy-wlanlogin-cli daemon logs -f   # 持续查看新日志，Ctrl+C 退出
 cxxy-wlanlogin-cli daemon start     # 启动服务
 cxxy-wlanlogin-cli daemon stop      # 停止服务，保留自动启动设置
 cxxy-wlanlogin-cli daemon restart   # 重启服务
 cxxy-wlanlogin-cli uninstall        # 卸载服务，保留已保存的凭据
 ```
+
+`daemon logs -n 200` 可指定历史日志行数，`-n 0 -f` 只查看新日志。Linux 读取 journal，macOS 与 Windows 读取服务的 `daemon.log`，按 `--user` / `--system` 选择范围；读取系统日志可能需要 sudo 或管理员权限。未安装时会报错，服务停止后仍可查看已有日志。
 
 `install` 缺少已保存凭据时会先进入登录流程，强制开启 Remember me，并在交互界面显示黄色提示。不在 `Student_CX` 时可先保存凭据并完成安装。
 
