@@ -16,7 +16,7 @@ pub enum Action {
 
 pub async fn manage(paths: &Paths, action: Action) -> Result<()> {
     manage_plan(paths, &plan(paths)?, action, &SystemRunner).await?;
-    println!(
+    tracing::info!(
         "{}",
         match action {
             Action::Start => "已向系统服务管理器提交启动请求。",

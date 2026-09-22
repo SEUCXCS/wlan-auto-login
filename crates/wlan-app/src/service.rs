@@ -166,7 +166,7 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
         }
         return Err(error).context("安装失败，已回滚安装文件");
     }
-    println!("后台服务已安装并启动，今后用户登录系统后自动运行。");
+    tracing::info!("后台服务已安装并启动，今后用户登录系统后自动运行。");
     Ok(())
 }
 
@@ -186,7 +186,7 @@ pub async fn uninstall(paths: &Paths) -> Result<()> {
         command.run().await?;
     }
     remove_if_present(&plan.executable).context("服务已卸载，但安装副本仍在使用，请关闭后删除")?;
-    println!("后台服务已卸载；系统密钥管理器中的账号和密码仍保留。");
+    tracing::info!("后台服务已卸载；系统密钥管理器中的账号和密码仍保留。");
     Ok(())
 }
 

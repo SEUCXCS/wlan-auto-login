@@ -3,6 +3,7 @@ mod config;
 mod control;
 mod credentials;
 mod daemon;
+mod logging;
 mod login;
 mod platform;
 mod service;
@@ -15,10 +16,32 @@ use cxxy_wlanlogin_lib::{Client, PortalConfig};
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    match run(cli::Cli::parse()).await {
+    let args = cli::Cli::parse();
+    let log = if matches!(
+        args.command,
+        cli::Command::Daemon {
+            command: None,
+            background: true
+        }
+    ) {
+        config::Paths::new()
+            .and_then(|paths| service::background_log(&paths))
+            .map(Some)
+    } else {
+        Ok(None)
+    };
+    let result = match log.and_then(logging::init) {
+        Ok(()) => run(args).await,
+        Err(error) => {
+            // stderr logging remains available if opening the background log failed.
+            let _ = logging::init(None);
+            Err(error)
+        }
+    };
+    match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("错误：{error:#}");
+            tracing::error!("{error:#}");
             std::process::ExitCode::FAILURE
         }
     }
@@ -46,31 +69,18 @@ async fn run(args: cli::Cli) -> Result<()> {
             background,
         } => {
             let paths = config::Paths::new()?;
-            let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into());
             if background {
-                let log = service::background_log(&paths)?;
                 #[cfg(windows)]
                 unsafe {
                     windows_sys::Win32::System::Console::FreeConsole();
                 }
-                tracing_subscriber::fmt()
-                    .with_env_filter(filter)
-                    .with_ansi(false)
-                    .with_writer(std::sync::Mutex::new(log))
-                    .init();
-            } else {
-                tracing_subscriber::fmt()
-                    .with_env_filter(filter)
-                    .with_writer(std::io::stderr)
-                    .init();
             }
             daemon::run(&client, &paths).await
         }
         cli::Command::Install(args) => {
             let wifi = platform::WifiProbe::new().await;
             if let Some(notice) = platform::wifi_state(&wifi).await.notice() {
-                eprintln!("{notice} 后台服务仍可安装，接入 Student_CX 后再自动登录。");
+                tracing::warn!("{notice} 后台服务仍可安装，接入 Student_CX 后再自动登录。");
             }
             let paths = config::Paths::new()?;
             let saved = credentials::load().await?;
@@ -80,7 +90,9 @@ async fn run(args: cli::Cli) -> Result<()> {
                 || args.password_stdin
                 || args.interactive
             {
-                eprintln!("安装后台服务需要保存账号和密码；本次登录的 Remember me 已强制开启。");
+                tracing::warn!(
+                    "安装后台服务需要保存账号和密码；本次登录的 Remember me 已强制开启。"
+                );
                 login::run_with_wifi(&client, &paths, args, true, &wifi).await?;
             }
             service::install(&paths).await
@@ -99,7 +111,7 @@ async fn run(args: cli::Cli) -> Result<()> {
                 return Err(error.into());
             }
             control::wake(&paths).await;
-            println!("已注销");
+            tracing::info!("已注销");
             Ok(())
         }
     }

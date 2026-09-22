@@ -150,7 +150,7 @@ async fn run_with_store(
                 state.save(paths)?;
                 crate::control::wake(paths).await;
                 if authenticated {
-                    println!(
+                    tracing::info!(
                         "登录成功（{}）{}",
                         form.line.label(),
                         if remember {
@@ -160,7 +160,7 @@ async fn run_with_store(
                         }
                     );
                 } else {
-                    println!("账号和密码已保存；未执行校园网认证，凭据尚未在线验证。");
+                    tracing::info!("账号和密码已保存；未执行校园网认证，凭据尚未在线验证。");
                 }
                 return Ok(());
             }
@@ -182,7 +182,7 @@ async fn submit(
     let state = platform::wifi_state(wifi).await;
     if !state.is_target() {
         if let Some(notice) = state.notice() {
-            eprintln!("{notice}");
+            tracing::warn!("{notice}");
         }
         return Ok(false);
     }

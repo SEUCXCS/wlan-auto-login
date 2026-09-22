@@ -23,6 +23,7 @@ futures-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 getrandom.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { workspace = true, features = ["sync-secret-service", "crypto-rust"] }
