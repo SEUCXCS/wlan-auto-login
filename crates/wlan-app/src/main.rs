@@ -59,9 +59,7 @@ async fn run(args: cli::Cli) -> Result<()> {
                 || args.password_stdin
                 || args.interactive
             {
-                eprintln!(
-                    "\x1b[33m安装后台服务需要保存账号和密码；本次登录的 Remember me 已强制开启。\x1b[0m"
-                );
+                eprintln!("安装后台服务需要保存账号和密码；本次登录的 Remember me 已强制开启。");
                 login::run(&client, &paths, args, true).await?;
             }
             service::install(&paths).await

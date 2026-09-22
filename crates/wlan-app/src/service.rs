@@ -98,20 +98,36 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
     }
     .await;
     if let Err(error) = outcome {
-        // Restore an earlier installation, or clean up a failed first install.
+        // Attempt every rollback step, and report incomplete recovery accurately.
+        let mut rollback_errors = Vec::new();
         for command in &plan.remove {
-            let _ = command.run().await;
+            if let Err(e) = command.run().await {
+                rollback_errors.push(e.to_string());
+            }
         }
-        old_executable.restore(&plan.executable)?;
-        old_definition.restore(&plan.definition)?;
-        if old_definition.existed() {
-            for command in &plan.start {
-                command.run().await.context("恢复旧服务失败")?;
+        for result in [
+            old_executable.restore(&plan.executable),
+            old_definition.restore(&plan.definition),
+        ] {
+            if let Err(e) = result {
+                rollback_errors.push(e.to_string());
             }
+        }
+        let commands = if old_definition.existed() {
+            &plan.start
         } else {
-            for command in &plan.reload {
-                command.run().await?;
+            &plan.reload
+        };
+        for command in commands {
+            if let Err(e) = command.run().await {
+                rollback_errors.push(e.to_string());
             }
+        }
+        if !rollback_errors.is_empty() {
+            return Err(error).context(format!(
+                "安装失败，回滚仍有错误：{}",
+                rollback_errors.join("；")
+            ));
         }
         return Err(error).context("安装失败，已回滚安装文件");
     }

@@ -52,3 +52,25 @@ pub struct LoginArgs {
     #[arg(long)]
     pub non_interactive: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn explicit_tui_and_non_interactive_are_mutually_exclusive() {
+        assert!(
+            Cli::try_parse_from(["app", "login", "--interactive", "--non-interactive"]).is_err()
+        );
+        let parsed = Cli::try_parse_from(["app", "login", "--interactive", "--remember-me"]);
+        assert!(matches!(
+            parsed,
+            Ok(Cli {
+                command: Command::Login(LoginArgs {
+                    interactive: true,
+                    remember_me: true,
+                    ..
+                })
+            })
+        ));
+    }
+}

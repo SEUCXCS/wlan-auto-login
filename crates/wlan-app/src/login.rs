@@ -73,8 +73,7 @@ pub async fn run(
     };
     let prefs = Preferences::load(paths)?;
     let mut form = resolve(&mut args, saved.as_ref(), prefs.line, force_remember);
-    let mut interactive =
-        form.credentials.username.trim().is_empty() || form.credentials.password.is_empty();
+    let interactive = wants_tui(&args, &form);
     if interactive
         && (args.non_interactive || !io::stdin().is_terminal() || !io::stdout().is_terminal())
     {
@@ -113,16 +112,33 @@ pub async fn run(
             }
             Err(e) if interactive => {
                 warning = Some(e.to_string());
-                interactive = true;
             }
             Err(e) => return Err(e.into()),
         }
     }
 }
 
+fn wants_tui(args: &LoginArgs, form: &Form) -> bool {
+    args.interactive
+        || form.credentials.username.trim().is_empty()
+        || form.credentials.password.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_credentials_skip_tui_unless_requested() {
+        let saved = Credentials {
+            username: "student".into(),
+            password: "secret".into(),
+        };
+        let mut args = LoginArgs::default();
+        let form = resolve(&mut args, Some(&saved), Line::Free1, false);
+        assert!(!wants_tui(&args, &form));
+        args.interactive = true;
+        assert!(wants_tui(&args, &form));
+    }
     #[test]
     fn changing_account_does_not_reuse_another_accounts_password() {
         let saved = Credentials {

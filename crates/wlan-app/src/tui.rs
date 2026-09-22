@@ -26,6 +26,9 @@ impl Drop for Screen {
 }
 
 pub fn prompt(mut form: Form, force_remember: bool, mut message: Option<String>) -> Result<Form> {
+    if force_remember {
+        form.remember = true;
+    }
     enable_raw_mode()?;
     let _screen = Screen;
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
@@ -38,87 +41,14 @@ pub fn prompt(mut form: Form, force_remember: bool, mut message: Option<String>)
     let mut fields = [Rect::default(); 5];
     loop {
         terminal.draw(|frame| {
-            let area = frame.area();
-            if area.width < 44 || area.height < 22 {
-                frame.render_widget(Paragraph::new("请将终端调整至至少 44 × 22；Esc 取消"), area);
-                return;
-            }
-            let width = area.width.min(76);
-            let content = Rect::new((area.width - width) / 2, 1, width, area.height - 2);
-            let rows = Layout::vertical([
-                Constraint::Length(2),
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Min(3),
-            ])
-            .split(content);
-            frame.render_widget(
-                Paragraph::new(
-                    "Student_CX 校园网登录\nTab 切换 · ←/→ 选线路 · Space 勾选 · Esc 取消",
-                ),
-                rows[0],
-            );
-            let password = "•".repeat(form.credentials.password.chars().count());
-            let remember = if form.remember {
-                "[x] Remember me"
-            } else {
-                "[ ] Remember me"
-            };
-            let values = [
-                form.credentials.username.as_str(),
-                password.as_str(),
-                remember,
-                form.line.label(),
-                "登录",
-            ];
-            let titles = ["账号", "密码", "保存凭据", "线路（← / →）", "Enter 提交"];
-            for i in 0..5 {
-                fields[i] = rows[i + 1];
-                let style = if focus == i {
-                    Style::default().fg(Color::Cyan)
-                } else {
-                    Style::default()
-                };
-                let text_width = ratatui::text::Line::from(values[i]).width();
-                let inner_width = fields[i].width.saturating_sub(3) as usize;
-                let scroll = if i < 2 {
-                    text_width.saturating_sub(inner_width) as u16
-                } else {
-                    0
-                };
-                frame.render_widget(
-                    Paragraph::new(values[i]).scroll((0, scroll)).block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title(titles[i])
-                            .border_style(style),
-                    ),
-                    fields[i],
-                );
-                if focus == i && i < 2 {
-                    frame.set_cursor_position(Position::new(
-                        fields[i].x + 1 + (text_width.min(inner_width) as u16),
-                        fields[i].y + 1,
-                    ));
-                }
-            }
-            let mut notice = if force_remember {
-                "⚠ 安装服务必须保存账号和密码。\nRemember me 已开启，无法取消。\n".to_owned()
-            } else {
-                String::new()
-            };
-            if let Some(message) = &message {
-                notice.push_str(message);
-            }
-            frame.render_widget(
-                Paragraph::new(notice)
-                    .style(Style::default().fg(Color::Yellow))
-                    .wrap(Wrap { trim: false }),
-                rows[6],
-            );
+            render(
+                frame,
+                &form,
+                force_remember,
+                message.as_deref(),
+                focus,
+                &mut fields,
+            )
         })?;
         if !event::poll(Duration::from_millis(100))? {
             continue;
@@ -188,6 +118,96 @@ pub fn prompt(mut form: Form, force_remember: bool, mut message: Option<String>)
     }
 }
 
+fn render(
+    frame: &mut ratatui::Frame<'_>,
+    form: &Form,
+    force_remember: bool,
+    message: Option<&str>,
+    focus: usize,
+    fields: &mut [Rect; 5],
+) {
+    let area = frame.area();
+    if area.width < 44 || area.height < 22 {
+        *fields = [Rect::default(); 5];
+        frame.render_widget(Paragraph::new("请将终端调整至至少 44 × 22；Esc 取消"), area);
+        return;
+    }
+    let width = area.width.min(76);
+    let content = Rect::new((area.width - width) / 2, 1, width, area.height - 2);
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Min(3),
+    ])
+    .split(content);
+    frame.render_widget(
+        Paragraph::new("Student_CX 校园网登录\nTab 切换 · 空格勾选 · Esc 取消"),
+        rows[0],
+    );
+    let password = "•".repeat(form.credentials.password.chars().count());
+    let remember = if form.remember {
+        "[x] Remember me"
+    } else {
+        "[ ] Remember me"
+    };
+    let values = [
+        form.credentials.username.as_str(),
+        password.as_str(),
+        remember,
+        form.line.label(),
+        "登录",
+    ];
+    let titles = ["账号", "密码", "保存凭据", "线路（← / →）", "Enter 提交"];
+    for i in 0..5 {
+        fields[i] = rows[i + 1];
+        let style = if focus == i {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+        let text_width = ratatui::text::Line::from(values[i]).width();
+        let inner_width = fields[i].width.saturating_sub(3) as usize;
+        let scroll = if i < 2 {
+            text_width.saturating_sub(inner_width) as u16
+        } else {
+            0
+        };
+        frame.render_widget(
+            Paragraph::new(values[i]).scroll((0, scroll)).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(titles[i])
+                    .border_style(style),
+            ),
+            fields[i],
+        );
+        if focus == i && i < 2 {
+            frame.set_cursor_position(Position::new(
+                fields[i].x + 1 + (text_width.min(inner_width) as u16),
+                fields[i].y + 1,
+            ));
+        }
+    }
+    let mut notice = if force_remember {
+        "⚠ 安装服务必须保存账号和密码。\nRemember me 已开启，无法取消。\n".to_owned()
+    } else {
+        String::new()
+    };
+    if let Some(message) = message {
+        notice.push_str(message);
+    }
+    frame.render_widget(
+        Paragraph::new(notice)
+            .style(Style::default().fg(Color::Yellow))
+            .wrap(Wrap { trim: false }),
+        rows[6],
+    );
+}
+
 fn input(form: &mut Form, focus: usize) -> &mut String {
     if focus == 0 {
         &mut form.credentials.username
@@ -205,6 +225,40 @@ fn toggle_remember(form: &mut Form, forced: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn install_warning_is_visible_yellow_and_password_is_masked() -> Result<()> {
+        for width in [44, 76, 120] {
+            let backend = ratatui::backend::TestBackend::new(width, 22);
+            let mut terminal = Terminal::new(backend)?;
+            let form = Form {
+                credentials: cxxy_wlanlogin_lib::Credentials {
+                    username: "student".into(),
+                    password: "never-echo-this".into(),
+                },
+                line: Default::default(),
+                remember: true,
+            };
+            terminal
+                .draw(|frame| render(frame, &form, true, None, 2, &mut [Rect::default(); 5]))?;
+            let cells = &terminal.backend().buffer().content;
+            let visible = cells
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+                .replace(' ', "");
+            assert!(visible.contains("安装服务必须保存账号和密码"));
+            assert!(visible.contains("Rememberme已开启，无法取消"));
+            assert!(visible.contains("[x]Rememberme"));
+            assert!(!visible.contains("never-echo-this"));
+            assert!(
+                cells
+                    .iter()
+                    .any(|cell| cell.symbol() == "安" && cell.fg == Color::Yellow)
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn required_remember_cannot_be_unchecked() {
         let mut form = Form {

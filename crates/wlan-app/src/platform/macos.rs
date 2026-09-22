@@ -8,7 +8,7 @@ use std::{
     ffi::c_void,
     ptr::NonNull,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -17,6 +17,7 @@ use tokio::sync::Notify;
 struct Events {
     notify: Notify,
     generation: AtomicU64,
+    observed: Mutex<Option<String>>,
 }
 pub struct Monitor {
     store: CFRetained<SCDynamicStore>,
@@ -28,6 +29,7 @@ impl Monitor {
         let events = Arc::new(Events {
             notify: Notify::new(),
             generation: AtomicU64::new(0),
+            observed: Mutex::new(None),
         });
         let mut context = SCDynamicStoreContext {
             version: 0,
@@ -66,40 +68,53 @@ impl Monitor {
         })
     }
     pub async fn snapshot(&self) -> Result<Option<String>> {
-        objc2::rc::autoreleasepool(|_| {
-            // SAFETY: CoreWLAN getters have no additional preconditions and retained
-            // interfaces remain alive throughout this autorelease pool.
-            unsafe {
-                let client = CWWiFiClient::sharedWiFiClient();
-                let Some(interfaces) = client.interfaces() else {
-                    return Ok(None);
-                };
-                for interface in interfaces.iter() {
-                    let ssid = interface.ssid();
-                    if let Some(ssid) = ssid {
-                        if ssid.to_string().as_bytes() == TARGET_SSID {
-                            let name = interface
-                                .interfaceName()
-                                .context("无法读取 Wi-Fi 接口名称")?;
-                            return Ok(Some(format!(
-                                "{}:{}",
-                                name,
-                                self.events.generation.load(Ordering::Relaxed)
-                            )));
-                        }
-                    } else if interface.interfaceMode() == CWInterfaceMode::Station {
-                        bail!("无法读取 Wi-Fi SSID；请在系统设置中授予位置权限后重试");
-                    }
-                }
-                Ok(None)
-            }
-        })
+        let identity = current_interface()?;
+        self.events.observe(&identity);
+        Ok(identity
+            .map(|name| format!("{name}#{}", self.events.generation.load(Ordering::Relaxed))))
     }
     pub async fn changed(&mut self) -> Result<()> {
         self.events.notify.notified().await;
         Ok(())
     }
 }
+impl Events {
+    fn observe(&self, identity: &Option<String>) {
+        if let Ok(mut previous) = self.observed.lock()
+            && *previous != *identity
+        {
+            self.generation.fetch_add(1, Ordering::Relaxed);
+            *previous = identity.clone();
+        }
+    }
+}
+fn current_interface() -> Result<Option<String>> {
+    objc2::rc::autoreleasepool(|_| {
+        // SAFETY: CoreWLAN getters have no additional preconditions and retained
+        // interfaces remain alive throughout this autorelease pool.
+        unsafe {
+            let client = CWWiFiClient::sharedWiFiClient();
+            let Some(interfaces) = client.interfaces() else {
+                return Ok(None);
+            };
+            for interface in interfaces.iter() {
+                let ssid = interface.ssid();
+                if let Some(ssid) = ssid {
+                    if ssid.to_string().as_bytes() == TARGET_SSID {
+                        let name = interface
+                            .interfaceName()
+                            .context("无法读取 Wi-Fi 接口名称")?;
+                        return Ok(Some(name.to_string()));
+                    }
+                } else if interface.interfaceMode() == CWInterfaceMode::Station {
+                    bail!("无法读取 Wi-Fi SSID；请在系统设置中授予位置权限后重试");
+                }
+            }
+            Ok(None)
+        }
+    })
+}
+
 impl Drop for Monitor {
     fn drop(&mut self) {
         unsafe {
@@ -127,6 +142,8 @@ unsafe extern "C-unwind" fn changed(
         return;
     }
     let events = unsafe { &*info.cast::<Events>() };
-    events.generation.fetch_add(1, Ordering::Relaxed);
+    if let Ok(identity) = current_interface() {
+        events.observe(&identity);
+    }
     events.notify.notify_one();
 }

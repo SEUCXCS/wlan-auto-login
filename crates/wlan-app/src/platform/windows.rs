@@ -99,7 +99,7 @@ impl Monitor {
                 if &ssid.ucSSID[..ssid.uSSIDLength as usize] == TARGET_SSID {
                     let guid = interface.InterfaceGuid;
                     let id = format!(
-                        "{:08x}-{:04x}-{:04x}-{:02x?}:{}",
+                        "{:08x}-{:04x}-{:04x}-{:02x?}#{}",
                         guid.data1,
                         guid.data2,
                         guid.data3,

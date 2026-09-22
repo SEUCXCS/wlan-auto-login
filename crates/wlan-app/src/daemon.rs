@@ -11,6 +11,7 @@ const INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 struct Policy {
+    initialized: bool,
     session: Option<String>,
     pending_connection: bool,
     credential_blocked: bool,
@@ -22,15 +23,27 @@ struct Policy {
 impl Policy {
     fn update(&mut self, session: Option<String>, control: &mut control::State) -> bool {
         let changed = self.session != session;
+        let saved_changed = control.session != session;
+        if saved_changed {
+            // Native notification generations restart with the monitor. Preserve
+            // a manual pause on the same interface during a daemon restart.
+            let same_interface_on_restart = !self.initialized
+                && control
+                    .session
+                    .as_deref()
+                    .zip(session.as_deref())
+                    .is_some_and(|(old, new)| old.split('#').next() == new.split('#').next());
+            if !same_interface_on_restart {
+                control.paused = false;
+            }
+            control.session = session.clone();
+        }
+        self.initialized = true;
         if changed {
             self.session = session.clone();
             self.pending_connection = session.is_some();
             self.failures = 0;
             self.retry_at = None;
-            if control.session != session {
-                control.paused = false;
-                control.session = session;
-            }
         }
         if self.revision != control.revision {
             self.revision = control.revision;
@@ -38,7 +51,7 @@ impl Policy {
             self.failures = 0;
             self.retry_at = None;
         }
-        changed
+        changed || saved_changed
     }
     fn should_check(&self, control: &control::State, now: Instant) -> bool {
         self.session.is_some()
@@ -52,7 +65,7 @@ impl Policy {
     fn success(&mut self) {
         self.pending_connection = false;
         self.failures = 0;
-        self.retry_at = Some(Instant::now() + INTERVAL);
+        self.retry_at = None;
     }
     fn failure(&mut self, now: Instant) {
         self.failures = self.failures.saturating_add(1);
@@ -64,17 +77,19 @@ impl Policy {
 }
 
 pub async fn run(client: &Client, paths: &Paths) -> Result<()> {
+    credentials::prepare_daemon()?;
     let _singleton = control::singleton(paths)?;
     let (_server, mut wake) = control::serve(paths).await?;
     let mut policy = Policy::default();
     // NoEntry is different from a locked/unavailable keyring: the latter may
     // become available after the desktop session finishes unlocking.
-    match credentials::load().await {
+    match credentials::load_for_daemon().await {
         Ok(None) => bail!("请先执行 login --remember-me 保存账号和密码，再启动 daemon"),
         Ok(Some(_)) => {}
         Err(e) => tracing::warn!("暂时无法读取密钥，等待解锁：{e:#}"),
     }
     let mut monitor = None;
+    let mut scheduled = true;
     let mut interval = tokio::time::interval(INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     interval.tick().await;
@@ -82,21 +97,31 @@ pub async fn run(client: &Client, paths: &Paths) -> Result<()> {
     loop {
         if monitor.is_none() {
             match Monitor::new().await {
-                Ok(value) => monitor = Some(value),
+                Ok(value) => {
+                    monitor = Some(value);
+                    policy.initialized = false;
+                }
                 Err(e) => tracing::warn!("网络监听暂不可用，30 秒后重试：{e:#}"),
             }
         }
         if let Some(monitor) = &monitor
-            && let Err(e) = tick(client, paths, monitor, &mut policy).await
+            && let Err(e) = tick(client, paths, monitor, &mut policy, scheduled).await
         {
             policy.failure(Instant::now());
             tracing::warn!("本次检查未完成，稍后重试：{e:#}");
         }
         tokio::select! {
-            _ = interval.tick() => {},
-            signal = wake.recv() => { if signal == Some(control::Signal::Stop) { return Ok(()); } },
+            _ = interval.tick() => { scheduled = true; },
+            signal = wake.recv() => {
+                match signal {
+                    Some(control::Signal::Stop) => return Ok(()),
+                    Some(control::Signal::Wake) => scheduled = true,
+                    None => bail!("本地控制通道已关闭"),
+                }
+            },
             event = async { match &mut monitor { Some(m) => m.changed().await, None => std::future::pending().await } } => {
                 if let Err(e) = event { tracing::warn!("网络事件订阅断开：{e:#}"); monitor = None; }
+                scheduled = false;
                 // Merge bursts of state/DHCP notifications.
                 tokio::time::sleep(Duration::from_millis(400)).await;
             },
@@ -110,13 +135,18 @@ async fn tick(
     paths: &Paths,
     monitor: &Monitor,
     policy: &mut Policy,
+    scheduled: bool,
 ) -> Result<()> {
     let session = monitor.snapshot().await?;
     let _operation = control::operation_lock(paths).await?;
     let mut state = control::State::load(paths)?;
-    let previous_session = state.session.clone();
-    if policy.update(session, &mut state) || previous_session != state.session {
+    let previous_revision = policy.revision;
+    let changed = policy.update(session, &mut state);
+    if changed {
         state.save(paths)?;
+    }
+    if !scheduled && !changed && policy.revision == previous_revision {
+        return Ok(());
     }
     if !policy.should_check(&state, Instant::now()) {
         return Ok(());
@@ -130,7 +160,6 @@ async fn tick(
         return Ok(());
     }
     if !policy.should_login(status.auth) {
-        policy.retry_at = Some(Instant::now() + INTERVAL);
         tracing::debug!("门户未提供可识别的认证状态，本轮不提交登录");
         return Ok(());
     }
@@ -217,6 +246,31 @@ mod tests {
         policy.update(Some("wifi-2".into()), &mut state);
         assert!(policy.should_check(&state, now));
     }
+    #[test]
+    fn native_monitor_restart_does_not_clear_manual_pause() {
+        let mut state = control::State {
+            paused: true,
+            session: Some("interface#7".into()),
+            revision: 0,
+        };
+        let mut policy = Policy::default();
+        policy.update(Some("interface#0".into()), &mut state);
+        assert!(state.paused);
+        policy.update(None, &mut state);
+        policy.update(Some("interface#1".into()), &mut state);
+        assert!(!state.paused);
+    }
+
+    #[test]
+    fn successful_check_does_not_delay_the_next_scheduled_tick() {
+        let mut policy = Policy::default();
+        let mut state = control::State::default();
+        policy.update(Some("wifi-1".into()), &mut state);
+        let scheduled = Instant::now() + INTERVAL;
+        policy.success();
+        assert!(policy.should_check(&state, scheduled));
+    }
+
     #[test]
     fn restart_on_same_connection_preserves_manual_logout() {
         let mut state = control::State {

@@ -27,10 +27,12 @@ getrandom.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { workspace = true, features = ["sync-secret-service", "crypto-rust"] }
 zbus = { version = "4.4", default-features = false, features = ["tokio"] }
+dbus-secret-service = { version = "4.1", default-features = false, features = ["crypto-rust"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { workspace = true, features = ["apple-native"] }
 libc = "0.2"
+security-framework-sys = "2"
 dispatch2 = "0.3"
 objc2 = "0.6"
 objc2-core-wlan = "0.3"
