@@ -51,6 +51,10 @@ async fn run(args: cli::Cli) -> Result<()> {
             daemon::run(&client, &paths).await
         }
         cli::Command::Install(args) => {
+            let wifi = platform::WifiProbe::new().await;
+            if let Some(notice) = platform::wifi_state(&wifi).await.notice() {
+                eprintln!("{notice} 后台服务仍可安装，接入 Student_CX 后再自动登录。");
+            }
             let paths = config::Paths::new()?;
             let saved = credentials::load().await?;
             if saved.is_none()
@@ -60,7 +64,7 @@ async fn run(args: cli::Cli) -> Result<()> {
                 || args.interactive
             {
                 eprintln!("安装后台服务需要保存账号和密码；本次登录的 Remember me 已强制开启。");
-                login::run(&client, &paths, args, true).await?;
+                login::run_with_wifi(&client, &paths, args, true, &wifi).await?;
             }
             service::install(&paths).await
         }

@@ -6,6 +6,23 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 const SERVICE: &str = "org.seucxcs.cxxy-wlanlogin";
 const ENTRY: &str = "saved-login";
 
+pub trait Store {
+    fn load(&self) -> impl std::future::Future<Output = Result<Option<Credentials>>>;
+    fn save(&self, credentials: Credentials) -> impl std::future::Future<Output = Result<()>>;
+}
+
+pub struct SystemStore;
+
+impl Store for SystemStore {
+    async fn load(&self) -> Result<Option<Credentials>> {
+        load().await
+    }
+
+    async fn save(&self, credentials: Credentials) -> Result<()> {
+        save(credentials).await
+    }
+}
+
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 struct Secret {
     version: u8,

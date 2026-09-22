@@ -10,7 +10,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// 登录校园网；凭据不足时打开交互界面
+    /// 登录校园网；不在 Student_CX 时仅保存凭据，凭据不足时打开交互界面
     Login(LoginArgs),
     /// 注销当前校园网会话
     Logout,

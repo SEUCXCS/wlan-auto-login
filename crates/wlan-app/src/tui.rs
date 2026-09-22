@@ -25,7 +25,12 @@ impl Drop for Screen {
     }
 }
 
-pub fn prompt(mut form: Form, force_remember: bool, mut message: Option<String>) -> Result<Form> {
+pub fn prompt(
+    mut form: Form,
+    remember_reason: Option<&str>,
+    mut message: Option<String>,
+) -> Result<Form> {
+    let force_remember = remember_reason.is_some();
     if force_remember {
         form.remember = true;
     }
@@ -44,7 +49,7 @@ pub fn prompt(mut form: Form, force_remember: bool, mut message: Option<String>)
             render(
                 frame,
                 &form,
-                force_remember,
+                remember_reason,
                 message.as_deref(),
                 focus,
                 &mut fields,
@@ -121,7 +126,7 @@ pub fn prompt(mut form: Form, force_remember: bool, mut message: Option<String>)
 fn render(
     frame: &mut ratatui::Frame<'_>,
     form: &Form,
-    force_remember: bool,
+    remember_reason: Option<&str>,
     message: Option<&str>,
     focus: usize,
     fields: &mut [Rect; 5],
@@ -192,8 +197,8 @@ fn render(
             ));
         }
     }
-    let mut notice = if force_remember {
-        "⚠ 安装服务必须保存账号和密码。\nRemember me 已开启，无法取消。\n".to_owned()
+    let mut notice = if let Some(reason) = remember_reason {
+        format!("⚠ {reason}\nRemember me 已开启，无法取消。\n")
     } else {
         String::new()
     };
@@ -226,35 +231,48 @@ fn toggle_remember(form: &mut Form, forced: bool) {
 mod tests {
     use super::*;
     #[test]
-    fn install_warning_is_visible_yellow_and_password_is_masked() -> Result<()> {
-        for width in [44, 76, 120] {
-            let backend = ratatui::backend::TestBackend::new(width, 22);
-            let mut terminal = Terminal::new(backend)?;
-            let form = Form {
-                credentials: cxxy_wlanlogin_lib::Credentials {
-                    username: "student".into(),
-                    password: "never-echo-this".into(),
-                },
-                line: Default::default(),
-                remember: true,
-            };
-            terminal
-                .draw(|frame| render(frame, &form, true, None, 2, &mut [Rect::default(); 5]))?;
-            let cells = &terminal.backend().buffer().content;
-            let visible = cells
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect::<String>()
-                .replace(' ', "");
-            assert!(visible.contains("安装服务必须保存账号和密码"));
-            assert!(visible.contains("Rememberme已开启，无法取消"));
-            assert!(visible.contains("[x]Rememberme"));
-            assert!(!visible.contains("never-echo-this"));
-            assert!(
-                cells
+    fn required_remember_warning_is_visible_yellow_and_password_is_masked() -> Result<()> {
+        for (reason, first_char) in [
+            ("安装服务必须保存账号和密码。", "安"),
+            ("离线配置仅保存账号和密码。", "离"),
+        ] {
+            for width in [44, 76, 120] {
+                let backend = ratatui::backend::TestBackend::new(width, 22);
+                let mut terminal = Terminal::new(backend)?;
+                let form = Form {
+                    credentials: cxxy_wlanlogin_lib::Credentials {
+                        username: "student".into(),
+                        password: "never-echo-this".into(),
+                    },
+                    line: Default::default(),
+                    remember: true,
+                };
+                terminal.draw(|frame| {
+                    render(
+                        frame,
+                        &form,
+                        Some(reason),
+                        None,
+                        2,
+                        &mut [Rect::default(); 5],
+                    )
+                })?;
+                let cells = &terminal.backend().buffer().content;
+                let visible = cells
                     .iter()
-                    .any(|cell| cell.symbol() == "安" && cell.fg == Color::Yellow)
-            );
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+                    .replace(' ', "");
+                assert!(visible.contains(reason));
+                assert!(visible.contains("Rememberme已开启，无法取消"));
+                assert!(visible.contains("[x]Rememberme"));
+                assert!(!visible.contains("never-echo-this"));
+                assert!(
+                    cells
+                        .iter()
+                        .any(|cell| cell.symbol() == first_char && cell.fg == Color::Yellow)
+                );
+            }
         }
         Ok(())
     }
