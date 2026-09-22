@@ -53,7 +53,7 @@ fn open_lock(path: &Path) -> Result<File> {
 }
 
 pub fn singleton(paths: &Paths) -> Result<File> {
-    let file = open_lock(&paths.config.join("daemon.lock"))?;
+    let file = open_lock(&paths.runtime.join("daemon.lock"))?;
     fs2::FileExt::try_lock_exclusive(&file).context("daemon 已在运行")?;
     Ok(file)
 }
@@ -65,7 +65,7 @@ pub fn service_lock(paths: &Paths) -> Result<File> {
 }
 
 pub async fn operation_lock(paths: &Paths) -> Result<File> {
-    let file = open_lock(&paths.config.join("operation.lock"))?;
+    let file = open_lock(&paths.runtime.join("operation.lock"))?;
     for _ in 0..250 {
         match fs2::FileExt::try_lock_exclusive(&file) {
             Ok(()) => return Ok(file),
@@ -109,13 +109,13 @@ pub async fn serve(paths: &Paths) -> Result<(Server, mpsc::Receiver<Signal>)> {
     let mut random = [0u8; 32];
     getrandom::fill(&mut random).map_err(|e| anyhow::anyhow!("无法生成控制令牌: {e}"))?;
     let token: String = random.iter().map(|v| format!("{v:02x}")).collect();
-    private_dir(&paths.config)?;
+    private_dir(&paths.runtime)?;
     let (mut listener, address) = crate::transport::Listener::bind(paths, &token)?;
     let endpoint = Endpoint {
         address,
         token: token.clone(),
     };
-    let path = paths.config.join("daemon-endpoint.json");
+    let path = paths.runtime.join("daemon-endpoint.json");
     write_private(&path, &serde_json::to_vec(&endpoint)?)?;
     let (sender, receiver) = mpsc::channel(1);
     let task = tokio::spawn(async move {
@@ -151,7 +151,7 @@ pub async fn serve(paths: &Paths) -> Result<(Server, mpsc::Receiver<Signal>)> {
             task,
             path,
             #[cfg(unix)]
-            socket: paths.config.join("daemon.sock"),
+            socket: paths.runtime.join("daemon.sock"),
         },
         receiver,
     ))
@@ -166,7 +166,7 @@ pub async fn stop(paths: &Paths) {
 async fn send(paths: &Paths, command: u8) {
     let _ = tokio::time::timeout(Duration::from_secs(1), async {
         let endpoint: Endpoint =
-            serde_json::from_slice(&fs::read(paths.config.join("daemon-endpoint.json"))?)?;
+            serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json"))?)?;
         let mut socket = crate::transport::connect(&endpoint.address).await?;
         socket.write_all(endpoint.token.as_bytes()).await?;
         socket.write_all(&[command]).await?;
@@ -181,12 +181,10 @@ mod tests {
     #[tokio::test]
     async fn local_ipc_requires_token_and_wakes_daemon() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let paths = Paths {
-            config: dir.path().into(),
-        };
+        let paths = Paths::test(dir.path());
         let (_server, mut receiver) = serve(&paths).await?;
         let endpoint: Endpoint =
-            serde_json::from_slice(&fs::read(paths.config.join("daemon-endpoint.json"))?)?;
+            serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json"))?)?;
         let mut stranger = crate::transport::connect(&endpoint.address).await?;
         stranger.write_all(&[b'x'; 64]).await?;
         assert!(
@@ -203,7 +201,7 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(
-                fs::metadata(paths.config.join("daemon.sock"))?
+                fs::metadata(paths.runtime.join("daemon.sock"))?
                     .permissions()
                     .mode()
                     & 0o777,
@@ -215,9 +213,7 @@ mod tests {
     #[tokio::test]
     async fn instance_lock_is_exclusive_and_released_on_drop() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let paths = Paths {
-            config: dir.path().into(),
-        };
+        let paths = Paths::test(dir.path());
         let lock = singleton(&paths)?;
         assert!(singleton(&paths).is_err());
         drop(lock);
@@ -227,9 +223,7 @@ mod tests {
     #[test]
     fn pause_survives_restart_and_explicit_login_resumes() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let paths = Paths {
-            config: dir.path().into(),
-        };
+        let paths = Paths::test(dir.path());
         State {
             paused: true,
             session: Some("connection-1".into()),

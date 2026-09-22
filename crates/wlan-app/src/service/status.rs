@@ -6,11 +6,13 @@ use std::{collections::HashMap, fs, path::Path};
 #[derive(Clone, Debug)]
 pub(super) enum Manager {
     #[cfg(any(target_os = "linux", test))]
-    Systemd,
+    Systemd { system: bool },
     #[cfg(any(target_os = "macos", test))]
     Launchd { domain: String, target: String },
     #[cfg(any(target_os = "windows", test))]
     TaskScheduler { name: String },
+    #[cfg(any(windows, test))]
+    WindowsService,
 }
 
 pub(super) trait Runner {
@@ -83,13 +85,36 @@ fn is_file(path: &Path) -> Result<bool> {
     }
 }
 
-pub async fn status(paths: &Paths) -> Result<()> {
-    let plan = plan(paths)?;
-    let (report, query_error) = report(&plan, &SystemRunner).await?;
-    println!("{report}");
-    if let Some(error) = query_error {
-        return Err(error).context("无法确认系统服务状态");
+pub async fn status(paths: &Paths, discover: bool) -> Result<()> {
+    let mut plans = vec![plan(paths)?];
+    if discover && paths.scope == crate::scope::Scope::User {
+        plans.push(plan(&Paths::new(crate::scope::Scope::System)?)?);
     }
+    let mut reports = Vec::new();
+    let mut errors = Vec::new();
+    for plan in plans {
+        if !Artifacts::read(&plan)?.any() {
+            continue;
+        }
+        let (report, error) = report(&plan, &SystemRunner).await?;
+        reports.push(report);
+        if let Some(error) = error {
+            errors.push(format!("{error:#}"));
+        }
+    }
+    println!(
+        "{}",
+        if reports.is_empty() {
+            "🔴 安装状态：未安装".into()
+        } else {
+            reports.join("\n\n")
+        }
+    );
+    anyhow::ensure!(
+        errors.is_empty(),
+        "无法确认系统服务状态：{}",
+        errors.join("；")
+    );
     Ok(())
 }
 
@@ -205,22 +230,34 @@ impl Manager {
     fn label(&self) -> &'static str {
         match self {
             #[cfg(any(target_os = "linux", test))]
-            Self::Systemd => "systemd --user",
+            Self::Systemd { system } => {
+                if *system {
+                    "systemd"
+                } else {
+                    "systemd --user"
+                }
+            }
             #[cfg(any(target_os = "macos", test))]
-            Self::Launchd { .. } => "launchd 用户 LaunchAgent",
+            Self::Launchd { domain, .. } if domain == "system" => "launchd LaunchDaemon",
+            #[cfg(any(target_os = "macos", test))]
+            Self::Launchd { .. } => "launchd LaunchAgent",
             #[cfg(any(target_os = "windows", test))]
             Self::TaskScheduler { .. } => "Windows Task Scheduler",
+            #[cfg(any(windows, test))]
+            Self::WindowsService => "Windows Service Control Manager",
         }
     }
 
     pub fn name(&self) -> &str {
         match self {
             #[cfg(any(target_os = "linux", test))]
-            Self::Systemd => "cxxy-wlanlogin.service",
+            Self::Systemd { .. } => "cxxy-wlanlogin.service",
             #[cfg(any(target_os = "macos", test))]
             Self::Launchd { target, .. } => target,
             #[cfg(any(target_os = "windows", test))]
             Self::TaskScheduler { name } => name,
+            #[cfg(any(windows, test))]
+            Self::WindowsService => "cxxy-wlanlogin",
         }
     }
 
@@ -233,20 +270,22 @@ impl Manager {
                 true
             }
             #[cfg(any(target_os = "linux", test))]
-            Self::Systemd => state.registered,
+            Self::Systemd { .. } => state.registered,
             #[cfg(any(target_os = "windows", test))]
             Self::TaskScheduler { .. } => state.registered,
+            #[cfg(any(windows, test))]
+            Self::WindowsService => state.registered,
         }
     }
 
     pub async fn query(&self, runner: &impl Runner) -> Result<ServiceState> {
         match self {
             #[cfg(any(target_os = "linux", test))]
-            Self::Systemd => {
+            Self::Systemd { system } => {
                 let command = Invocation::new(
                     "systemctl",
                     [
-                        "--user",
+                        if *system { "--system" } else { "--user" },
                         "show",
                         self.name(),
                         "--no-pager",
@@ -282,6 +321,13 @@ impl Manager {
                 let result = runner.output(&command).await?;
                 result.check(&command)?;
                 parse_windows(&result.stdout)
+            }
+            #[cfg(any(windows, test))]
+            Self::WindowsService => {
+                let command = windows_service_query();
+                let result = runner.output(&command).await?;
+                result.check(&command)?;
+                parse_windows_service(&result.stdout)
             }
         }
     }
@@ -446,6 +492,59 @@ fn parse_windows(text: &str) -> Result<ServiceState> {
     })
 }
 
+#[cfg(any(windows, test))]
+fn windows_service_query() -> Invocation {
+    let script = r#"$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+try {
+    $service = Get-Service | Where-Object { $_.ServiceName -eq 'cxxy-wlanlogin' }
+    if ($null -eq $service) { [Console]::WriteLine('Installed=0'); exit 0 }
+    [Console]::WriteLine('Installed=1')
+    [Console]::WriteLine('State=' + [int]$service.Status)
+    $start = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\cxxy-wlanlogin').Start
+    [Console]::WriteLine('Enabled=' + [int]($start -eq 2))
+} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
+"#;
+    Invocation::new(
+        "powershell.exe",
+        [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ],
+    )
+}
+
+#[cfg(any(windows, test))]
+fn parse_windows_service(text: &str) -> Result<ServiceState> {
+    let values = fields(text);
+    match values.get("Installed") {
+        Some(&"0") => return Ok(ServiceState::absent()),
+        Some(&"1") => {}
+        _ => anyhow::bail!("系统服务响应缺少 Installed"),
+    }
+    let (label, running, pending) = match values.get("State") {
+        Some(&"1") => ("已停止", false, false),
+        Some(&"2") => ("启动中", false, true),
+        Some(&"3") => ("停止中", false, true),
+        Some(&"4") => ("运行中", true, false),
+        Some(&"5") | Some(&"6") => ("切换状态中", false, true),
+        Some(&"7") => ("已暂停", false, false),
+        _ => anyhow::bail!("未知的系统服务运行状态"),
+    };
+    Ok(ServiceState {
+        registered: true,
+        running,
+        pending,
+        state: label.into(),
+        enabled: values.get("Enabled").map(|v| *v == "1"),
+        pid: None,
+        detail: None,
+    })
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
@@ -542,6 +641,20 @@ pub(super) mod tests {
             .to_string_lossy();
         assert!(script.contains("task''with-quote"));
         assert!(!script.contains("ConvertTo-Json"));
+        Ok(())
+    }
+
+    #[test]
+    fn scm_numeric_states_are_independent_of_locale() -> Result<()> {
+        for number in 1..=7 {
+            let state = parse_windows_service(&format!("Installed=1\nState={number}\nEnabled=1"))?;
+            assert!(state.registered);
+            assert_eq!(state.running, number == 4);
+            assert_eq!(state.pending, matches!(number, 2 | 3 | 5 | 6));
+        }
+        assert!(!parse_windows_service("Installed=0")?.registered);
+        assert!(parse_windows_service("Installed=1\nState=unknown").is_err());
+        assert!(parse_windows_service("access denied").is_err());
         Ok(())
     }
 

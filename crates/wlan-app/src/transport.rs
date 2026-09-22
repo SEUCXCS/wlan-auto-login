@@ -1,4 +1,4 @@
-//! User-local IPC. No TCP port is opened on any platform.
+//! Local IPC restricted to the selected user or system scope. No TCP port is opened.
 use crate::config::Paths;
 use anyhow::Result;
 
@@ -12,7 +12,7 @@ pub struct Listener {
 impl Listener {
     pub fn bind(paths: &Paths, _nonce: &str) -> Result<(Self, String)> {
         use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-        let path = paths.config.join("daemon.sock");
+        let path = paths.runtime.join("daemon.sock");
         match std::fs::symlink_metadata(&path) {
             Ok(meta) if meta.file_type().is_socket() => std::fs::remove_file(&path)?,
             Ok(_) => anyhow::bail!("控制 socket 路径被其他文件占用"),
@@ -38,23 +38,25 @@ pub type Stream = tokio::net::windows::named_pipe::NamedPipeServer;
 pub struct Listener {
     inner: Stream,
     address: String,
+    scope: crate::scope::Scope,
 }
 #[cfg(windows)]
 impl Listener {
-    pub fn bind(_paths: &Paths, nonce: &str) -> Result<(Self, String)> {
+    pub fn bind(paths: &Paths, nonce: &str) -> Result<(Self, String)> {
         let address = format!(r"\\.\pipe\cxxy-wlanlogin-{nonce}");
-        let inner = pipe(&address, true)?;
+        let inner = pipe(&address, true, paths.scope)?;
         Ok((
             Self {
                 inner,
                 address: address.clone(),
+                scope: paths.scope,
             },
             address,
         ))
     }
     pub async fn accept(&mut self) -> Result<Stream> {
         self.inner.connect().await?;
-        let next = pipe(&self.address, false)?;
+        let next = pipe(&self.address, false, self.scope)?;
         Ok(std::mem::replace(&mut self.inner, next))
     }
 }
@@ -64,7 +66,7 @@ pub async fn connect(address: &str) -> Result<tokio::net::windows::named_pipe::N
 }
 
 #[cfg(windows)]
-fn pipe(address: &str, first: bool) -> Result<Stream> {
+fn pipe(address: &str, first: bool, scope: crate::scope::Scope) -> Result<Stream> {
     use std::ptr;
     use windows_sys::Win32::{
         Foundation::LocalFree,
@@ -73,9 +75,13 @@ fn pipe(address: &str, first: bool) -> Result<Stream> {
             SECURITY_ATTRIBUTES,
         },
     };
-    // Protected ACL: only the current user's SID and LocalSystem.
+    // System IPC is shared by LocalSystem and elevated administrators only.
+    // User IPC remains restricted to the current user's SID and LocalSystem.
     // PIPE_REJECT_REMOTE_CLIENTS is available on Windows 7.
-    let sid = crate::platform::current_sid()?;
+    let sid = match scope {
+        crate::scope::Scope::User => crate::platform::current_sid()?,
+        crate::scope::Scope::System => "BA".into(),
+    };
     let sddl: Vec<u16> = format!("D:P(A;;GA;;;{sid})(A;;GA;;;SY)")
         .encode_utf16()
         .chain(Some(0))

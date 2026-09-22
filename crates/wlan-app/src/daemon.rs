@@ -76,14 +76,25 @@ impl Policy {
     }
 }
 
+fn ensure_scope(paths: &Paths) -> Result<()> {
+    // User daemons yield when a system installation exists. A boot service must
+    // not inspect user homes (which systemd intentionally hides from it).
+    if paths.scope == crate::scope::Scope::User {
+        crate::service::ensure_no_conflicting_install(paths)?;
+    }
+    Ok(())
+}
+
 pub async fn run(client: &Client, paths: &Paths) -> Result<()> {
+    ensure_scope(paths)?;
     credentials::prepare_daemon()?;
     let _singleton = control::singleton(paths)?;
     let (_server, mut wake) = control::serve(paths).await?;
     let mut policy = Policy::default();
+    let store = credentials::ScopedStore::new(paths, None)?;
     // NoEntry is different from a locked/unavailable keyring: the latter may
     // become available after the desktop session finishes unlocking.
-    match credentials::load_for_daemon().await {
+    match store.load_background().await {
         Ok(None) => bail!("请先执行 login --remember-me 保存账号和密码，再启动 daemon"),
         Ok(Some(_)) => {}
         Err(e) => tracing::warn!("暂时无法读取密钥，等待解锁：{e:#}"),
@@ -95,6 +106,7 @@ pub async fn run(client: &Client, paths: &Paths) -> Result<()> {
     interval.tick().await;
     tracing::info!("daemon 已启动，仅在 Student_CX 上检查校园网状态");
     loop {
+        ensure_scope(paths)?;
         if monitor.is_none() {
             match Monitor::new().await {
                 Ok(value) => {
@@ -105,7 +117,7 @@ pub async fn run(client: &Client, paths: &Paths) -> Result<()> {
             }
         }
         if let Some(monitor) = &monitor
-            && let Err(e) = tick(client, paths, monitor, &mut policy, scheduled).await
+            && let Err(e) = tick(client, paths, monitor, &store, &mut policy, scheduled).await
         {
             policy.failure(Instant::now());
             tracing::warn!("本次检查未完成，稍后重试：{e:#}");
@@ -134,6 +146,7 @@ async fn tick(
     client: &Client,
     paths: &Paths,
     monitor: &Monitor,
+    store: &credentials::ScopedStore,
     policy: &mut Policy,
     scheduled: bool,
 ) -> Result<()> {
@@ -151,7 +164,8 @@ async fn tick(
     if !policy.should_check(&state, Instant::now()) {
         return Ok(());
     }
-    let saved = credentials::load()
+    let saved = store
+        .load_background()
         .await?
         .ok_or_else(|| anyhow::anyhow!("保存的凭据已不存在，请重新执行 login --remember-me"))?;
     let status = client.status().await?;
@@ -188,6 +202,13 @@ async fn tick(
 }
 
 async fn shutdown() {
+    #[cfg(windows)]
+    {
+        tokio::select! {
+            _ = crate::windows_service::stop_signal() => {},
+            _ = tokio::signal::ctrl_c() => {},
+        }
+    }
     #[cfg(unix)]
     {
         if let Ok(mut terminate) =
@@ -197,6 +218,7 @@ async fn shutdown() {
             return;
         }
     }
+    #[cfg(not(windows))]
     let _ = tokio::signal::ctrl_c().await;
 }
 

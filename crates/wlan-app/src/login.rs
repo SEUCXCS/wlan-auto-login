@@ -57,15 +57,8 @@ pub async fn run_with_wifi(
     force_remember: bool,
     wifi: &impl platform::WifiConnection,
 ) -> Result<()> {
-    run_with_store(
-        client,
-        paths,
-        args,
-        force_remember,
-        wifi,
-        &credentials::SystemStore,
-    )
-    .await
+    let store = credentials::ScopedStore::new(paths, args.credential_store)?;
+    run_with_store(client, paths, args, force_remember, wifi, &store).await
 }
 
 async fn run_with_store(
@@ -121,7 +114,9 @@ async fn run_with_store(
     }
     loop {
         if interactive {
-            let remember_reason = if force_remember {
+            let remember_reason = if force_remember && paths.scope == crate::scope::Scope::System {
+                Some("安装系统服务必须保存凭据，供本机开机自动登录使用。")
+            } else if force_remember {
                 Some("安装服务必须保存账号和密码。")
             } else if save_only {
                 Some("离线配置仅保存账号和密码。")
@@ -269,9 +264,7 @@ mod tests {
 
     async fn assert_local_save(wifi: TestWifi, install: bool, reuse_saved: bool) -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let paths = Paths {
-            config: dir.path().join("config"),
-        };
+        let paths = Paths::test(dir.path().join("config"));
         let (client, listener) = mock_portal().await?;
         let store = TestStore::default();
         let args = if reuse_saved {
@@ -347,9 +340,7 @@ mod tests {
     async fn offline_save_failure_aborts_login_and_install_preparation() -> Result<()> {
         for install in [false, true] {
             let dir = tempfile::tempdir()?;
-            let paths = Paths {
-                config: dir.path().join("config"),
-            };
+            let paths = Paths::test(dir.path().join("config"));
             let (client, listener) = mock_portal().await?;
             let store = TestStore {
                 fail_save: true,
@@ -397,9 +388,7 @@ mod tests {
     async fn target_wifi_authenticates_and_saves_only_when_requested_or_installing() -> Result<()> {
         for (remember, install) in [(false, false), (true, false), (false, true)] {
             let dir = tempfile::tempdir()?;
-            let paths = Paths {
-                config: dir.path().join("config"),
-            };
+            let paths = Paths::test(dir.path().join("config"));
             let (client, listener) = mock_portal().await?;
             let store = TestStore::default();
             let wifi = TestWifi::new([

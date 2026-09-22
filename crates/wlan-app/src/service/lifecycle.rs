@@ -15,6 +15,9 @@ pub enum Action {
 }
 
 pub async fn manage(paths: &Paths, action: Action) -> Result<()> {
+    if matches!(action, Action::Start | Action::Restart) {
+        super::ensure_no_conflicting_install(paths)?;
+    }
     manage_plan(paths, &plan(paths)?, action, &SystemRunner).await?;
     tracing::info!(
         "{}",
@@ -49,7 +52,7 @@ async fn manage_plan(
     // control only the registered service, never a manually launched process.
     match &plan.manager {
         #[cfg(any(target_os = "linux", test))]
-        Manager::Systemd => {
+        Manager::Systemd { system } => {
             let verb = match action {
                 Action::Start => "start",
                 Action::Stop => "stop",
@@ -57,7 +60,14 @@ async fn manage_plan(
             };
             execute(
                 runner,
-                Invocation::new("systemctl", ["--user", verb, plan.manager.name()]),
+                Invocation::new(
+                    "systemctl",
+                    [
+                        if *system { "--system" } else { "--user" },
+                        verb,
+                        plan.manager.name(),
+                    ],
+                ),
             )
             .await
         }
@@ -108,6 +118,29 @@ async fn manage_plan(
             }
             Ok(())
         }
+        #[cfg(any(windows, test))]
+        Manager::WindowsService => {
+            let mut state = state;
+            if matches!(action, Action::Stop | Action::Restart) && (state.running || state.pending)
+            {
+                execute(
+                    runner,
+                    Invocation::new("sc.exe", ["stop", "cxxy-wlanlogin"]),
+                )
+                .await?;
+                state = wait_task_stopped(&plan.manager, runner).await?;
+            }
+            if matches!(action, Action::Start | Action::Restart) && !state.running && !state.pending
+            {
+                anyhow::ensure!(state.registered, "系统服务注册已被移除，请重新执行 install");
+                execute(
+                    runner,
+                    Invocation::new("sc.exe", ["start", "cxxy-wlanlogin"]),
+                )
+                .await?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -116,7 +149,10 @@ async fn execute(runner: &impl Runner, command: Invocation) -> Result<()> {
 }
 
 #[cfg(any(target_os = "windows", test))]
-async fn wait_task_stopped(manager: &Manager, runner: &impl Runner) -> Result<ServiceState> {
+pub(super) async fn wait_task_stopped(
+    manager: &Manager,
+    runner: &impl Runner,
+) -> Result<ServiceState> {
     use anyhow::Context;
     use std::time::Duration;
     tokio::time::timeout(Duration::from_secs(25), async {
@@ -129,7 +165,7 @@ async fn wait_task_stopped(manager: &Manager, runner: &impl Runner) -> Result<Se
         }
     })
     .await
-    .context("等待系统任务停止超时；未提交新的启动请求")?
+    .context("等待系统服务停止超时；未提交新的启动请求")?
 }
 
 #[cfg(test)]
@@ -140,9 +176,7 @@ mod tests {
 
     fn fixture() -> Result<(tempfile::TempDir, Paths, Plan)> {
         let dir = tempfile::tempdir()?;
-        let paths = Paths {
-            config: dir.path().join("config"),
-        };
+        let paths = Paths::test(dir.path().join("config"));
         let plan = super::super::linux_plan(dir.path().join("daemon"), dir.path().join("service"))?;
         Ok((dir, paths, plan))
     }
@@ -165,6 +199,75 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn system_controls_use_systemd_and_scm_in_the_selected_scope() -> Result<()> {
+        for (action, verb) in [
+            (Action::Start, "start"),
+            (Action::Stop, "stop"),
+            (Action::Restart, "restart"),
+        ] {
+            let (dir, mut paths, _) = fixture()?;
+            paths.scope = crate::scope::Scope::System;
+            let plan = super::super::linux_system_plan(
+                dir.path().join("daemon"),
+                dir.path().join("service"),
+            )?;
+            installed(&plan)?;
+            let runner = FakeRunner::new([(true, STOPPED), (true, "")]);
+            manage_plan(&paths, &plan, action, &runner).await?;
+            assert_eq!(
+                calls(&runner)[1],
+                ["systemctl", "--system", verb, "cxxy-wlanlogin.service"]
+            );
+
+            let plan = super::super::windows_system_plan(
+                dir.path().join("daemon.exe"),
+                dir.path().join("service.json"),
+            )?;
+            installed(&plan)?;
+            let runner = FakeRunner::new([(true, "Installed=1\nState=1\nEnabled=1"), (true, "")]);
+            manage_plan(&paths, &plan, action, &runner).await?;
+            if matches!(action, Action::Stop) {
+                assert_eq!(calls(&runner).len(), 1);
+            } else {
+                assert_eq!(calls(&runner)[1], ["sc.exe", "start", "cxxy-wlanlogin"]);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scm_restart_waits_for_stop_and_aborts_on_stop_failure() -> Result<()> {
+        let (dir, mut paths, _) = fixture()?;
+        paths.scope = crate::scope::Scope::System;
+        let plan = super::super::windows_system_plan(
+            dir.path().join("daemon.exe"),
+            dir.path().join("service.json"),
+        )?;
+        installed(&plan)?;
+        let runner = FakeRunner::new([
+            (true, "Installed=1\nState=4"),
+            (true, ""),
+            (true, "Installed=1\nState=3"),
+            (true, "Installed=1\nState=1"),
+            (true, ""),
+        ]);
+        manage_plan(&paths, &plan, Action::Restart, &runner).await?;
+        let submitted = calls(&runner);
+        assert_eq!(submitted[1], ["sc.exe", "stop", "cxxy-wlanlogin"]);
+        assert_eq!(submitted[2][0], "powershell.exe");
+        assert_eq!(submitted[3][0], "powershell.exe");
+        assert_eq!(submitted[4], ["sc.exe", "start", "cxxy-wlanlogin"]);
+        let runner = FakeRunner::new([(true, "Installed=1\nState=4"), (false, "stop failed")]);
+        assert!(
+            manage_plan(&paths, &plan, Action::Restart, &runner)
+                .await
+                .is_err()
+        );
+        assert_eq!(calls(&runner).len(), 2);
+        Ok(())
     }
 
     #[tokio::test]

@@ -83,6 +83,7 @@ impl CommandOutput {
 }
 
 struct Plan {
+    scope: crate::scope::Scope,
     manager: Manager,
     executable: PathBuf,
     definition: PathBuf,
@@ -94,17 +95,44 @@ struct Plan {
 }
 
 pub async fn install(paths: &Paths) -> Result<()> {
-    install_plan(paths, plan(paths)?, &std::env::current_exe()?).await
+    ensure_no_conflicting_install(paths)?;
+    let plan = plan(paths)?;
+    #[cfg(target_os = "linux")]
+    let plan = {
+        let mut plan = plan;
+        if paths.scope == crate::scope::Scope::System {
+            plan.content = plan.content.replace(
+                "# CREDENTIALS\n",
+                &crate::credentials::linux_credential_directive(paths)?,
+            );
+        }
+        plan
+    };
+    install_plan(paths, plan, &std::env::current_exe()?).await
 }
 
 async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
+    anyhow::ensure!(plan.scope == paths.scope, "服务计划与安装范围不一致");
     let _service_lock = control::service_lock(paths)?;
     assert_owned(&plan.definition)?;
     let source = source.canonicalize()?;
     let binary_dir = plan.executable.parent().context("安装路径无父目录")?;
     private_dir(binary_dir)?;
+    #[cfg(windows)]
+    if paths.scope == crate::scope::Scope::System {
+        crate::config::restrict_windows(binary_dir, true)?;
+    }
+    #[cfg(unix)]
+    if paths.scope == crate::scope::Scope::System {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(binary_dir, fs::Permissions::from_mode(0o755))?;
+    }
     if let Some(parent) = plan.definition.parent() {
         fs::create_dir_all(parent)?;
+        #[cfg(windows)]
+        if paths.scope == crate::scope::Scope::System {
+            crate::config::restrict_windows(parent, true)?;
+        }
     }
     let old_definition = Backup::capture(&plan.definition)?;
     let old_executable = Backup::capture(&plan.executable)?;
@@ -114,16 +142,23 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(staged.path(), fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(
+            staged.path(),
+            fs::Permissions::from_mode(if paths.scope == crate::scope::Scope::System {
+                0o755
+            } else {
+                0o700
+            }),
+        )?;
     }
-    for command in &plan.stop {
-        command.run().await?;
-    }
-    control::stop(paths).await;
-    wait_stopped(paths).await?;
+    stop_before_replacing(paths, &plan).await?;
     let outcome: Result<()> = async {
         if source != plan.executable.canonicalize().unwrap_or_default() {
             staged.persist(&plan.executable).map_err(|e| e.error)?;
+        }
+        #[cfg(target_os = "macos")]
+        if paths.scope == crate::scope::Scope::System {
+            crate::credentials::authorize_binary(&plan.executable)?;
         }
         write_definition(&plan.definition, plan.content.as_bytes())?;
         for command in &plan.start {
@@ -135,6 +170,9 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
     if let Err(error) = outcome {
         // Attempt every rollback step, and report incomplete recovery accurately.
         let mut rollback_errors = Vec::new();
+        if let Err(e) = stop_before_replacing(paths, &plan).await {
+            rollback_errors.push(e.to_string());
+        }
         for command in &plan.remove {
             if let Err(e) = command.run().await {
                 rollback_errors.push(e.to_string());
@@ -147,6 +185,13 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
             if let Err(e) = result {
                 rollback_errors.push(e.to_string());
             }
+        }
+        #[cfg(target_os = "macos")]
+        if paths.scope == crate::scope::Scope::System
+            && old_executable.existed()
+            && let Err(e) = crate::credentials::authorize_binary(&plan.executable)
+        {
+            rollback_errors.push(e.to_string());
         }
         let commands = if old_definition.existed() {
             &plan.start
@@ -166,7 +211,15 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
         }
         return Err(error).context("安装失败，已回滚安装文件");
     }
-    tracing::info!("后台服务已安装并启动，今后用户登录系统后自动运行。");
+    tracing::info!(
+        "{}服务已安装并启动，{}。",
+        paths.scope.label(),
+        if paths.scope == crate::scope::Scope::System {
+            "今后随开机自动运行"
+        } else {
+            "今后用户登录系统后自动运行"
+        }
+    );
     Ok(())
 }
 
@@ -175,6 +228,7 @@ pub async fn uninstall(paths: &Paths) -> Result<()> {
     let plan = plan(paths)?;
     assert_owned(&plan.definition)?;
     if plan.definition.exists() {
+        stop_before_replacing(paths, &plan).await?;
         for command in &plan.remove {
             command.run().await?;
         }
@@ -186,7 +240,18 @@ pub async fn uninstall(paths: &Paths) -> Result<()> {
         command.run().await?;
     }
     remove_if_present(&plan.executable).context("服务已卸载，但安装副本仍在使用，请关闭后删除")?;
-    tracing::info!("后台服务已卸载；系统密钥管理器中的账号和密码仍保留。");
+    tracing::info!("后台服务已卸载；已保存的账号和密码仍保留。");
+    Ok(())
+}
+
+async fn stop_before_replacing(paths: &Paths, plan: &Plan) -> Result<()> {
+    for command in &plan.stop {
+        command.run().await?;
+    }
+    control::stop(paths).await;
+    wait_stopped(paths).await?;
+    #[cfg(windows)]
+    lifecycle::wait_task_stopped(&plan.manager, &status::SystemRunner).await?;
     Ok(())
 }
 
@@ -224,6 +289,11 @@ fn write_definition(path: &Path, bytes: &[u8]) -> Result<()> {
     file.write_all(bytes)?;
     file.as_file().sync_all()?;
     file.persist(path).map_err(|e| e.error)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o644))?;
+    }
     Ok(())
 }
 struct Backup(Option<tempfile::NamedTempFile>);
@@ -255,6 +325,9 @@ impl Backup {
 }
 
 fn plan(paths: &Paths) -> Result<Plan> {
+    if paths.scope == crate::scope::Scope::System {
+        return system_plan(paths);
+    }
     let dirs = directories::ProjectDirs::from("org", "seucxcs", "cxxy-wlanlogin")
         .context("无法确定安装目录")?;
     let executable = dirs.data_local_dir().join("bin").join(if cfg!(windows) {
@@ -293,6 +366,233 @@ fn plan(paths: &Paths) -> Result<Plan> {
     }
 }
 
+fn system_plan(paths: &Paths) -> Result<Plan> {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = paths;
+        linux_system_plan(
+            "/usr/local/libexec/cxxy-wlanlogin/cxxy-wlanlogin-daemon".into(),
+            "/etc/systemd/system/cxxy-wlanlogin.service".into(),
+        )
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_system_plan(
+            "/Library/Application Support/cxxy-wlanlogin/bin/cxxy-wlanlogin-daemon".into(),
+            "/Library/LaunchDaemons/org.seucxcs.cxxy-wlanlogin.plist".into(),
+            paths.config.join("daemon.log"),
+        )
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramData, FOLDERID_ProgramFiles};
+        let _ = paths;
+        windows_system_plan(
+            crate::config::known_folder(&FOLDERID_ProgramFiles)?
+                .join("cxxy-wlanlogin/cxxy-wlanlogin-daemon.exe"),
+            crate::config::known_folder(&FOLDERID_ProgramData)?.join("cxxy-wlanlogin/service.json"),
+        )
+    }
+}
+
+pub fn ensure_no_conflicting_install(paths: &Paths) -> Result<()> {
+    use crate::scope::Scope;
+    let other = match paths.scope {
+        Scope::User => system_plan(&Paths::new(Scope::System)?)?.definition,
+        Scope::System => {
+            #[cfg(unix)]
+            {
+                if let Some(home) = original_user_home()? {
+                    #[cfg(target_os = "linux")]
+                    {
+                        home.join(".config/systemd/user/cxxy-wlanlogin.service")
+                    }
+                    #[cfg(target_os = "macos")]
+                    {
+                        home.join("Library/LaunchAgents/org.seucxcs.cxxy-wlanlogin.plist")
+                    }
+                } else {
+                    return Ok(());
+                }
+            }
+            #[cfg(windows)]
+            {
+                plan(&Paths::new(Scope::User)?)?.definition
+            }
+        }
+    };
+    if other.try_exists()? {
+        assert_owned(&other)?;
+        bail!(
+            "检测到另一安装范围的服务：{}；请使用该服务对应的范围和权限执行命令；如需切换安装范围，请先卸载该服务（凭据会保留）",
+            other.display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn original_user_home() -> Result<Option<PathBuf>> {
+    let Some(uid) = std::env::var("SUDO_UID")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|uid| *uid != 0)
+    else {
+        return Ok(None);
+    };
+    // SUDO_UID is only a lookup hint for conflict detection, never authority for an operation.
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut record: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result = std::ptr::null_mut();
+    // SAFETY: getpwuid_r writes pointers into our live buffer; copy the home path before returning.
+    unsafe {
+        let code = libc::getpwuid_r(
+            uid,
+            &mut record,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &mut result,
+        );
+        anyhow::ensure!(
+            code == 0 && !result.is_null(),
+            "无法确认 sudo 原用户的已有安装"
+        );
+        use std::os::unix::ffi::OsStrExt;
+        Ok(Some(
+            std::ffi::OsStr::from_bytes(std::ffi::CStr::from_ptr(record.pw_dir).to_bytes()).into(),
+        ))
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_system_plan(executable: PathBuf, definition: PathBuf) -> Result<Plan> {
+    let quoted = systemd_quote(&executable)?;
+    let reload = || Invocation::new("systemctl", ["--system", "daemon-reload"]);
+    Ok(Plan {
+        scope: crate::scope::Scope::System,
+        manager: Manager::Systemd { system: true },
+        content: format!(
+            "# {LABEL}\n[Unit]\nDescription=Student_CX automatic login\nAfter=NetworkManager.service\nWants=NetworkManager.service\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart={quoted} --system daemon\nRestart=on-failure\nRestartSec=30\nTimeoutStopSec=25\nStateDirectory=cxxy-wlanlogin\nStateDirectoryMode=0700\nRuntimeDirectory=cxxy-wlanlogin\nRuntimeDirectoryMode=0700\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=true\nProtectSystem=strict\n# CREDENTIALS\n\n[Install]\nWantedBy=multi-user.target\n"
+        ),
+        executable,
+        definition,
+        stop: vec![
+            Invocation::new("systemctl", ["--system", "stop", "cxxy-wlanlogin.service"]).optional(),
+        ],
+        start: vec![
+            reload(),
+            Invocation::new(
+                "systemctl",
+                ["--system", "enable", "--now", "cxxy-wlanlogin.service"],
+            ),
+            Invocation::new(
+                "systemctl",
+                ["--system", "is-active", "--quiet", "cxxy-wlanlogin.service"],
+            ),
+        ],
+        remove: vec![Invocation::new(
+            "systemctl",
+            ["--system", "disable", "--now", "cxxy-wlanlogin.service"],
+        )],
+        reload: vec![reload()],
+    })
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_system_plan(executable: PathBuf, definition: PathBuf, log: PathBuf) -> Result<Plan> {
+    let mut plan = macos_plan(executable, definition, log, 0)?;
+    plan.scope = crate::scope::Scope::System;
+    plan.manager = Manager::Launchd {
+        domain: "system".into(),
+        target: format!("system/{LABEL}"),
+    };
+    plan.content = plan.content.replace(
+        "<string>daemon</string>",
+        "<string>--system</string><string>daemon</string>",
+    );
+    for invocation in plan
+        .stop
+        .iter_mut()
+        .chain(&mut plan.start)
+        .chain(&mut plan.remove)
+    {
+        for argument in &mut invocation.args {
+            if let Some(value) = argument.to_str()
+                && value.starts_with("gui/0")
+            {
+                *argument = value.replacen("gui/0", "system", 1).into();
+            }
+        }
+    }
+    Ok(plan)
+}
+
+#[cfg(any(windows, test))]
+fn windows_system_plan(executable: PathBuf, definition: PathBuf) -> Result<Plan> {
+    let binary = format!(
+        "\"{}\" --system daemon --service",
+        executable.to_str().context("安装路径必须是 UTF-8")?
+    );
+    let stop = || Invocation::new("sc.exe", ["stop", "cxxy-wlanlogin"]).optional();
+    Ok(Plan {
+        scope: crate::scope::Scope::System,
+        manager: Manager::WindowsService,
+        content: serde_json::to_string_pretty(
+            &serde_json::json!({"managed_by":LABEL,"scope":"system","executable":executable,"version":env!("CARGO_PKG_VERSION")}),
+        )?,
+        executable,
+        definition,
+        stop: vec![stop()],
+        start: vec![
+            Invocation::new(
+                "sc.exe",
+                [
+                    "create",
+                    "cxxy-wlanlogin",
+                    "binPath=",
+                    &binary,
+                    "start=",
+                    "auto",
+                    "obj=",
+                    "LocalSystem",
+                ],
+            )
+            .optional(),
+            Invocation::new(
+                "sc.exe",
+                [
+                    "config",
+                    "cxxy-wlanlogin",
+                    "binPath=",
+                    &binary,
+                    "start=",
+                    "auto",
+                    "obj=",
+                    "LocalSystem",
+                ],
+            ),
+            Invocation::new(
+                "sc.exe",
+                [
+                    "failure",
+                    "cxxy-wlanlogin",
+                    "reset=",
+                    "86400",
+                    "actions=",
+                    "restart/30000/restart/60000/restart/300000",
+                ],
+            ),
+            Invocation::new("sc.exe", ["failureflag", "cxxy-wlanlogin", "1"]),
+            Invocation::new("sc.exe", ["start", "cxxy-wlanlogin"]),
+        ],
+        remove: vec![
+            stop(),
+            Invocation::new("sc.exe", ["delete", "cxxy-wlanlogin"]),
+        ],
+        reload: vec![],
+    })
+}
+
 #[cfg(any(target_os = "linux", test))]
 fn linux_plan(executable: PathBuf, definition: PathBuf) -> Result<Plan> {
     let quoted = systemd_quote(&executable)?;
@@ -301,7 +601,8 @@ fn linux_plan(executable: PathBuf, definition: PathBuf) -> Result<Plan> {
     );
     let reload = || Invocation::new("systemctl", ["--user", "daemon-reload"]);
     Ok(Plan {
-        manager: Manager::Systemd,
+        scope: crate::scope::Scope::User,
+        manager: Manager::Systemd { system: false },
         executable,
         definition,
         content,
@@ -371,6 +672,7 @@ fn macos_plan(executable: PathBuf, definition: PathBuf, log: PathBuf, uid: u32) 
     let bootout =
         || Invocation::new("launchctl", [OsStr::new("bootout"), OsStr::new(&target)]).optional();
     Ok(Plan {
+        scope: crate::scope::Scope::User,
         manager: Manager::Launchd {
             domain: domain.clone(),
             target: target.clone(),
@@ -415,6 +717,7 @@ fn windows_plan(executable: PathBuf, definition: PathBuf, sid: &str) -> Result<P
 "#
     );
     Ok(Plan {
+        scope: crate::scope::Scope::User,
         manager: Manager::TaskScheduler { name: name.clone() },
         executable,
         content,
@@ -461,6 +764,47 @@ pub fn background_log(paths: &Paths) -> Result<fs::File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn system_services_boot_without_a_user_session() -> Result<()> {
+        let exe = PathBuf::from("/opt/Test App/daemon");
+        let definition = PathBuf::from("/tmp/system-definition");
+        let linux = linux_system_plan(exe.clone(), definition.clone())?;
+        assert!(linux.content.contains("--system daemon"));
+        assert!(linux.content.contains("WantedBy=multi-user.target"));
+        assert!(!linux.content.contains("--user"));
+        let macos = macos_system_plan(exe.clone(), definition.clone(), "/tmp/log".into())?;
+        assert!(macos.content.contains("<string>--system</string>"));
+        assert!(
+            macos
+                .start
+                .iter()
+                .any(|cmd| cmd.args.iter().any(|a| a == "system"))
+        );
+        assert!(!macos.start.iter().any(|cmd| {
+            cmd.args
+                .iter()
+                .any(|a| a.to_string_lossy().contains("gui/"))
+        }));
+        let windows = windows_system_plan(exe, definition)?;
+        assert!(windows.start.iter().any(|cmd| {
+            cmd.args
+                .iter()
+                .any(|a| a.to_string_lossy().contains("--system daemon --service"))
+        }));
+        assert!(
+            windows
+                .start
+                .iter()
+                .any(|cmd| cmd.args.iter().any(|a| a == "auto"))
+        );
+        assert!(matches!(windows.manager, Manager::WindowsService));
+        for plan in [linux, macos, windows] {
+            assert_eq!(plan.scope, crate::scope::Scope::System);
+            assert!(plan.content.contains(LABEL));
+            assert!(!plan.content.contains("user_password"));
+        }
+        Ok(())
+    }
     #[test]
     fn generated_services_use_user_sessions_without_credentials() -> Result<()> {
         let executable = PathBuf::from("/home/Test User/bin/cxxy");
@@ -513,62 +857,80 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn failed_registration_restores_the_previous_service_and_binary() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let paths = Paths {
-            config: dir.path().join("config"),
+        let scopes = if cfg!(target_os = "linux") {
+            vec![crate::scope::Scope::User, crate::scope::Scope::System]
+        } else {
+            vec![crate::scope::Scope::User]
         };
-        let executable = dir.path().join("daemon");
-        let definition = dir.path().join("service");
-        let original = dir.path().join("expected");
-        let source = dir.path().join("new-binary");
-        fs::write(&executable, "old executable")?;
-        fs::write(&definition, format!("# {LABEL} old service"))?;
-        fs::copy(&definition, &original)?;
-        fs::write(&source, "new executable")?;
-        let plan = Plan {
-            manager: Manager::Systemd,
-            executable: executable.clone(),
-            definition: definition.clone(),
-            content: format!("# {LABEL} new service"),
-            stop: vec![],
-            remove: vec![],
-            reload: vec![],
-            // Fails for the new definition, succeeds after the old one is restored.
-            start: vec![Invocation::new(
-                "cmp",
-                [original.as_os_str(), definition.as_os_str()],
-            )],
-        };
-        assert!(install_plan(&paths, plan, &source).await.is_err());
-        assert_eq!(fs::read_to_string(executable)?, "old executable");
-        assert_eq!(fs::read(definition)?, fs::read(original)?);
+        for scope in scopes {
+            let dir = tempfile::tempdir()?;
+            let mut paths = Paths::test(dir.path().join("config"));
+            paths.scope = scope;
+            let executable = dir.path().join("daemon");
+            let definition = dir.path().join("service");
+            let original = dir.path().join("expected");
+            let source = dir.path().join("new-binary");
+            fs::write(&executable, "old executable")?;
+            fs::write(&definition, format!("# {LABEL} old service"))?;
+            fs::copy(&definition, &original)?;
+            fs::write(&source, "new executable")?;
+            let plan = Plan {
+                scope,
+                manager: Manager::Systemd {
+                    system: scope == crate::scope::Scope::System,
+                },
+                executable: executable.clone(),
+                definition: definition.clone(),
+                content: format!("# {LABEL} new service"),
+                stop: vec![],
+                remove: vec![],
+                reload: vec![],
+                // Fails for the new definition, succeeds after the old one is restored.
+                start: vec![Invocation::new(
+                    "cmp",
+                    [original.as_os_str(), definition.as_os_str()],
+                )],
+            };
+            assert!(install_plan(&paths, plan, &source).await.is_err());
+            assert_eq!(fs::read_to_string(executable)?, "old executable");
+            assert_eq!(fs::read(definition)?, fs::read(original)?);
+        }
         Ok(())
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn failed_first_install_removes_new_artifacts() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let paths = Paths {
-            config: dir.path().join("config"),
+        let scopes = if cfg!(target_os = "linux") {
+            vec![crate::scope::Scope::User, crate::scope::Scope::System]
+        } else {
+            vec![crate::scope::Scope::User]
         };
-        let source = dir.path().join("source");
-        fs::write(&source, "test binary, never executed")?;
-        let executable = dir.path().join("bin/daemon");
-        let definition = dir.path().join("service");
-        let plan = Plan {
-            manager: Manager::Systemd,
-            executable: executable.clone(),
-            definition: definition.clone(),
-            content: format!("# {LABEL}"),
-            stop: vec![],
-            remove: vec![],
-            reload: vec![],
-            start: vec![Invocation::new("false", std::iter::empty::<&str>())],
-        };
-        assert!(install_plan(&paths, plan, &source).await.is_err());
-        assert!(!executable.exists());
-        assert!(!definition.exists());
+        for scope in scopes {
+            let dir = tempfile::tempdir()?;
+            let mut paths = Paths::test(dir.path().join("config"));
+            let source = dir.path().join("source");
+            fs::write(&source, "test binary, never executed")?;
+            paths.scope = scope;
+            let executable = dir.path().join("bin/daemon");
+            let definition = dir.path().join("service");
+            let plan = Plan {
+                scope,
+                manager: Manager::Systemd {
+                    system: scope == crate::scope::Scope::System,
+                },
+                executable: executable.clone(),
+                definition: definition.clone(),
+                content: format!("# {LABEL}"),
+                stop: vec![],
+                remove: vec![],
+                reload: vec![],
+                start: vec![Invocation::new("false", std::iter::empty::<&str>())],
+            };
+            assert!(install_plan(&paths, plan, &source).await.is_err());
+            assert!(!executable.exists());
+            assert!(!definition.exists());
+        }
         Ok(())
     }
 

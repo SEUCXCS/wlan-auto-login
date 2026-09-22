@@ -4,6 +4,12 @@ use cxxy_wlanlogin_lib::Line;
 #[derive(Parser)]
 #[command(version, about = "Student_CX 校园网登录工具")]
 pub struct Cli {
+    /// 使用当前用户的安装、配置和凭据
+    #[arg(long, global = true, conflicts_with = "system")]
+    pub user: bool,
+    /// 使用系统安装、配置和凭据
+    #[arg(long, global = true, conflicts_with = "user")]
+    pub system: bool,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -21,8 +27,10 @@ pub enum Command {
         command: Option<DaemonCommand>,
         #[arg(long, hide = true)]
         background: bool,
+        #[arg(long, hide = true)]
+        service: bool,
     },
-    /// 安装用户登录后自动启动的服务；首次登录强制保存凭据
+    /// 安装自动启动服务；管理员默认安装系统服务，首次登录强制保存凭据
     Install(LoginArgs),
     /// 停止并卸载后台服务，保留已保存的账号密码
     Uninstall,
@@ -42,6 +50,9 @@ pub enum DaemonCommand {
 
 #[derive(Args, Default)]
 pub struct LoginArgs {
+    /// 系统凭据存储；Linux 旧系统可显式选择 protected-file
+    #[arg(long, value_enum)]
+    pub credential_store: Option<crate::credentials::CredentialMode>,
     #[arg(short, long, env = "CXXY_WLAN_USERNAME", hide_env_values = true)]
     pub username: Option<String>,
     #[arg(
@@ -57,7 +68,7 @@ pub struct LoginArgs {
     pub password_stdin: bool,
     #[arg(long, env = "CXXY_WLAN_LINE", value_name = "free1|free2|campus")]
     pub line: Option<Line>,
-    /// 登录成功后将账号和密码保存至系统密钥管理器
+    /// 登录成功后保存账号和密码至所选范围的凭据存储
     #[arg(long)]
     pub remember_me: bool,
     /// 即使已有保存的凭据，也打开 TUI 以修改账号、密码或线路
@@ -72,11 +83,25 @@ pub struct LoginArgs {
 mod tests {
     use super::*;
     #[test]
+    fn scope_flags_work_with_every_command() {
+        for args in [
+            vec!["app", "--system", "daemon", "status"],
+            vec!["app", "daemon", "start", "--system"],
+            vec!["app", "--user", "daemon"],
+            vec!["app", "--system", "install"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        assert!(Cli::try_parse_from(["app", "--user", "--system", "install"]).is_err());
+    }
+    #[test]
     fn daemon_without_subcommand_still_runs_the_process() {
         for arguments in [vec!["app", "daemon"], vec!["app", "daemon", "--background"]] {
             assert!(matches!(
                 Cli::try_parse_from(arguments),
                 Ok(Cli {
+                    user: _,
+                    system: _,
                     command: Command::Daemon { command: None, .. }
                 })
             ));
@@ -84,9 +109,12 @@ mod tests {
         assert!(matches!(
             Cli::try_parse_from(["app", "daemon", "status"]),
             Ok(Cli {
+                user: _,
+                system: _,
                 command: Command::Daemon {
                     command: Some(DaemonCommand::Status),
-                    background: false
+                    background: false,
+                    service: false
                 }
             })
         ));
@@ -101,8 +129,8 @@ mod tests {
             ("restart", DaemonCommand::Restart),
         ] {
             let parsed = Cli::try_parse_from(["app", "daemon", argument]);
-            assert!(matches!(parsed, Ok(Cli {
-                command: Command::Daemon { command: Some(command), background: false }
+            assert!(matches!(parsed, Ok(Cli { user: _, system: _,
+                command: Command::Daemon { command: Some(command), background: false, service: false }
             }) if command == expected));
             assert!(Cli::try_parse_from(["app", "daemon", "--background", argument]).is_err());
         }
@@ -117,6 +145,8 @@ mod tests {
         assert!(matches!(
             parsed,
             Ok(Cli {
+                user: _,
+                system: _,
                 command: Command::Login(LoginArgs {
                     interactive: true,
                     remember_me: true,

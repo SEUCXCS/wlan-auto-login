@@ -11,15 +11,50 @@ pub trait Store {
     fn save(&self, credentials: Credentials) -> impl std::future::Future<Output = Result<()>>;
 }
 
-pub struct SystemStore;
+mod machine;
+pub use machine::CredentialMode;
+#[cfg(target_os = "macos")]
+pub use machine::authorize_binary;
+#[cfg(target_os = "linux")]
+pub use machine::linux_credential_directive;
 
-impl Store for SystemStore {
+pub struct ScopedStore {
+    machine: Option<machine::MachineStore>,
+}
+
+impl ScopedStore {
+    pub fn new(paths: &crate::config::Paths, mode: Option<CredentialMode>) -> Result<Self> {
+        if paths.scope == crate::scope::Scope::System {
+            Ok(Self {
+                machine: Some(machine::MachineStore::new(paths.clone(), mode)?),
+            })
+        } else {
+            anyhow::ensure!(mode.is_none(), "--credential-store 只适用于系统凭据");
+            Ok(Self { machine: None })
+        }
+    }
+
+    pub async fn load_background(&self) -> Result<Option<Credentials>> {
+        match &self.machine {
+            Some(store) => store.load(true).await,
+            None => load_for_daemon().await,
+        }
+    }
+}
+
+impl Store for ScopedStore {
     async fn load(&self) -> Result<Option<Credentials>> {
-        load().await
+        match &self.machine {
+            Some(store) => store.load(false).await,
+            None => load().await,
+        }
     }
 
     async fn save(&self, credentials: Credentials) -> Result<()> {
-        save(credentials).await
+        match &self.machine {
+            Some(store) => store.save(credentials).await,
+            None => save(credentials).await,
+        }
     }
 }
 
@@ -28,6 +63,18 @@ struct Secret {
     version: u8,
     username: String,
     password: String,
+}
+
+fn encode(credentials: &Credentials) -> Result<Zeroizing<String>> {
+    anyhow::ensure!(
+        !credentials.username.trim().is_empty() && !credentials.password.is_empty(),
+        "账号和密码不能为空"
+    );
+    Ok(Zeroizing::new(serde_json::to_string(&Secret {
+        version: 1,
+        username: credentials.username.clone(),
+        password: credentials.password.clone(),
+    })?))
 }
 
 pub async fn load() -> Result<Option<Credentials>> {
@@ -104,12 +151,7 @@ fn decode(text: &str) -> Result<Credentials> {
 
 pub async fn save(credentials: Credentials) -> Result<()> {
     tokio::task::spawn_blocking(move || {
-        let secret = Secret {
-            version: 1,
-            username: credentials.username.clone(),
-            password: credentials.password.clone(),
-        };
-        let text = Zeroizing::new(serde_json::to_string(&secret)?);
+        let text = encode(&credentials)?;
         keyring::Entry::new(SERVICE, ENTRY)
             .context("无法打开系统密钥管理器")?
             .set_password(&text)
