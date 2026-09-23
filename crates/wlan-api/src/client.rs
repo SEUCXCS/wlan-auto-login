@@ -1,4 +1,4 @@
-use crate::{AuthState, Credentials, Error, Line, RequestOperation, Status};
+use crate::{AuthState, Credentials, Error, Line, LoginOutcome, RequestOperation, Status};
 use serde_json::Value;
 use std::{
     net::Ipv4Addr,
@@ -57,11 +57,18 @@ impl Client {
         parse_status(&response).map_err(|error| error.during(RequestOperation::Status))
     }
 
-    pub async fn login(&self, credentials: &Credentials, line: Line) -> Result<(), Error> {
+    pub async fn login(
+        &self,
+        credentials: &Credentials,
+        line: Line,
+    ) -> Result<LoginOutcome, Error> {
         if credentials.username.trim().is_empty() || credentials.password.is_empty() {
             return Err(Error::EmptyCredentials);
         }
         let status = self.status().await?;
+        if status.auth == AuthState::Online {
+            return Ok(LoginOutcome::AlreadyOnline);
+        }
         let mut query = self.common_query("login", &status);
         query.extend([
             (
@@ -81,6 +88,8 @@ impl Client {
             }
         }
         check_action(&result?, Some(credentials))
+            .map(|()| LoginOutcome::Authenticated)
+            .map_err(|error| error.during(RequestOperation::Login))
     }
 
     pub async fn logout(&self) -> Result<(), Error> {
@@ -99,6 +108,7 @@ impl Client {
                 .await?,
             None,
         )
+        .map_err(|error| error.during(RequestOperation::Logout))
     }
 
     fn common_query(&self, action: &str, status: &Status) -> Vec<(&'static str, String)> {
@@ -205,13 +215,18 @@ fn parse_status(value: &Value) -> Result<Status, Error> {
     .and_then(|v| v.parse().ok())
     .filter(|ip: &Ipv4Addr| !ip.is_unspecified() && !ip.is_broadcast() && !ip.is_multicast())
     .ok_or(Error::MissingIp)?;
-    // Only explicit authentication flags are accepted. `result` and OS Internet
-    // connectivity do not establish whether this campus session is authenticated.
+    // Dr.COM a41.js checkStatus defines result: 0 offline, 1 online. Keep
+    // explicit compatibility flags first; an invalid present flag stays unknown.
     let auth = match value.get("online").or_else(|| value.get("is_login")) {
         Some(Value::Bool(true)) => AuthState::Online,
         Some(Value::Bool(false)) => AuthState::Offline,
         Some(v) if v == 1 || v == "1" => AuthState::Online,
         Some(v) if v == 0 || v == "0" => AuthState::Offline,
+        None => match numeric_field(value, "result") {
+            Some(1) => AuthState::Online,
+            Some(0) => AuthState::Offline,
+            _ => AuthState::Unknown,
+        },
         _ => AuthState::Unknown,
     };
     Ok(Status {
@@ -225,6 +240,12 @@ fn parse_status(value: &Value) -> Result<Status, Error> {
     })
 }
 
+fn numeric_field(value: &Value, name: &str) -> Option<i64> {
+    value[name]
+        .as_i64()
+        .or_else(|| value[name].as_str()?.parse().ok())
+}
+
 fn check_action(value: &Value, credentials: Option<&Credentials>) -> Result<(), Error> {
     if value["result"] == 1 || value["result"] == "1" || value["result"] == "ok" {
         return Ok(());
@@ -232,12 +253,40 @@ fn check_action(value: &Value, credentials: Option<&Credentials>) -> Result<(), 
     if value.get("result").is_none() {
         return Err(Error::Protocol("缺少 result 字段"));
     }
-    let mut message = text_field(value, &["msg", "message", "ret_msg"])
-        .unwrap_or_else(|| "服务器未提供错误说明".into());
+    // Codes come from a42.js portal_login_err, not from the status endpoint.
+    let ret_code = numeric_field(value, "ret_code");
+    let explanation = match ret_code {
+        Some(1) => Some("账号或密码不正确"),
+        Some(2) => Some("终端 IP 已经在线；无需重复登录"),
+        Some(3) => Some("系统繁忙，请稍后重试"),
+        Some(4) => Some("认证服务器发生未知错误"),
+        Some(5) => Some("REQ_CHALLENGE 失败"),
+        Some(6) => Some("REQ_CHALLENGE 超时"),
+        Some(7) => Some("Radius 认证失败"),
+        Some(8) => Some("Radius 认证超时"),
+        Some(9) => Some("Radius 下线失败"),
+        Some(10) => Some("Radius 下线超时"),
+        Some(11) => Some("认证服务器发生其他错误"),
+        Some(998) => Some("Portal 协议参数不完整"),
+        _ => None,
+    };
+    let detail = text_field(value, &["msg", "message", "ret_msg"]);
+    let mut message = match (explanation, detail) {
+        (Some(explanation), Some(detail)) => format!("{explanation}；{detail}"),
+        (Some(explanation), None) => explanation.into(),
+        (None, Some(detail)) => detail,
+        (None, None) => "服务器未提供错误说明".into(),
+    };
+    for name in ["result", "ret_code"] {
+        if let Some(code) = numeric_field(value, name) {
+            message.push_str(&format!(" ({name}={code})"));
+        }
+    }
     let lowered = message.to_lowercase();
-    let credential_rejected = ["password", "密码", "账号不存在", "account not exist"]
-        .iter()
-        .any(|word| lowered.contains(word));
+    let credential_rejected = ret_code == Some(1)
+        || ["password", "密码", "账号不存在", "account not exist"]
+            .iter()
+            .any(|word| lowered.contains(word));
     if let Some(credentials) = credentials {
         for secret in [&credentials.password, &credentials.username] {
             if !secret.is_empty() {
@@ -269,13 +318,63 @@ mod tests {
 
     #[test]
     fn unfamiliar_status_is_never_treated_as_logged_out() -> Result<(), Error> {
-        let data = serde_json::json!({"result":1,"v46ip":"10.0.0.8"});
+        let data = serde_json::json!({"result":99,"v46ip":"10.0.0.8"});
         assert_eq!(parse_status(&data)?.auth, AuthState::Unknown);
         assert_eq!(
             parse_status(&serde_json::json!({"online":0,"userip":"10.0.0.8"}))?.auth,
             AuthState::Offline
         );
         assert!(parse_status(&serde_json::json!({"online":0,"userip":"0.0.0.0"})).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn drcom_result_is_the_authentication_flag_without_online_aliases() -> Result<(), Error> {
+        for (result, auth) in [
+            (serde_json::json!(1), AuthState::Online),
+            (serde_json::json!("1"), AuthState::Online),
+            (serde_json::json!(0), AuthState::Offline),
+            (serde_json::json!("0"), AuthState::Offline),
+            (serde_json::json!(true), AuthState::Unknown),
+            (serde_json::json!("ok"), AuthState::Unknown),
+            (serde_json::json!(null), AuthState::Unknown),
+        ] {
+            assert_eq!(
+                parse_status(&serde_json::json!({"result":result,"v46ip":"10.0.0.8"}))?.auth,
+                auth
+            );
+        }
+        assert_eq!(
+            parse_status(&serde_json::json!({"result":1,"online":null,"v46ip":"10.0.0.8"}))?.auth,
+            AuthState::Unknown
+        );
+        assert_eq!(
+            parse_status(&serde_json::json!({"result":1,"online":0,"v46ip":"10.0.0.8"}))?.auth,
+            AuthState::Offline
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejection_codes_explain_missing_messages_and_identify_bad_credentials() -> Result<(), Error>
+    {
+        for (code, message, rejected) in [
+            (1, "账号或密码不正确", true),
+            (2, "IP 已经在线", false),
+            (3, "系统繁忙", false),
+            (998, "参数不完整", false),
+            (9999, "服务器未提供错误说明", false),
+        ] {
+            let error = check_action(&serde_json::json!({"result":0,"ret_code":code}), None)
+                .err()
+                .ok_or(Error::Protocol("expected rejection"))?
+                .during(RequestOperation::Login);
+            assert_eq!(error.is_credential_rejected(), rejected);
+            let chain = format!("{error:?}");
+            assert!(chain.contains(message));
+            assert!(chain.contains(&format!("ret_code={code}")));
+            assert!(error.to_string().contains("登录请求"));
+        }
         Ok(())
     }
 

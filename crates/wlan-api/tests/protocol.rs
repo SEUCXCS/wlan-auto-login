@@ -1,5 +1,7 @@
 //! These tests exclusively contact a disposable loopback HTTP server.
-use cxxy_wlanlogin_lib::{Client, Credentials, Error, Line, PortalConfig, RequestOperation};
+use cxxy_wlanlogin_lib::{
+    AuthState, Client, Credentials, Error, Line, LoginOutcome, PortalConfig, RequestOperation,
+};
 use std::time::Duration;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -8,6 +10,72 @@ use tokio::{
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+// Captured status shape; account, IPs and MACs replaced with synthetic values.
+const ONLINE: &str = include_str!("fixtures/chkstatus-online.jsonp");
+
+#[tokio::test]
+async fn real_status_shape_is_online_and_repeat_login_never_submits_credentials() -> TestResult {
+    let (client, task) = server(vec![ONLINE, ONLINE]).await?;
+    assert_eq!(client.status().await?.auth, AuthState::Online);
+    let outcome = client
+        .login(
+            &Credentials {
+                username: "student".into(),
+                password: "not-validated-or-sent".into(),
+            },
+            Line::Free1,
+        )
+        .await?;
+    assert_eq!(outcome, LoginOutcome::AlreadyOnline);
+    let requests = tokio::time::timeout(Duration::from_secs(3), task).await??;
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests.iter().all(
+            |request| request.starts_with("GET /status?") && !request.contains("user_password")
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn offline_result_allows_login_and_code_only_rejections_are_explained() -> TestResult {
+    for (response, rejected, detail) in [
+        (
+            r#"dr1({"result":0,"ret_code":1});"#,
+            true,
+            "账号或密码不正确",
+        ),
+        (r#"dr1({"result":0,"ret_code":"2"});"#, false, "IP 已经在线"),
+    ] {
+        let (client, task) =
+            server(vec![r#"dr1({"result":0,"v46ip":"10.0.0.12"});"#, response]).await?;
+        let error = client
+            .login(
+                &Credentials {
+                    username: "student".into(),
+                    password: "test-secret".into(),
+                },
+                Line::Free1,
+            )
+            .await
+            .err()
+            .ok_or("login unexpectedly succeeded")?;
+        assert!(matches!(
+            error,
+            Error::Request {
+                operation: RequestOperation::Login,
+                ..
+            }
+        ));
+        assert_eq!(error.is_credential_rejected(), rejected);
+        assert!(format!("{error:?}").contains(detail));
+        let requests = tokio::time::timeout(Duration::from_secs(3), task).await??;
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].starts_with("GET /action?"));
+    }
+    Ok(())
+}
 
 async fn server(
     responses: Vec<&'static str>,

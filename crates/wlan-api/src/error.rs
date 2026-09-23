@@ -39,6 +39,17 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn is_credential_rejected(&self) -> bool {
+        match self {
+            Self::Rejected {
+                credential_rejected,
+                ..
+            } => *credential_rejected,
+            Self::Request { source, .. } => source.is_credential_rejected(),
+            _ => false,
+        }
+    }
+
     pub(crate) fn during(self, operation: RequestOperation) -> Self {
         Self::Request {
             operation,

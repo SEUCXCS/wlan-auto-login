@@ -6,14 +6,13 @@ use crate::{
     config::{Paths, Preferences},
     control, credentials,
     shutdown::{Shutdown, until_stopped},
-    wifi::Monitor,
+    wifi::{Monitor, WifiConnection},
 };
 use anyhow::{Context, Result, bail};
-use cxxy_wlanlogin_lib::{AuthState, Client};
-use std::time::Duration;
-use tokio::time::{Instant, Interval};
+use cxxy_wlanlogin_lib::{AuthState, Client, Credentials, LoginOutcome};
+use std::{future::Future, time::Duration};
+use tokio::time::Instant;
 
-const INTERVAL: Duration = Duration::from_secs(30);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn ensure_scope(paths: &Paths) -> Result<()> {
@@ -68,9 +67,6 @@ async fn run_loop(client: &Client, paths: &Paths, wake: &tokio::sync::Notify) ->
     }
     let mut monitor = None;
     let mut scheduled = true;
-    let mut interval = tokio::time::interval(INTERVAL);
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    interval.tick().await;
     tracing::info!("daemon 已启动，仅在 Student_CX 上检查校园网状态");
     loop {
         ensure_scope(paths)?;
@@ -86,7 +82,7 @@ async fn run_loop(client: &Client, paths: &Paths, wake: &tokio::sync::Notify) ->
         if let Some(monitor) = &monitor
             && let Err(e) = tokio::time::timeout(
                 CHECK_TIMEOUT,
-                tick(client, paths, monitor, &mut store, &mut policy, scheduled),
+                tick(client, paths, monitor, store.load(), &mut policy, scheduled),
             )
             .await
             .context("本轮网络检查超时")
@@ -99,7 +95,7 @@ async fn run_loop(client: &Client, paths: &Paths, wake: &tokio::sync::Notify) ->
             tracing::warn!("本次检查未完成，{} 秒后重试：{e:#}", delay.as_secs());
         }
         tokio::select! {
-            _ = next_scheduled_check(&mut interval, &mut policy) => { scheduled = true; },
+            _ = next_scheduled_check(&mut policy) => { scheduled = true; },
             _ = wake.notified() => { scheduled = true; },
             event = async { match &mut monitor { Some(m) => m.changed().await, None => std::future::pending().await } } => {
                 if let Err(e) = event { tracing::warn!("网络事件订阅断开：{e:#}"); monitor = None; }
@@ -111,31 +107,21 @@ async fn run_loop(client: &Client, paths: &Paths, wake: &tokio::sync::Notify) ->
     }
 }
 
-async fn next_scheduled_check(interval: &mut Interval, policy: &mut Policy) {
-    let retry_at = policy.retry_deadline();
-    tokio::select! {
-        _ = interval.tick() => {},
-        _ = async {
-            match retry_at {
-                Some(at) => tokio::time::sleep_until(at).await,
-                None => std::future::pending().await,
-            }
-        } => {},
-    }
-    // Consume an expired deadline even if the regular tick won the race. A
-    // paused connection or unknown status must not leave an always-ready timer.
-    policy.clear_due_retry(Instant::now());
+async fn next_scheduled_check(policy: &mut Policy) {
+    tokio::time::sleep_until(policy.next_deadline(Instant::now())).await;
+    // Consume even skipped checks so a pause cannot leave a ready timer spinning.
+    policy.clear_due_check(Instant::now());
 }
 
 async fn tick(
     client: &Client,
     paths: &Paths,
-    monitor: &Monitor,
-    store: &mut credentials::BackgroundReader,
+    monitor: &impl WifiConnection,
+    read_credentials: impl Future<Output = Result<Option<Credentials>>>,
     policy: &mut Policy,
     scheduled: bool,
 ) -> Result<()> {
-    let session = monitor.snapshot().await?;
+    let session = monitor.target_session().await?;
     let _operation = control::operation_lock(paths).await?;
     let mut state = control::State::load(paths)?;
     let previous_revision = policy.revision();
@@ -149,34 +135,31 @@ async fn tick(
     if !policy.should_check(&state, Instant::now()) {
         return Ok(());
     }
-    let saved = store
-        .load()
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("保存的凭据已不存在，请重新执行 login --remember-me"))?;
     let status = client.status().await?;
     policy.status_received();
     if status.auth == AuthState::Online {
-        policy.success();
+        policy.online();
         return Ok(());
     }
     if !policy.should_login(status.auth) {
         tracing::debug!("门户未提供可识别的认证状态，本轮不提交登录");
         return Ok(());
     }
+    let saved = read_credentials
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("保存的凭据已不存在，请重新执行 login --remember-me"))?;
     // Recheck the Wi-Fi immediately before sending credentials after an await.
-    if monitor.snapshot().await?.as_deref() != policy.session() {
+    if monitor.target_session().await?.as_deref() != policy.session() {
         return Ok(());
     }
     let line = Preferences::load(paths)?.line;
     match client.login(&saved, line).await {
-        Ok(()) => {
+        Ok(LoginOutcome::Authenticated) => {
             policy.success();
             tracing::info!("校园网登录成功");
         }
-        Err(cxxy_wlanlogin_lib::Error::Rejected {
-            credential_rejected: true,
-            ..
-        }) => {
+        Ok(LoginOutcome::AlreadyOnline) => policy.online(),
+        Err(error) if error.is_credential_rejected() => {
             policy.reject_credentials();
             tracing::error!(
                 "账号或密码被拒绝；暂停自动重试，请执行 login --interactive --remember-me 更新凭据"
@@ -191,81 +174,196 @@ async fn tick(
 mod tests {
     use super::*;
 
+    struct FixedWifi;
+
+    impl WifiConnection for FixedWifi {
+        async fn target_session(&self) -> Result<Option<String>> {
+            Ok(Some("student-session".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn daemon_handles_real_status_shape_without_login_loops() -> Result<()> {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        const ONLINE: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../wlan-api/tests/fixtures/chkstatus-online.jsonp"
+        ));
+        const OFFLINE: &str = r#"dr1({"result":0,"v46ip":"10.0.0.12"});"#;
+        const UNKNOWN: &str = r#"dr1({"result":99,"v46ip":"10.0.0.12"});"#;
+        for (responses, reads_secret, seconds, blocked) in [
+            (vec![ONLINE], false, 240, false),
+            (vec![UNKNOWN], false, 30, false),
+            (vec![OFFLINE, ONLINE], true, 240, false),
+            (
+                vec![OFFLINE, OFFLINE, r#"dr1({"result":1});"#],
+                true,
+                30,
+                false,
+            ),
+            (
+                vec![OFFLINE, OFFLINE, r#"dr1({"result":0,"ret_code":1});"#],
+                true,
+                30,
+                true,
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let base = format!("http://{}", listener.local_addr()?);
+            let client = Client::new(cxxy_wlanlogin_lib::PortalConfig {
+                status_url: format!("{base}/status"),
+                action_url: format!("{base}/action"),
+                timeout: Duration::from_secs(2),
+                ..Default::default()
+            })?;
+            let expected = responses.len();
+            let server = tokio::spawn(async move {
+                let mut requests = Vec::new();
+                for body in responses {
+                    let (mut stream, _) = listener.accept().await?;
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        request.push(stream.read_u8().await?);
+                        anyhow::ensure!(request.len() < 16_384, "oversized mock request");
+                    }
+                    requests.push(String::from_utf8(request)?);
+                    stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
+                }
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(30), listener.accept())
+                        .await
+                        .is_err()
+                );
+                Ok::<_, anyhow::Error>(requests)
+            });
+            let dir = tempfile::tempdir()?;
+            let paths = Paths::test(dir.path());
+            let mut policy = Policy::default();
+            let read = std::cell::Cell::new(false);
+            tick(
+                &client,
+                &paths,
+                &FixedWifi,
+                async {
+                    read.set(true);
+                    Ok(Some(Credentials {
+                        username: "student".into(),
+                        password: "test-secret".into(),
+                    }))
+                },
+                &mut policy,
+                true,
+            )
+            .await?;
+            assert_eq!(read.get(), reads_secret);
+            let now = Instant::now();
+            let wait = policy.next_deadline(now) - now;
+            assert!(
+                wait <= Duration::from_secs(seconds) && wait > Duration::from_secs(seconds - 1)
+            );
+            assert_eq!(
+                policy.should_check(
+                    &control::State::load(&paths)?,
+                    now + Duration::from_secs(300)
+                ),
+                !blocked
+            );
+            // A wake on the same connection must retain the chosen poll deadline.
+            tick(
+                &client,
+                &paths,
+                &FixedWifi,
+                async { panic!("premature credential read") },
+                &mut policy,
+                true,
+            )
+            .await?;
+            let requests = tokio::time::timeout(Duration::from_secs(3), server).await??;
+            assert_eq!(requests?.len(), expected);
+        }
+        Ok(())
+    }
+
     #[tokio::test(start_paused = true)]
-    async fn retry_deadline_wakes_between_ticks_and_is_consumed_when_paused() {
-        let mut interval = tokio::time::interval(INTERVAL);
-        interval.tick().await;
+    async fn retry_uses_its_deadline_and_paused_checks_do_not_spin() {
         let start = Instant::now();
         let mut policy = Policy::default();
         let mut state = control::State::default();
         policy.update(Some("wifi-1".into()), &mut state);
-
-        // Failure six seconds after a tick used to defer the retry until t=60.
         tokio::time::advance(Duration::from_secs(6)).await;
         policy.failure(Instant::now(), false);
-        next_scheduled_check(&mut interval, &mut policy).await;
-        assert_eq!(Instant::now() - start, Duration::from_secs(30));
-        assert!(!policy.should_check(&state, Instant::now()));
-
         state.paused = true;
-        next_scheduled_check(&mut interval, &mut policy).await;
+        next_scheduled_check(&mut policy).await;
         assert_eq!(Instant::now() - start, Duration::from_secs(36));
         assert!(!policy.should_check(&state, Instant::now()));
         assert_eq!(policy.retry_deadline(), None);
-
-        // A skipped check must not keep waking on the expired retry timer.
-        next_scheduled_check(&mut interval, &mut policy).await;
-        assert_eq!(Instant::now() - start, Duration::from_secs(60));
+        next_scheduled_check(&mut policy).await;
+        assert_eq!(Instant::now() - start, Duration::from_secs(66));
     }
 
     #[tokio::test(start_paused = true)]
     async fn fast_retries_wake_at_one_two_and_four_seconds_then_back_off() {
-        let mut interval = tokio::time::interval(INTERVAL);
-        interval.tick().await;
         let start = Instant::now();
         let mut policy = Policy::default();
         let mut state = control::State::default();
         policy.update(Some("wifi-1".into()), &mut state);
-        for elapsed in [1, 3, 7] {
+        for elapsed in [1, 3, 7, 37, 97, 217, 337] {
             policy.failure(Instant::now(), true);
-            next_scheduled_check(&mut interval, &mut policy).await;
+            next_scheduled_check(&mut policy).await;
             assert_eq!(Instant::now() - start, Duration::from_secs(elapsed));
             assert!(policy.should_check(&state, Instant::now()));
         }
-
-        policy.failure(Instant::now(), true);
-        next_scheduled_check(&mut interval, &mut policy).await;
-        assert_eq!(Instant::now() - start, Duration::from_secs(30));
-        assert!(!policy.should_check(&state, Instant::now()));
-        next_scheduled_check(&mut interval, &mut policy).await;
-        assert_eq!(Instant::now() - start, Duration::from_secs(37));
-        assert!(policy.should_check(&state, Instant::now()));
     }
 
     #[tokio::test(start_paused = true)]
-    async fn wake_keeps_retry_deadline_and_stop_cancels_retry_wait() -> Result<()> {
-        let mut interval = tokio::time::interval(INTERVAL);
-        interval.tick().await;
+    async fn online_poll_waits_four_minutes_without_thirty_second_wakeups() {
+        let start = Instant::now();
+        let mut policy = Policy::default();
+        policy.success();
+        next_scheduled_check(&mut policy).await;
+        assert_eq!(Instant::now() - start, Duration::from_secs(30));
+        policy.online();
+        next_scheduled_check(&mut policy).await;
+        assert_eq!(Instant::now() - start, Duration::from_secs(270));
+        // A transient failure after a healthy period resumes the short backoff.
+        assert_eq!(
+            policy.failure(Instant::now(), true),
+            Duration::from_secs(30)
+        );
+        next_scheduled_check(&mut policy).await;
+        assert_eq!(Instant::now() - start, Duration::from_secs(300));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wake_keeps_poll_and_retry_deadlines_and_stop_cancels_waiting() -> Result<()> {
         let start = Instant::now();
         let mut policy = Policy::default();
         let mut state = control::State::default();
         policy.update(Some("wifi-1".into()), &mut state);
-        policy.failure(start, true);
-        let wake = tokio::sync::Notify::new();
-        wake.notify_one();
-        tokio::select! {
-            _ = next_scheduled_check(&mut interval, &mut policy) => panic!("retry is not due"),
-            _ = wake.notified() => {},
+        policy.online();
+        for elapsed in [10, 20, 30] {
+            tokio::time::advance(Duration::from_secs(10)).await;
+            let wake = tokio::sync::Notify::new();
+            wake.notify_one();
+            tokio::select! {
+                _ = next_scheduled_check(&mut policy) => panic!("poll is not due"),
+                _ = wake.notified() => {},
+            }
+            assert_eq!(Instant::now() - start, Duration::from_secs(elapsed));
+            assert_eq!(
+                policy.next_deadline(Instant::now()),
+                start + Duration::from_secs(240)
+            );
+            assert!(!policy.should_check(&state, Instant::now()));
         }
-        assert_eq!(
-            policy.retry_deadline(),
-            Some(start + Duration::from_secs(1))
-        );
-        assert!(!policy.should_check(&state, Instant::now()));
-
+        policy.failure(Instant::now(), false);
+        let due = policy.retry_deadline();
         until_stopped(
             async {
-                next_scheduled_check(&mut interval, &mut policy).await;
+                next_scheduled_check(&mut policy).await;
                 bail!("retry ran before stop")
             },
             async {
@@ -274,7 +372,8 @@ mod tests {
             },
         )
         .await?;
-        assert_eq!(Instant::now() - start, Duration::from_millis(200));
+        assert_eq!(policy.retry_deadline(), due);
+        assert_eq!(Instant::now() - start, Duration::from_millis(30200));
         Ok(())
     }
 

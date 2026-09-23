@@ -7,4 +7,4 @@ mod types;
 
 pub use client::{Client, PortalConfig};
 pub use error::{Error, RequestOperation};
-pub use types::{AuthState, Credentials, Line, Status};
+pub use types::{AuthState, Credentials, Line, LoginOutcome, Status};

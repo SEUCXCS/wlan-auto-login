@@ -74,6 +74,14 @@ pub enum AuthState {
     Unknown,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginOutcome {
+    /// The login action accepted the supplied credentials.
+    Authenticated,
+    /// The device was already online; supplied credentials were not checked.
+    AlreadyOnline,
+}
+
 #[derive(Clone, Debug)]
 pub struct Status {
     pub auth: AuthState,

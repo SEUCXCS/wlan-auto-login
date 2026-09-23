@@ -4,7 +4,7 @@ use crate::{
     credentials, tui, wifi,
 };
 use anyhow::{Context, Result, bail};
-use cxxy_wlanlogin_lib::{Client, Credentials, Line};
+use cxxy_wlanlogin_lib::{Client, Credentials, Line, LoginOutcome};
 use std::io::{self, IsTerminal};
 
 pub struct Form {
@@ -127,7 +127,8 @@ async fn run_with_store(
         }
         let _operation = crate::control::operation_lock(paths).await?;
         match submit(client, &form, wifi).await {
-            Ok(authenticated) => {
+            Ok(outcome) => {
+                let authenticated = outcome.is_some();
                 let remember = form.remember || !authenticated;
                 if remember {
                     store
@@ -144,7 +145,16 @@ async fn run_with_store(
                 state.resume();
                 state.save(paths)?;
                 crate::control::wake(paths).await;
-                if authenticated {
+                if outcome == Some(LoginOutcome::AlreadyOnline) {
+                    tracing::info!(
+                        "当前设备已在线，未重复提交登录；本次提供的凭据和线路尚未在线验证{}",
+                        if remember {
+                            "，账号和密码已保存"
+                        } else {
+                            ""
+                        }
+                    );
+                } else if authenticated {
                     tracing::info!(
                         "登录成功（{}）{}",
                         form.line.label(),
@@ -160,14 +170,18 @@ async fn run_with_store(
                 return Ok(());
             }
             Err(e) if interactive => {
-                warning = Some(e.to_string());
+                warning = Some(format!("{e:#}"));
             }
             Err(e) => return Err(e),
         }
     }
 }
 
-async fn submit(client: &Client, form: &Form, wifi: &impl wifi::WifiConnection) -> Result<bool> {
+async fn submit(
+    client: &Client,
+    form: &Form,
+    wifi: &impl wifi::WifiConnection,
+) -> Result<Option<LoginOutcome>> {
     // Credential entry, keychain access and the operation lock may all take time.
     // Re-read the SSID before Client::login sends even its initial status request.
     let state = wifi::wifi_state(wifi).await;
@@ -175,10 +189,9 @@ async fn submit(client: &Client, form: &Form, wifi: &impl wifi::WifiConnection) 
         if let Some(notice) = state.notice() {
             tracing::warn!("{notice}");
         }
-        return Ok(false);
+        return Ok(None);
     }
-    client.login(&form.credentials, form.line).await?;
-    Ok(true)
+    Ok(Some(client.login(&form.credentials, form.line).await?))
 }
 
 fn wants_tui(args: &LoginArgs, form: &Form) -> bool {

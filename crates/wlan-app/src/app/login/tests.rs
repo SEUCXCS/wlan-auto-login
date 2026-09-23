@@ -222,6 +222,46 @@ async fn target_wifi_authenticates_and_saves_only_when_requested_or_installing()
     Ok(())
 }
 
+#[tokio::test]
+async fn already_online_login_resumes_daemon_without_resubmitting_credentials() -> Result<()> {
+    for remember in [false, true] {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::test(dir.path());
+        let (client, listener) = mock_portal().await?;
+        let store = TestStore::default();
+        let wifi = TestWifi::new([
+            Ok(Some("student-session".into())),
+            Ok(Some("student-session".into())),
+        ]);
+        crate::control::State {
+            paused: true,
+            ..Default::default()
+        }
+        .save(&paths)?;
+        let args = LoginArgs {
+            remember_me: remember,
+            ..explicit_args()
+        };
+        let (result, served) = tokio::join!(
+            run_with_store(&client, &paths, args, false, &wifi, &store),
+            reply(
+                &listener,
+                r#"dr1({"result":1,"v46ip":"10.0.0.12","uid":"student"});"#
+            ),
+        );
+        assert!(served?.starts_with("GET /status?"));
+        result?;
+        assert_eq!(store.saved.borrow().is_some(), remember);
+        assert!(!crate::control::State::load(&paths)?.paused);
+        assert!(
+            timeout(Duration::from_millis(30), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn saved_credentials_skip_tui_unless_requested() {
     let saved = Credentials {
