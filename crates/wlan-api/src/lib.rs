@@ -6,5 +6,5 @@ mod error;
 mod types;
 
 pub use client::{Client, PortalConfig};
-pub use error::Error;
+pub use error::{Error, RequestOperation};
 pub use types::{AuthState, Credentials, Line, Status};

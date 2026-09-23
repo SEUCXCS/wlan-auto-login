@@ -36,7 +36,7 @@ fn retry_backoff_is_bounded_and_cleared_on_reconnection() {
     policy.update(Some("wifi-1".into()), &mut state);
     let now = Instant::now();
     for _ in 0..20 {
-        policy.failure(now);
+        policy.failure(now, false);
     }
     assert!(!policy.should_check(&state, now + Duration::from_secs(299)));
     assert!(policy.should_check(&state, now + Duration::from_secs(300)));
@@ -78,4 +78,59 @@ fn restart_on_same_connection_preserves_manual_logout() {
     let mut policy = Policy::default();
     policy.update(Some("wifi-1".into()), &mut state);
     assert!(!policy.should_check(&state, Instant::now()));
+}
+
+#[test]
+fn initial_status_retries_are_fast_bounded_and_respect_the_deadline() {
+    let mut policy = Policy::default();
+    let mut state = control::State::default();
+    policy.update(Some("wifi-1".into()), &mut state);
+    let mut now = Instant::now();
+    for seconds in [1, 2, 4, 30, 60, 120, 240, 300, 300] {
+        let delay = policy.failure(now, true);
+        assert_eq!(delay, Duration::from_secs(seconds));
+        now += delay;
+        assert!(!policy.should_check(&state, now - Duration::from_nanos(1)));
+        assert!(policy.should_check(&state, now));
+    }
+
+    policy.update(Some("wifi-2".into()), &mut state);
+    assert!(policy.should_check(&state, now));
+    assert_eq!(policy.failure(now, true), Duration::from_secs(1));
+}
+
+#[test]
+fn non_status_errors_and_login_failures_use_normal_backoff() {
+    let mut policy = Policy::default();
+    let mut state = control::State::default();
+    policy.update(Some("wifi-1".into()), &mut state);
+    let now = Instant::now();
+    assert_eq!(policy.failure(now, false), Duration::from_secs(30));
+
+    // A valid status response ends the fast window even before login succeeds.
+    policy.status_received();
+    assert!(policy.should_login(AuthState::Unknown));
+    assert_eq!(policy.failure(now, false), Duration::from_secs(60));
+    assert_eq!(policy.failure(now, true), Duration::from_secs(120));
+    policy.success();
+    assert_eq!(policy.retry_deadline(), None);
+    assert_eq!(policy.failure(now, true), Duration::from_secs(30));
+}
+
+#[test]
+fn a_due_fast_retry_cannot_override_pause_disconnect_or_rejected_credentials() {
+    let mut policy = Policy::default();
+    let mut state = control::State::default();
+    policy.update(Some("wifi-1".into()), &mut state);
+    let now = Instant::now();
+    let due = now + policy.failure(now, true);
+    state.paused = true;
+    policy.clear_due_retry(due);
+    assert!(!policy.should_check(&state, due));
+
+    state.paused = false;
+    policy.reject_credentials();
+    assert!(!policy.should_check(&state, due));
+    policy.update(None, &mut state);
+    assert!(!policy.should_check(&state, due));
 }

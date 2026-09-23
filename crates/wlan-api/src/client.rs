@@ -1,4 +1,4 @@
-use crate::{AuthState, Credentials, Error, Line, Status};
+use crate::{AuthState, Credentials, Error, Line, RequestOperation, Status};
 use serde_json::Value;
 use std::{
     net::Ipv4Addr,
@@ -49,11 +49,12 @@ impl Client {
     pub async fn status(&self) -> Result<Status, Error> {
         let response = self
             .request(
+                RequestOperation::Status,
                 &self.config.status_url,
                 &[("callback", CALLBACK.to_owned()), ("v", nonce())],
             )
             .await?;
-        parse_status(&response)
+        parse_status(&response).map_err(|error| error.during(RequestOperation::Status))
     }
 
     pub async fn login(&self, credentials: &Credentials, line: Line) -> Result<(), Error> {
@@ -69,7 +70,9 @@ impl Client {
             ),
             ("user_password", credentials.password.clone()),
         ]);
-        let result = self.request(&self.config.action_url, &query).await;
+        let result = self
+            .request(RequestOperation::Login, &self.config.action_url, &query)
+            .await;
         // Scrub the password from our owned query buffer once the request finishes.
         use zeroize::Zeroize;
         for (key, value) in &mut query {
@@ -90,7 +93,12 @@ impl Client {
             ("register_mode", "1".into()),
             ("wlan_vlan_id", status.vlan.clone()),
         ]);
-        check_action(&self.request(&self.config.action_url, &query).await?, None)
+        check_action(
+            &self
+                .request(RequestOperation::Logout, &self.config.action_url, &query)
+                .await?,
+            None,
+        )
     }
 
     fn common_query(&self, action: &str, status: &Status) -> Vec<(&'static str, String)> {
@@ -121,7 +129,18 @@ impl Client {
         ]
     }
 
-    async fn request(&self, url: &str, query: &[(&str, String)]) -> Result<Value, Error> {
+    async fn request(
+        &self,
+        operation: RequestOperation,
+        url: &str,
+        query: &[(&str, String)],
+    ) -> Result<Value, Error> {
+        self.send_request(url, query)
+            .await
+            .map_err(|error| error.during(operation))
+    }
+
+    async fn send_request(&self, url: &str, query: &[(&str, String)]) -> Result<Value, Error> {
         let mut response = self
             .http
             .get(url)

@@ -1,13 +1,18 @@
 //! Login decisions and retry state; no network, filesystem or task operations.
 use crate::control;
 use cxxy_wlanlogin_lib::AuthState;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
+
+const INITIAL_STATUS_DELAYS: [u64; 3] = [1, 2, 4];
 
 #[derive(Default)]
 pub(super) struct Policy {
     initialized: bool,
     session: Option<String>,
     pending_connection: bool,
+    initial_status_pending: bool,
+    initial_status_failures: usize,
     credential_blocked: bool,
     revision: u64,
     failures: u32,
@@ -52,12 +57,15 @@ impl Policy {
         if changed {
             self.session = session.clone();
             self.pending_connection = session.is_some();
+            self.initial_status_pending = session.is_some();
+            self.initial_status_failures = 0;
             self.failures = 0;
             self.retry_at = None;
         }
         if self.revision != control.revision {
             self.revision = control.revision;
             self.credential_blocked = false;
+            self.initial_status_failures = 0;
             self.failures = 0;
             self.retry_at = None;
         }
@@ -74,15 +82,41 @@ impl Policy {
     }
     pub(super) fn success(&mut self) {
         self.pending_connection = false;
+        self.status_received();
         self.failures = 0;
         self.retry_at = None;
     }
-    pub(super) fn failure(&mut self, now: Instant) {
+    pub(super) fn status_received(&mut self) {
+        self.initial_status_pending = false;
+    }
+
+    pub(super) fn retry_deadline(&self) -> Option<Instant> {
+        self.retry_at
+    }
+
+    pub(super) fn clear_due_retry(&mut self, now: Instant) {
+        if self.retry_at.is_some_and(|at| now >= at) {
+            self.retry_at = None;
+        }
+    }
+
+    pub(super) fn failure(&mut self, now: Instant, transient_status: bool) -> Duration {
+        if self.initial_status_pending
+            && transient_status
+            && let Some(&seconds) = INITIAL_STATUS_DELAYS.get(self.initial_status_failures)
+        {
+            self.initial_status_failures += 1;
+            let delay = Duration::from_secs(seconds);
+            self.retry_at = Some(now + delay);
+            return delay;
+        }
         self.failures = self.failures.saturating_add(1);
         let seconds = 30u64
             .saturating_mul(1u64 << self.failures.saturating_sub(1).min(4))
             .min(300);
-        self.retry_at = Some(now + Duration::from_secs(seconds));
+        let delay = Duration::from_secs(seconds);
+        self.retry_at = Some(now + delay);
+        delay
     }
 }
 

@@ -49,11 +49,11 @@ GET http://172.18.254.6/drcom/chkstatus?callback=dr1&v=1234
 | 参数 | 是否必需 | 说明 |
 | --- | --- | --- |
 | `callback` | 是 | 使用 `dr1`，表明接口采用 JSONP 风格的回调包装。 |
-| `v` | 是 | 当前请求结构中使用 `1234`。 |
+| `v` | 是 | 已知请求示例使用 `1234`；当前客户端使用 Unix 毫秒时间戳。 |
 
 ### 用途
 
-从响应中取得当前设备的校园网 IP，并写入后续登录请求的 `wlan_user_ip` 参数。当前文档尚未记录状态响应示例及 IP 字段的准确名称，后续需通过真实响应补充。
+从响应中取得当前设备的校园网 IP，并写入后续登录请求的 `wlan_user_ip` 参数。当前客户端识别的 IP 字段、认证状态、响应示例及后台检查行为见 [Dr.COM 校园网状态查询协议](./eportal-status.md)。该文档区分客户端兼容规则与尚待确认的服务端行为。
 
 ## 4. ePortal 登录请求
 
@@ -135,4 +135,5 @@ http://172.18.254.6:801/eportal/?c=Portal&a=login&callback=dr1&login_method=1&us
 
 ## 7. 相关文档
 
+- 状态查询、认证判断及重试说明：[Dr.COM 校园网状态查询协议](./eportal-status.md)
 - 注销接口及参数说明：[ePortal 校园网注销协议](./eportal-logout.md)

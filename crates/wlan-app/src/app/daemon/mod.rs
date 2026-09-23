@@ -10,7 +10,8 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use cxxy_wlanlogin_lib::{AuthState, Client};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::{Instant, Interval};
 
 const INTERVAL: Duration = Duration::from_secs(30);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
@@ -91,11 +92,14 @@ async fn run_loop(client: &Client, paths: &Paths, wake: &tokio::sync::Notify) ->
             .context("本轮网络检查超时")
             .and_then(|result| result)
         {
-            policy.failure(Instant::now());
-            tracing::warn!("本次检查未完成，稍后重试：{e:#}");
+            let transient_status = e
+                .downcast_ref::<cxxy_wlanlogin_lib::Error>()
+                .is_some_and(|error| error.is_transient_status_failure());
+            let delay = policy.failure(Instant::now(), transient_status);
+            tracing::warn!("本次检查未完成，{} 秒后重试：{e:#}", delay.as_secs());
         }
         tokio::select! {
-            _ = interval.tick() => { scheduled = true; },
+            _ = next_scheduled_check(&mut interval, &mut policy) => { scheduled = true; },
             _ = wake.notified() => { scheduled = true; },
             event = async { match &mut monitor { Some(m) => m.changed().await, None => std::future::pending().await } } => {
                 if let Err(e) = event { tracing::warn!("网络事件订阅断开：{e:#}"); monitor = None; }
@@ -105,6 +109,22 @@ async fn run_loop(client: &Client, paths: &Paths, wake: &tokio::sync::Notify) ->
             },
         }
     }
+}
+
+async fn next_scheduled_check(interval: &mut Interval, policy: &mut Policy) {
+    let retry_at = policy.retry_deadline();
+    tokio::select! {
+        _ = interval.tick() => {},
+        _ = async {
+            match retry_at {
+                Some(at) => tokio::time::sleep_until(at).await,
+                None => std::future::pending().await,
+            }
+        } => {},
+    }
+    // Consume an expired deadline even if the regular tick won the race. A
+    // paused connection or unknown status must not leave an always-ready timer.
+    policy.clear_due_retry(Instant::now());
 }
 
 async fn tick(
@@ -134,6 +154,7 @@ async fn tick(
         .await?
         .ok_or_else(|| anyhow::anyhow!("保存的凭据已不存在，请重新执行 login --remember-me"))?;
     let status = client.status().await?;
+    policy.status_received();
     if status.auth == AuthState::Online {
         policy.success();
         return Ok(());
@@ -169,6 +190,93 @@ async fn tick(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_deadline_wakes_between_ticks_and_is_consumed_when_paused() {
+        let mut interval = tokio::time::interval(INTERVAL);
+        interval.tick().await;
+        let start = Instant::now();
+        let mut policy = Policy::default();
+        let mut state = control::State::default();
+        policy.update(Some("wifi-1".into()), &mut state);
+
+        // Failure six seconds after a tick used to defer the retry until t=60.
+        tokio::time::advance(Duration::from_secs(6)).await;
+        policy.failure(Instant::now(), false);
+        next_scheduled_check(&mut interval, &mut policy).await;
+        assert_eq!(Instant::now() - start, Duration::from_secs(30));
+        assert!(!policy.should_check(&state, Instant::now()));
+
+        state.paused = true;
+        next_scheduled_check(&mut interval, &mut policy).await;
+        assert_eq!(Instant::now() - start, Duration::from_secs(36));
+        assert!(!policy.should_check(&state, Instant::now()));
+        assert_eq!(policy.retry_deadline(), None);
+
+        // A skipped check must not keep waking on the expired retry timer.
+        next_scheduled_check(&mut interval, &mut policy).await;
+        assert_eq!(Instant::now() - start, Duration::from_secs(60));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fast_retries_wake_at_one_two_and_four_seconds_then_back_off() {
+        let mut interval = tokio::time::interval(INTERVAL);
+        interval.tick().await;
+        let start = Instant::now();
+        let mut policy = Policy::default();
+        let mut state = control::State::default();
+        policy.update(Some("wifi-1".into()), &mut state);
+        for elapsed in [1, 3, 7] {
+            policy.failure(Instant::now(), true);
+            next_scheduled_check(&mut interval, &mut policy).await;
+            assert_eq!(Instant::now() - start, Duration::from_secs(elapsed));
+            assert!(policy.should_check(&state, Instant::now()));
+        }
+
+        policy.failure(Instant::now(), true);
+        next_scheduled_check(&mut interval, &mut policy).await;
+        assert_eq!(Instant::now() - start, Duration::from_secs(30));
+        assert!(!policy.should_check(&state, Instant::now()));
+        next_scheduled_check(&mut interval, &mut policy).await;
+        assert_eq!(Instant::now() - start, Duration::from_secs(37));
+        assert!(policy.should_check(&state, Instant::now()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn wake_keeps_retry_deadline_and_stop_cancels_retry_wait() -> Result<()> {
+        let mut interval = tokio::time::interval(INTERVAL);
+        interval.tick().await;
+        let start = Instant::now();
+        let mut policy = Policy::default();
+        let mut state = control::State::default();
+        policy.update(Some("wifi-1".into()), &mut state);
+        policy.failure(start, true);
+        let wake = tokio::sync::Notify::new();
+        wake.notify_one();
+        tokio::select! {
+            _ = next_scheduled_check(&mut interval, &mut policy) => panic!("retry is not due"),
+            _ = wake.notified() => {},
+        }
+        assert_eq!(
+            policy.retry_deadline(),
+            Some(start + Duration::from_secs(1))
+        );
+        assert!(!policy.should_check(&state, Instant::now()));
+
+        until_stopped(
+            async {
+                next_scheduled_check(&mut interval, &mut policy).await;
+                bail!("retry ran before stop")
+            },
+            async {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                Ok(())
+            },
+        )
+        .await?;
+        assert_eq!(Instant::now() - start, Duration::from_millis(200));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn ipc_stop_cancels_busy_check_even_after_wake_burst() -> Result<()> {

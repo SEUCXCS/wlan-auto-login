@@ -61,8 +61,14 @@ cxxy-wlanlogin-cli uninstall        # 卸载服务，保留已保存的凭据
 
 可用全局参数 `--user` / `--system` 指定范围；系统服务的登录、注销及启停也需要管理员权限。两个范围的凭据独立，切换安装范围前需先卸载原服务。系统凭据在 Linux 使用 `systemd-creds` 加密，在 macOS 使用 System Keychain，在 Windows 使用机器 DPAPI；Linux 系统安装需要支持加密凭据的 systemd。
 
-后台仅在连接 `Student_CX` 时访问门户，接入后尝试登录，每 30 秒检查认证状态，确认掉线后重试。手动注销后，手动登录或重新接入目标 Wi-Fi 可恢复自动登录。
+后台仅在连接 `Student_CX` 时访问门户，接入后尝试登录，每 30 秒检查认证状态，确认掉线后重试。首次取得状态前遇到临时网络错误时，按 1、2、4 秒最多快速重试三次，之后进入 30 秒至 5 分钟的常规退避；重试到期直接触发，不再等待下一个检查周期。日志标明失败请求的阶段和等待时间。手动注销后，手动登录或重新接入目标 Wi-Fi 可恢复自动登录。
 
 直接运行 `cxxy-wlanlogin-cli daemon` 会在当前进程运行后台循环，需要事先在同一范围保存凭据。`start`、`stop`、`restart` 仅管理已安装服务，未安装时会报错。
 
 更多参数见 `cxxy-wlanlogin-cli --help` 和各子命令的 `--help`。
+
+## 协议文档
+
+- [状态查询（chkstatus）](docs/eportal-status.md)：设备信息、认证状态、后台检查和重试行为。
+- [登录](docs/eportal-login.md)
+- [注销](docs/eportal-logout.md)
