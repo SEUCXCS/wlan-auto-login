@@ -8,6 +8,35 @@ use zeroize::Zeroizing;
 const SERVICE: &str = "org.seucxcs.cxxy-wlanlogin";
 const ENTRY: &str = "saved-login";
 
+pub async fn delete() -> Result<()> {
+    tokio::task::spawn_blocking(|| {
+        #[cfg(target_os = "linux")]
+        {
+            use dbus_secret_service::{EncryptionType, SecretService};
+            let service = SecretService::connect(EncryptionType::Dh)?;
+            let items = service.search_items(std::collections::HashMap::from([
+                ("service", SERVICE),
+                ("username", ENTRY),
+                ("target", "default"),
+            ]))?;
+            // Remove every matching application item, including duplicates, without
+            // reading secrets or touching the collection or other applications.
+            for item in items.unlocked.iter().chain(&items.locked) {
+                item.delete()
+                    .context("无法删除用户凭据，请解锁系统密钥管理器")?;
+            }
+            Ok(())
+        }
+        #[cfg(not(target_os = "linux"))]
+        match keyring::Entry::new(SERVICE, ENTRY)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error).context("无法删除用户凭据"),
+        }
+    })
+    .await
+    .context("凭据删除任务失败")?
+}
+
 pub async fn load() -> Result<Option<Credentials>> {
     tokio::task::spawn_blocking(|| {
         let entry = keyring::Entry::new(SERVICE, ENTRY).context("无法打开系统密钥管理器")?;

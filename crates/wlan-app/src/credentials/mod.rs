@@ -12,6 +12,14 @@ mod user;
 pub(crate) use background::BackgroundReader;
 pub(crate) use user::prepare_daemon;
 
+/// Delete without loading or decoding secrets, including damaged or duplicate files.
+pub async fn delete(paths: &crate::config::Paths) -> anyhow::Result<()> {
+    match paths.scope {
+        crate::scope::Scope::System => machine::delete(paths).await,
+        crate::scope::Scope::User => user::delete().await,
+    }
+}
+
 use anyhow::{Context, Result, bail};
 use cxxy_wlanlogin_lib::Credentials;
 use serde::{Deserialize, Serialize};

@@ -42,6 +42,32 @@ pub struct MachineStore {
     cache: Mutex<Option<(SystemTime, u64, Credentials)>>,
 }
 
+pub async fn delete(paths: &Paths) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = paths;
+        tokio::task::spawn_blocking(macos::delete).await?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Do not construct MachineStore: its validation intentionally rejects
+        // conflicting storage modes, but cleanup must handle both files.
+        crate::cleanup::validate_directory(&paths.secrets)?;
+        let mut errors = Vec::new();
+        for name in ["login.cred", "login.json"] {
+            if let Err(error) = crate::cleanup::remove_file(&paths.secrets.join(name)) {
+                errors.push(format!("{error:#}"));
+            }
+        }
+        anyhow::ensure!(
+            errors.is_empty(),
+            "系统凭据删除未完成：{}",
+            errors.join("；")
+        );
+        Ok(())
+    }
+}
+
 impl MachineStore {
     pub fn new(paths: Paths, mode: Option<CredentialMode>) -> Result<Self> {
         #[cfg(target_os = "linux")]
@@ -221,4 +247,47 @@ fn validate_private(path: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod delete_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn delete_removes_corrupt_and_conflicting_files_without_decrypting() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::test(dir.path().join("cxxy-wlanlogin/secrets"));
+        fs::create_dir_all(&paths.secrets)?;
+        for name in ["login.cred", "login.json"] {
+            fs::write(paths.secrets.join(name), "invalid secret data")?;
+        }
+        fs::write(paths.secrets.join("unrelated"), "preserve")?;
+        delete(&paths).await?;
+        delete(&paths).await?;
+        assert!(!paths.secrets.join("login.cred").exists());
+        assert!(!paths.secrets.join("login.json").exists());
+        assert_eq!(
+            fs::read_to_string(paths.secrets.join("unrelated"))?,
+            "preserve"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn deletion_unlinks_leaf_symlinks_but_rejects_redirected_directories() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut paths = Paths::test(dir.path().join("cxxy-wlanlogin/secrets"));
+        fs::create_dir_all(&paths.secrets)?;
+        let original = dir.path().join("outside-secret");
+        fs::write(&original, "preserve")?;
+        std::os::unix::fs::symlink(&original, paths.secrets.join("login.cred"))?;
+        delete(&paths).await?;
+        assert_eq!(fs::read_to_string(&original)?, "preserve");
+        let link = dir.path().join("redirect");
+        std::os::unix::fs::symlink(&paths.secrets, &link)?;
+        paths.secrets = link;
+        assert!(delete(&paths).await.is_err());
+        Ok(())
+    }
 }

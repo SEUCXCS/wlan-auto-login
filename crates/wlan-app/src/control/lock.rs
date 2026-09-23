@@ -46,6 +46,16 @@ pub async fn operation_lock(paths: &Paths) -> Result<File> {
     bail!("另一项登录或注销操作尚未结束，请稍后重试")
 }
 
+pub async fn wait_stopped(paths: &Paths) -> Result<()> {
+    for _ in 0..250 {
+        if singleton(paths).is_ok() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    bail!("daemon 尚未退出，请停止正在运行的 daemon 后重试")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

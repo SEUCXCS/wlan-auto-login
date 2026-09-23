@@ -12,7 +12,6 @@ use anyhow::Context;
 use anyhow::{Result, ensure};
 #[cfg(any(target_os = "linux", test))]
 use std::io::Write;
-#[cfg(any(target_os = "macos", windows, test))]
 use std::path::PathBuf;
 
 /// Options shared by historical and streaming service-log readers.
@@ -26,7 +25,6 @@ pub(crate) struct LogOptions {
 enum Source {
     #[cfg(any(target_os = "linux", test))]
     Journal(Invocation),
-    #[cfg(any(target_os = "macos", windows, test))]
     File(PathBuf),
 }
 
@@ -42,7 +40,14 @@ fn source(paths: &Paths, plan: &Plan, options: LogOptions) -> Result<Source> {
     match &plan.manager {
         #[cfg(any(target_os = "linux", test))]
         Manager::Systemd { system } => {
-            let _ = paths;
+            // Inspect the installed definition, not the newly generated plan:
+            // older installations still send their application output to journal.
+            if std::fs::read_to_string(&plan.definition)?
+                .lines()
+                .any(|line| line.trim() == "# ApplicationLog=daemon.log")
+            {
+                return Ok(Source::File(paths.config.join("daemon.log")));
+            }
             let mut command = Invocation::new(
                 "journalctl",
                 [
@@ -85,10 +90,9 @@ pub async fn logs(paths: &Paths, options: LogOptions) -> Result<()> {
         Source::Journal(command) => {
             journal_snapshot(&command, &SystemRunner, &mut std::io::stdout()).await
         }
-        #[cfg(any(target_os = "macos", windows))]
         Source::File(path) => file_logs(&path, options).await,
         // Other platform implementations are compiled for unit tests only.
-        #[cfg(test)]
+        #[cfg(all(test, not(target_os = "linux")))]
         _ => unreachable!("the native service plan selects the native log source"),
     };
     // Closing a downstream pipe is a normal way to stop consuming logs.
@@ -155,9 +159,7 @@ async fn follow_journal(
     }
 }
 
-#[cfg(any(target_os = "macos", windows))]
 use file::file_logs;
-#[cfg(any(target_os = "macos", windows, test))]
 mod file;
 
 #[cfg(test)]

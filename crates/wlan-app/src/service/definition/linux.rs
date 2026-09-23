@@ -12,7 +12,7 @@ pub(in crate::service) fn linux_system_plan(
         scope: crate::scope::Scope::System,
         manager: Manager::Systemd { system: true },
         content: format!(
-            "# {LABEL}\n[Unit]\nDescription=Student_CX automatic login\nAfter=NetworkManager.service\nWants=NetworkManager.service\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart={quoted} --system daemon\nRestart=on-failure\nRestartSec=30\nTimeoutStopSec=25\nStateDirectory=cxxy-wlanlogin\nStateDirectoryMode=0700\nRuntimeDirectory=cxxy-wlanlogin\nRuntimeDirectoryMode=0700\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=true\nProtectSystem=strict\n# CREDENTIALS\n\n[Install]\nWantedBy=multi-user.target\n"
+            "# {LABEL}\n[Unit]\nDescription=Student_CX automatic login\nAfter=NetworkManager.service\nWants=NetworkManager.service\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart={quoted} --system daemon --background\n# ApplicationLog=daemon.log\nRestart=on-failure\nRestartSec=30\nTimeoutStopSec=25\nStateDirectory=cxxy-wlanlogin\nStateDirectoryMode=0700\nRuntimeDirectory=cxxy-wlanlogin\nRuntimeDirectoryMode=0700\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=true\nProtectSystem=strict\n# CREDENTIALS\n\n[Install]\nWantedBy=multi-user.target\n"
         ),
         executable,
         definition,
@@ -41,7 +41,7 @@ pub(in crate::service) fn linux_system_plan(
 pub(in crate::service) fn linux_plan(executable: PathBuf, definition: PathBuf) -> Result<Plan> {
     let quoted = systemd_quote(&executable)?;
     let content = format!(
-        "# {LABEL}\n[Unit]\nDescription=Student_CX automatic login\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart={quoted} daemon\nRestart=on-failure\nRestartSec=30\nTimeoutStopSec=25\n\n[Install]\nWantedBy=default.target\n"
+        "# {LABEL}\n[Unit]\nDescription=Student_CX automatic login\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart={quoted} daemon --background\n# ApplicationLog=daemon.log\nRestart=on-failure\nRestartSec=30\nTimeoutStopSec=25\n\n[Install]\nWantedBy=default.target\n"
     );
     let reload = || Invocation::new("systemctl", ["--user", "daemon-reload"]);
     Ok(Plan {

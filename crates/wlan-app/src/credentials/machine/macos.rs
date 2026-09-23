@@ -31,6 +31,24 @@ fn keychain() -> Result<SecKeychain> {
     SecKeychain::open("/Library/Keychains/System.keychain").context("无法打开 System Keychain")
 }
 
+pub fn delete() -> Result<()> {
+    let (_, item) = match keychain()?.find_generic_password(SERVICE, ACCOUNT) {
+        Ok(found) => found,
+        Err(error) if error.code() == -25300 => return Ok(()),
+        Err(error) => return Err(error).context("无法查找待删除的 System Keychain 凭据"),
+    };
+    // SAFETY: item is a live, retained reference from the selected system keychain.
+    // The high-level delete wrapper discards OSStatus, so check it explicitly.
+    let code = unsafe {
+        security_framework_sys::keychain_item::SecKeychainItemDelete(item.as_concrete_TypeRef())
+    };
+    anyhow::ensure!(
+        code == 0 || code == -25300,
+        "无法删除 System Keychain 凭据：{code}"
+    );
+    Ok(())
+}
+
 pub fn load() -> Result<Option<Credentials>> {
     match keychain()?.find_generic_password(SERVICE, ACCOUNT) {
         Ok((password, _)) => {

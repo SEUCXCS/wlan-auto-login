@@ -107,7 +107,6 @@ fn tail_start(file: &mut File, end: u64, lines: u32) -> Result<u64> {
     Ok(0)
 }
 
-#[cfg(any(target_os = "macos", windows))]
 pub(super) async fn file_logs(path: &Path, options: LogOptions) -> Result<()> {
     let mut cursor = Cursor::default();
     let mut output = std::io::stdout();

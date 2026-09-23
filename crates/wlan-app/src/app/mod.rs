@@ -128,12 +128,12 @@ async fn dispatch(args: cli::Cli, paths: config::Paths) -> Result<()> {
             daemon::run(&client, &paths).await
         }
         cli::Command::Install(args) => install::run(&client, &paths, args).await,
-        cli::Command::Uninstall => service::uninstall(&paths).await,
+        cli::Command::Uninstall { purge } => service::uninstall(&paths, purge).await,
         cli::Command::Login(args) => {
             service::ensure_no_conflicting_install(&paths)?;
             login::run(&client, &paths, args, false).await
         }
-        cli::Command::Logout => logout::run(&client, &paths).await,
+        cli::Command::Logout { forget } => logout::run(&client, &paths, forget).await,
     }
 }
 

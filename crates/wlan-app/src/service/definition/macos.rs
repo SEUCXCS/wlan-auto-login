@@ -68,10 +68,9 @@ pub(in crate::service) fn macos_plan(
         executable,
         content,
         stop: vec![bootout()],
-        remove: vec![
-            bootout(),
-            Invocation::new("launchctl", ["disable", &target]),
-        ],
+        // Removing the plist prevents future loading; avoid leaving a persistent
+        // launchd disabled override behind after uninstallation.
+        remove: vec![bootout()],
         reload: vec![],
         start: vec![
             Invocation::new("launchctl", [OsStr::new("enable"), OsStr::new(&target)]),

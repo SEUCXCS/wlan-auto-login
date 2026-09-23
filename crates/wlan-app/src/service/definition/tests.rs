@@ -7,6 +7,8 @@ fn system_services_boot_without_a_user_session() -> Result<()> {
     let definition = PathBuf::from("/tmp/system-definition");
     let linux = linux_system_plan(exe.clone(), definition.clone())?;
     assert!(linux.content.contains("--system daemon"));
+    assert!(linux.content.contains("daemon --background"));
+    assert!(linux.content.contains("# ApplicationLog=daemon.log"));
     assert!(linux.content.contains("WantedBy=multi-user.target"));
     assert!(!linux.content.contains("--user"));
     let macos = macos_system_plan(exe.clone(), definition.clone(), "/tmp/log".into())?;
@@ -63,6 +65,7 @@ fn generated_services_use_user_sessions_without_credentials() -> Result<()> {
         assert!(plan.content.contains(LABEL));
     }
     assert!(plans[0].content.contains("WantedBy=default.target"));
+    assert!(plans[0].content.contains("daemon --background"));
     assert!(plans[1].content.contains("<key>RunAtLoad</key><true/>"));
     assert!(
         plans[2]

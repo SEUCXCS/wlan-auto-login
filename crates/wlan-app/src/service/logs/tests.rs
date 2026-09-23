@@ -23,6 +23,14 @@ fn sources_match_each_platform_and_installation_scope() -> Result<()> {
         };
         fs::write(&plan.definition, &plan.content)?;
         fs::write(&plan.executable, "mock, never run")?;
+        let Source::File(path) = source(&paths, &plan, options)? else {
+            anyhow::bail!("new Linux service must use a removable application log")
+        };
+        assert_eq!(path, paths.config.join("daemon.log"));
+        fs::write(
+            &plan.definition,
+            plan.content.replace("# ApplicationLog=daemon.log\n", ""),
+        )?;
         let Source::Journal(command) = source(&paths, &plan, options)? else {
             anyhow::bail!("journal expected")
         };

@@ -19,7 +19,11 @@ pub enum Command {
     /// 登录校园网；不在 Student_CX 时仅保存凭据，凭据不足时打开交互界面
     Login(LoginArgs),
     /// 注销当前校园网会话
-    Logout,
+    Logout {
+        /// 注销并删除所选范围的已保存凭据；离线或门户失败时仍删除本地凭据
+        #[arg(long)]
+        forget: bool,
+    },
     /// 直接运行后台登录循环，或管理已安装的系统服务
     #[command(subcommand_negates_reqs = true, args_conflicts_with_subcommands = true)]
     Daemon {
@@ -33,7 +37,11 @@ pub enum Command {
     /// 安装自动启动服务；管理员默认安装系统服务，首次登录强制保存凭据
     Install(LoginArgs),
     /// 停止并卸载后台服务，保留已保存的账号密码
-    Uninstall,
+    Uninstall {
+        /// 同时清理所选范围的应用日志、配置、运行文件和凭据
+        #[arg(long)]
+        purge: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, PartialEq, Eq)]
@@ -94,6 +102,43 @@ pub struct LoginArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cleanup_flags_are_explicit_and_keep_the_selected_scope() {
+        for flag in ["--user", "--system"] {
+            let parsed = Cli::try_parse_from(["app", flag, "uninstall", "--purge"]);
+            assert!(matches!(
+                parsed,
+                Ok(Cli {
+                    command: Command::Uninstall { purge: true },
+                    ..
+                })
+            ));
+            let parsed = Cli::try_parse_from(["app", "logout", "--forget", flag]);
+            assert!(matches!(
+                parsed,
+                Ok(Cli {
+                    command: Command::Logout { forget: true },
+                    ..
+                })
+            ));
+        }
+        assert!(matches!(
+            Cli::try_parse_from(["app", "uninstall"]),
+            Ok(Cli {
+                command: Command::Uninstall { purge: false },
+                ..
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["app", "logout"]),
+            Ok(Cli {
+                command: Command::Logout { forget: false },
+                ..
+            })
+        ));
+        assert!(Cli::try_parse_from(["app", "uninstall", "--forget"]).is_err());
+        assert!(Cli::try_parse_from(["app", "logout", "--purge"]).is_err());
+    }
     #[test]
     fn scope_flags_work_with_every_command() {
         for args in [

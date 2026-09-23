@@ -6,8 +6,8 @@ use crate::{
     config::{Paths, private_dir},
     control,
 };
-use anyhow::{Context, Result, bail};
-use std::{fs, path::Path, time::Duration};
+use anyhow::{Context, Result};
+use std::{fs, path::Path};
 
 pub async fn install(paths: &Paths) -> Result<()> {
     ensure_no_conflicting_install(paths)?;
@@ -138,46 +138,15 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn uninstall(paths: &Paths) -> Result<()> {
-    let _service_lock = control::service_lock(paths)?;
-    let plan = plan(paths)?;
-    assert_owned(&plan.definition)?;
-    if plan.definition.exists() {
-        stop_before_replacing(paths, &plan).await?;
-        for command in &plan.remove {
-            command.run().await?;
-        }
-    }
-    control::stop(paths).await;
-    wait_stopped(paths).await?;
-    remove_if_present(&plan.definition)?;
-    for command in &plan.reload {
-        command.run().await?;
-    }
-    remove_if_present(&plan.executable).context("服务已卸载，但安装副本仍在使用，请关闭后删除")?;
-    tracing::info!("后台服务已卸载；已保存的账号和密码仍保留。");
-    Ok(())
-}
-
 async fn stop_before_replacing(paths: &Paths, plan: &Plan) -> Result<()> {
     for command in &plan.stop {
         command.run().await?;
     }
     control::stop(paths).await;
-    wait_stopped(paths).await?;
+    control::wait_stopped(paths).await?;
     #[cfg(windows)]
     lifecycle::wait_task_stopped(&plan.manager, &SystemRunner).await?;
     Ok(())
-}
-
-async fn wait_stopped(paths: &Paths) -> Result<()> {
-    for _ in 0..250 {
-        if control::singleton(paths).is_ok() {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    bail!("daemon 尚未退出，安装文件没有被替换；请停止正在运行的 daemon 后重试")
 }
 
 fn remove_if_present(path: &Path) -> Result<()> {
