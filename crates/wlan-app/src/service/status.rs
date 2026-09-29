@@ -3,13 +3,13 @@ use super::{
     command::{Invocation, Runner, SystemRunner},
     definition::{Artifacts, Plan, plan},
 };
-use crate::config::Paths;
+use crate::infra::paths::Paths;
 use anyhow::{Context, Result};
 
 pub async fn status(paths: &Paths, discover: bool) -> Result<()> {
     let mut plans = vec![plan(paths)?];
-    if discover && paths.scope == crate::scope::Scope::User {
-        plans.push(plan(&Paths::new(crate::scope::Scope::System)?)?);
+    if discover && paths.scope == crate::infra::scope::Scope::User {
+        plans.push(plan(&Paths::new(crate::infra::scope::Scope::System)?)?);
     }
     let mut reports = Vec::new();
     let mut errors = Vec::new();

@@ -1,6 +1,6 @@
 //! Prepare saved credentials before installing the operating-system service.
 use super::{cli::LoginArgs, login};
-use crate::{config::Paths, credentials, service, wifi};
+use crate::{credentials, infra::paths::Paths, service, wifi};
 use anyhow::Result;
 use cxxy_wlanlogin_lib::Client;
 

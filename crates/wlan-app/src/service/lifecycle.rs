@@ -5,7 +5,7 @@ use super::{
     definition::{Artifacts, Plan, plan},
     manager::Manager,
 };
-use crate::{config::Paths, control};
+use crate::{infra::control, infra::paths::Paths};
 use anyhow::{Result, bail};
 
 #[derive(Clone, Copy, Debug)]
@@ -213,7 +213,7 @@ mod tests {
             (Action::Restart, "restart"),
         ] {
             let (dir, mut paths, _) = fixture()?;
-            paths.scope = crate::scope::Scope::System;
+            paths.scope = crate::infra::scope::Scope::System;
             let plan = crate::service::definition::linux_system_plan(
                 dir.path().join("daemon"),
                 dir.path().join("service"),
@@ -245,7 +245,7 @@ mod tests {
     #[tokio::test]
     async fn scm_restart_waits_for_stop_and_aborts_on_stop_failure() -> Result<()> {
         let (dir, mut paths, _) = fixture()?;
-        paths.scope = crate::scope::Scope::System;
+        paths.scope = crate::infra::scope::Scope::System;
         let plan = crate::service::definition::windows_system_plan(
             dir.path().join("daemon.exe"),
             dir.path().join("service.json"),

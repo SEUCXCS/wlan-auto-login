@@ -1,7 +1,9 @@
 //! Pause authentication, optionally stop the daemon and forget local credentials.
 use crate::{
-    config::Paths,
-    control, credentials, service,
+    credentials,
+    infra::control,
+    infra::paths::Paths,
+    service,
     wifi::{WifiConnection, WifiProbe},
 };
 use anyhow::{Context, Result};

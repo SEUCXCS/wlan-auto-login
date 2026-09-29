@@ -8,7 +8,7 @@ pub(in crate::service) fn macos_system_plan(
     log: PathBuf,
 ) -> Result<Plan> {
     let mut plan = macos_plan(executable, definition, log, 0)?;
-    plan.scope = crate::scope::Scope::System;
+    plan.scope = crate::infra::scope::Scope::System;
     plan.manager = Manager::Launchd {
         domain: "system".into(),
         target: format!("system/{LABEL}"),
@@ -60,7 +60,7 @@ pub(in crate::service) fn macos_plan(
     let bootout =
         || Invocation::new("launchctl", [OsStr::new("bootout"), OsStr::new(&target)]).optional();
     Ok(Plan {
-        scope: crate::scope::Scope::User,
+        scope: crate::infra::scope::Scope::User,
         manager: Manager::Launchd {
             domain: domain.clone(),
             target: target.clone(),

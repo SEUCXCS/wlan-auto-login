@@ -61,7 +61,7 @@ impl Shutdown {
         };
         #[cfg(windows)]
         let received = tokio::select! {
-            _ = crate::service::windows::stop_signal() => Some(()),
+
             value = async {
                 match &mut self.console {
                     Some(signals) => tokio::select! {
@@ -120,7 +120,7 @@ mod tests {
                     .args([
                         "--ignored",
                         "--exact",
-                        "shutdown::tests::signal_child",
+                        "infra::shutdown::tests::signal_child",
                         "--nocapture",
                     ])
                     .env("WLAN_SHUTDOWN_TEST_DIR", dir.path())
@@ -181,9 +181,9 @@ mod tests {
                     .await
                     .is_err()
             );
-            let paths = crate::config::Paths::test(directory);
+            let paths = crate::infra::paths::Paths::test(directory);
             let work = async {
-                let _lock = crate::control::operation_lock(&paths).await?;
+                let _lock = crate::infra::control::operation_lock(&paths).await?;
                 let (started, ready) = tokio::sync::oneshot::channel();
                 tokio::task::spawn_blocking(move || {
                     let _ = started.send(());
@@ -199,7 +199,7 @@ mod tests {
             until_stopped(work, shutdown.wait()).await?;
             let _lock = tokio::time::timeout(
                 Duration::from_millis(200),
-                crate::control::operation_lock(&paths),
+                crate::infra::control::operation_lock(&paths),
             )
             .await??;
             Ok::<_, anyhow::Error>(())

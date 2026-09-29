@@ -1,5 +1,5 @@
 //! Install and manage operating-system services; command workflows live in app.
-mod command;
+use crate::infra::command;
 mod definition;
 mod install;
 mod lifecycle;

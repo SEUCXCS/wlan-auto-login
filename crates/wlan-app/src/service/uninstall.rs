@@ -4,7 +4,7 @@ use super::{
     definition::{Plan, assert_owned, plan},
     manager::Manager,
 };
-use crate::{cleanup, config::Paths, control, credentials};
+use crate::{credentials, infra::cleanup, infra::control, infra::paths::Paths};
 use anyhow::{Context, Result, ensure};
 use std::{future::Future, time::Duration};
 

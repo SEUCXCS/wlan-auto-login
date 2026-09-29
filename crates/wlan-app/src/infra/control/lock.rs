@@ -1,4 +1,4 @@
-use crate::config::{Paths, private_dir};
+use crate::infra::{filesystem::private_dir, paths::Paths};
 use anyhow::{Context, Result, bail};
 use std::{
     fs::{File, OpenOptions},

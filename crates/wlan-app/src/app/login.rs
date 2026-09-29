@@ -1,7 +1,8 @@
 use super::cli::LoginArgs;
 use crate::{
-    config::{Paths, Preferences},
-    credentials, tui, wifi,
+    credentials,
+    infra::{config::Preferences, paths::Paths},
+    tui, wifi,
 };
 use anyhow::{Context, Result, bail};
 use cxxy_wlanlogin_lib::{Client, Credentials, Line, LoginOutcome};
@@ -114,18 +115,19 @@ async fn run_with_store(
     }
     loop {
         if interactive {
-            let remember_reason = if force_remember && paths.scope == crate::scope::Scope::System {
-                Some("安装系统服务必须保存凭据，供本机开机自动登录使用。")
-            } else if force_remember {
-                Some("安装服务必须保存账号和密码。")
-            } else if save_only {
-                Some("离线配置仅保存账号和密码。")
-            } else {
-                None
-            };
+            let remember_reason =
+                if force_remember && paths.scope == crate::infra::scope::Scope::System {
+                    Some("安装系统服务必须保存凭据，供本机开机自动登录使用。")
+                } else if force_remember {
+                    Some("安装服务必须保存账号和密码。")
+                } else if save_only {
+                    Some("离线配置仅保存账号和密码。")
+                } else {
+                    None
+                };
             form = tui::prompt(form, remember_reason, warning.take())?;
         }
-        let _operation = crate::control::operation_lock(paths).await?;
+        let _operation = crate::infra::control::operation_lock(paths).await?;
         match submit(client, &form, wifi).await {
             Ok(outcome) => {
                 let authenticated = outcome.is_some();
@@ -141,10 +143,10 @@ async fn run_with_store(
                         })?;
                 }
                 Preferences { line: form.line }.save(paths)?;
-                let mut state = crate::control::State::load(paths)?;
+                let mut state = crate::infra::control::State::load(paths)?;
                 state.resume();
                 state.save(paths)?;
-                crate::control::wake(paths).await;
+                crate::infra::control::wake(paths).await;
                 if outcome == Some(LoginOutcome::AlreadyOnline) {
                     tracing::info!(
                         "当前设备已在线，未重复提交登录；本次提供的凭据和线路尚未在线验证{}",
@@ -299,7 +301,7 @@ mod tests {
             assert_eq!(saved.password, "test-secret");
         }
         assert_eq!(Preferences::load(&paths)?.line, Line::Free2);
-        assert!(!crate::control::State::load(&paths)?.paused);
+        assert!(!crate::infra::control::State::load(&paths)?.paused);
         assert!(
             wifi.0.borrow().is_empty(),
             "must recheck after resolving credentials"
@@ -439,7 +441,7 @@ mod tests {
                 Ok(Some("student-session".into())),
                 Ok(Some("student-session".into())),
             ]);
-            crate::control::State {
+            crate::infra::control::State {
                 paused: true,
                 ..Default::default()
             }
@@ -458,7 +460,7 @@ mod tests {
             assert!(served?.starts_with("GET /status?"));
             result?;
             assert_eq!(store.saved.borrow().is_some(), remember);
-            assert!(!crate::control::State::load(&paths)?.paused);
+            assert!(!crate::infra::control::State::load(&paths)?.paused);
             assert!(
                 timeout(Duration::from_millis(30), listener.accept())
                     .await

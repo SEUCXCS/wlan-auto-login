@@ -9,7 +9,7 @@ pub(in crate::service) fn linux_system_plan(
     let quoted = systemd_quote(&executable)?;
     let reload = || Invocation::new("systemctl", ["--system", "daemon-reload"]);
     Ok(Plan {
-        scope: crate::scope::Scope::System,
+        scope: crate::infra::scope::Scope::System,
         manager: Manager::Systemd { system: true },
         content: format!(
             "# {LABEL}\n[Unit]\nDescription=Student_CX automatic login\nAfter=NetworkManager.service\nWants=NetworkManager.service\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart={quoted} --system daemon --background\n# ApplicationLog=daemon.log\nRestart=on-failure\nRestartSec=30\nTimeoutStopSec=25\nStateDirectory=cxxy-wlanlogin\nStateDirectoryMode=0700\nRuntimeDirectory=cxxy-wlanlogin\nRuntimeDirectoryMode=0700\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=true\nProtectSystem=strict\n# CREDENTIALS\n\n[Install]\nWantedBy=multi-user.target\n"
@@ -45,7 +45,7 @@ pub(in crate::service) fn linux_plan(executable: PathBuf, definition: PathBuf) -
     );
     let reload = || Invocation::new("systemctl", ["--user", "daemon-reload"]);
     Ok(Plan {
-        scope: crate::scope::Scope::User,
+        scope: crate::infra::scope::Scope::User,
         manager: Manager::Systemd { system: false },
         executable,
         definition,

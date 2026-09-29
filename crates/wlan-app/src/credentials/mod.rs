@@ -13,10 +13,10 @@ pub(crate) use background::BackgroundReader;
 pub(crate) use user::prepare_daemon;
 
 /// Delete without loading or decoding secrets, including damaged or duplicate files.
-pub async fn delete(paths: &crate::config::Paths) -> anyhow::Result<()> {
+pub async fn delete(paths: &crate::infra::paths::Paths) -> anyhow::Result<()> {
     match paths.scope {
-        crate::scope::Scope::System => machine::delete(paths).await,
-        crate::scope::Scope::User => user::delete().await,
+        crate::infra::scope::Scope::System => machine::delete(paths).await,
+        crate::infra::scope::Scope::User => user::delete().await,
     }
 }
 
@@ -35,8 +35,8 @@ pub struct ScopedStore {
 }
 
 impl ScopedStore {
-    pub fn new(paths: &crate::config::Paths, mode: Option<CredentialMode>) -> Result<Self> {
-        if paths.scope == crate::scope::Scope::System {
+    pub fn new(paths: &crate::infra::paths::Paths, mode: Option<CredentialMode>) -> Result<Self> {
+        if paths.scope == crate::infra::scope::Scope::System {
             Ok(Self {
                 machine: Some(machine::MachineStore::new(paths.clone(), mode)?),
             })

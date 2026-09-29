@@ -1,5 +1,5 @@
 //! Local IPC restricted to the selected user or system scope. No TCP port is opened.
-use crate::config::Paths;
+use crate::infra::paths::Paths;
 use anyhow::Result;
 
 #[cfg(unix)]
@@ -38,7 +38,7 @@ pub type Stream = tokio::net::windows::named_pipe::NamedPipeServer;
 pub struct Listener {
     inner: Stream,
     address: String,
-    scope: crate::scope::Scope,
+    scope: crate::infra::scope::Scope,
 }
 #[cfg(windows)]
 impl Listener {
@@ -66,7 +66,7 @@ pub async fn connect(address: &str) -> Result<tokio::net::windows::named_pipe::N
 }
 
 #[cfg(windows)]
-fn pipe(address: &str, first: bool, scope: crate::scope::Scope) -> Result<Stream> {
+fn pipe(address: &str, first: bool, scope: crate::infra::scope::Scope) -> Result<Stream> {
     use std::ptr;
     use windows_sys::Win32::{
         Foundation::LocalFree,
@@ -79,8 +79,8 @@ fn pipe(address: &str, first: bool, scope: crate::scope::Scope) -> Result<Stream
     // User IPC remains restricted to the current user's SID and LocalSystem.
     // PIPE_REJECT_REMOTE_CLIENTS is available on Windows 7.
     let sid = match scope {
-        crate::scope::Scope::User => crate::scope::current_sid()?,
-        crate::scope::Scope::System => "BA".into(),
+        crate::infra::scope::Scope::User => crate::infra::scope::current_sid()?,
+        crate::infra::scope::Scope::System => "BA".into(),
     };
     let sddl: Vec<u16> = format!("D:P(A;;GA;;;{sid})(A;;GA;;;SY)")
         .encode_utf16()

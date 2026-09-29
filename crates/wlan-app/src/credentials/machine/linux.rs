@@ -1,4 +1,4 @@
-use crate::config::Paths;
+use crate::infra::paths::Paths;
 use anyhow::{Context, Result};
 use zeroize::Zeroizing;
 

@@ -1,12 +1,7 @@
 mod app;
-mod cleanup;
-mod config;
-mod control;
 mod credentials;
-mod logging;
-mod scope;
+mod infra;
 mod service;
-mod shutdown;
 mod tui;
 mod wifi;
 

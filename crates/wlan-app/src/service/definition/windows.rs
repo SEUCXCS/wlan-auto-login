@@ -12,7 +12,7 @@ pub(in crate::service) fn windows_system_plan(
     );
     let stop = || Invocation::new("sc.exe", ["stop", "cxxy-wlanlogin"]).optional();
     Ok(Plan {
-        scope: crate::scope::Scope::System,
+        scope: crate::infra::scope::Scope::System,
         manager: Manager::WindowsService,
         content: serde_json::to_string_pretty(
             &serde_json::json!({"managed_by":LABEL,"scope":"system","executable":executable,"version":env!("CARGO_PKG_VERSION")}),
@@ -91,7 +91,7 @@ pub(in crate::service) fn windows_plan(
 "#
     );
     Ok(Plan {
-        scope: crate::scope::Scope::User,
+        scope: crate::infra::scope::Scope::User,
         manager: Manager::TaskScheduler { name: name.clone() },
         executable,
         content,

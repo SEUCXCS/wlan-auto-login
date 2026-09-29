@@ -1,4 +1,4 @@
-use crate::config::{Paths, write_private};
+use crate::infra::{filesystem::write_private, paths::Paths};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;

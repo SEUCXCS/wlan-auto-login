@@ -1,5 +1,5 @@
 //! Login decisions and retry state; no network, filesystem or task operations.
-use crate::control;
+use crate::infra::control;
 use cxxy_wlanlogin_lib::AuthState;
 use std::time::Duration;
 use tokio::time::Instant;

@@ -3,8 +3,8 @@ use super::definition::{Plan, assert_owned, ensure_no_conflicting_install, plan}
 #[cfg(windows)]
 use super::{command::SystemRunner, lifecycle};
 use crate::{
-    config::{Paths, private_dir},
-    control,
+    infra::control,
+    infra::{filesystem::private_dir, paths::Paths},
 };
 use anyhow::{Context, Result};
 use std::{fs, path::Path};
@@ -15,7 +15,7 @@ pub async fn install(paths: &Paths) -> Result<()> {
     #[cfg(target_os = "linux")]
     let plan = {
         let mut plan = plan;
-        if paths.scope == crate::scope::Scope::System {
+        if paths.scope == crate::infra::scope::Scope::System {
             plan.content = plan.content.replace(
                 "# CREDENTIALS\n",
                 &crate::credentials::linux_credential_directive(paths)?,
@@ -34,19 +34,19 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
     let binary_dir = plan.executable.parent().context("安装路径无父目录")?;
     private_dir(binary_dir)?;
     #[cfg(windows)]
-    if paths.scope == crate::scope::Scope::System {
-        crate::config::restrict_windows(binary_dir, true)?;
+    if paths.scope == crate::infra::scope::Scope::System {
+        crate::infra::filesystem::restrict_windows(binary_dir, true)?;
     }
     #[cfg(unix)]
-    if paths.scope == crate::scope::Scope::System {
+    if paths.scope == crate::infra::scope::Scope::System {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(binary_dir, fs::Permissions::from_mode(0o755))?;
     }
     if let Some(parent) = plan.definition.parent() {
         fs::create_dir_all(parent)?;
         #[cfg(windows)]
-        if paths.scope == crate::scope::Scope::System {
-            crate::config::restrict_windows(parent, true)?;
+        if paths.scope == crate::infra::scope::Scope::System {
+            crate::infra::filesystem::restrict_windows(parent, true)?;
         }
     }
     let old_definition = Backup::capture(&plan.definition)?;
@@ -59,7 +59,7 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(
             staged.path(),
-            fs::Permissions::from_mode(if paths.scope == crate::scope::Scope::System {
+            fs::Permissions::from_mode(if paths.scope == crate::infra::scope::Scope::System {
                 0o755
             } else {
                 0o700
@@ -72,7 +72,7 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
             staged.persist(&plan.executable).map_err(|e| e.error)?;
         }
         #[cfg(target_os = "macos")]
-        if paths.scope == crate::scope::Scope::System {
+        if paths.scope == crate::infra::scope::Scope::System {
             crate::credentials::authorize_binary(&plan.executable)?;
         }
         write_definition(&plan.definition, plan.content.as_bytes())?;
@@ -102,7 +102,7 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
             }
         }
         #[cfg(target_os = "macos")]
-        if paths.scope == crate::scope::Scope::System
+        if paths.scope == crate::infra::scope::Scope::System
             && old_executable.existed()
             && let Err(e) = crate::credentials::authorize_binary(&plan.executable)
         {
@@ -129,7 +129,7 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
     tracing::info!(
         "{}服务已安装并启动，{}。",
         paths.scope.label(),
-        if paths.scope == crate::scope::Scope::System {
+        if paths.scope == crate::infra::scope::Scope::System {
             "今后随开机自动运行"
         } else {
             "今后用户登录系统后自动运行"
@@ -208,9 +208,12 @@ mod tests {
     #[tokio::test]
     async fn failed_registration_restores_the_previous_service_and_binary() -> Result<()> {
         let scopes = if cfg!(target_os = "linux") {
-            vec![crate::scope::Scope::User, crate::scope::Scope::System]
+            vec![
+                crate::infra::scope::Scope::User,
+                crate::infra::scope::Scope::System,
+            ]
         } else {
-            vec![crate::scope::Scope::User]
+            vec![crate::infra::scope::Scope::User]
         };
         for scope in scopes {
             let dir = tempfile::tempdir()?;
@@ -227,7 +230,7 @@ mod tests {
             let plan = Plan {
                 scope,
                 manager: Manager::Systemd {
-                    system: scope == crate::scope::Scope::System,
+                    system: scope == crate::infra::scope::Scope::System,
                 },
                 executable: executable.clone(),
                 definition: definition.clone(),
@@ -252,9 +255,12 @@ mod tests {
     #[tokio::test]
     async fn failed_first_install_removes_new_artifacts() -> Result<()> {
         let scopes = if cfg!(target_os = "linux") {
-            vec![crate::scope::Scope::User, crate::scope::Scope::System]
+            vec![
+                crate::infra::scope::Scope::User,
+                crate::infra::scope::Scope::System,
+            ]
         } else {
-            vec![crate::scope::Scope::User]
+            vec![crate::infra::scope::Scope::User]
         };
         for scope in scopes {
             let dir = tempfile::tempdir()?;
@@ -267,7 +273,7 @@ mod tests {
             let plan = Plan {
                 scope,
                 manager: Manager::Systemd {
-                    system: scope == crate::scope::Scope::System,
+                    system: scope == crate::infra::scope::Scope::System,
                 },
                 executable: executable.clone(),
                 definition: definition.clone(),

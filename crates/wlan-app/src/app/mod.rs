@@ -7,7 +7,7 @@ mod logout;
 
 pub(crate) use login::Form;
 
-use crate::{config, logging, scope, service, shutdown};
+use crate::{infra::logging, infra::paths as config, infra::scope, infra::shutdown, service};
 use anyhow::Result;
 use clap::Parser;
 use cxxy_wlanlogin_lib::{Client, PortalConfig};

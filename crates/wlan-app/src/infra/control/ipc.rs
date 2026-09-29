@@ -1,5 +1,8 @@
 use super::transport;
-use crate::config::{Paths, private_dir, write_private};
+use crate::infra::{
+    filesystem::{private_dir, write_private},
+    paths::Paths,
+};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::{fs, time::Duration};

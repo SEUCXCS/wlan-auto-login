@@ -3,9 +3,10 @@ mod policy;
 use policy::Policy;
 
 use crate::{
-    config::{Paths, Preferences},
-    control, credentials,
-    shutdown::{Shutdown, until_stopped},
+    credentials,
+    infra::control,
+    infra::shutdown::{Shutdown, until_stopped},
+    infra::{config::Preferences, paths::Paths},
     wifi::{Monitor, WifiConnection},
 };
 use anyhow::{Context, Result, bail};
@@ -18,7 +19,7 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 fn ensure_scope(paths: &Paths) -> Result<()> {
     // User daemons yield when a system installation exists. A boot service must
     // not inspect user homes (which systemd intentionally hides from it).
-    if paths.scope == crate::scope::Scope::User {
+    if paths.scope == crate::infra::scope::Scope::User {
         crate::service::ensure_no_conflicting_install(paths)?;
     }
     Ok(())
@@ -26,7 +27,20 @@ fn ensure_scope(paths: &Paths) -> Result<()> {
 
 pub async fn run(client: &Client, paths: &Paths) -> Result<()> {
     let mut shutdown = Shutdown::new()?;
-    until_stopped(run_inner(client, paths), shutdown.wait()).await
+    let stop = async {
+        #[cfg(windows)]
+        {
+            tokio::select! {
+                result = shutdown.wait() => result,
+                _ = crate::service::windows::stop_signal() => Ok(()),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            shutdown.wait().await
+        }
+    };
+    until_stopped(run_inner(client, paths), stop).await
 }
 
 async fn run_inner(client: &Client, paths: &Paths) -> Result<()> {

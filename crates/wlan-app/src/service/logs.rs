@@ -6,7 +6,7 @@ use super::{
     definition::{Artifacts, Plan, plan},
     manager::Manager,
 };
-use crate::config::Paths;
+use crate::infra::paths::Paths;
 #[cfg(any(target_os = "linux", test))]
 use anyhow::Context;
 use anyhow::{Result, ensure};
@@ -14,12 +14,8 @@ use anyhow::{Result, ensure};
 use std::io::Write;
 use std::path::PathBuf;
 
-/// Options shared by historical and streaming service-log readers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct LogOptions {
-    pub lines: u32,
-    pub follow: bool,
-}
+pub(crate) use crate::infra::file_log::LogOptions;
+use crate::infra::file_log::file_logs;
 
 #[derive(Debug)]
 enum Source {
@@ -159,13 +155,10 @@ async fn follow_journal(
     }
 }
 
-use file::file_logs;
-mod file;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scope::Scope;
+    use crate::infra::scope::Scope;
     use crate::service::testing::FakeRunner;
     use std::fs;
 

@@ -8,9 +8,9 @@ pub use linux::linux_credential_directive;
 #[cfg(not(target_os = "macos"))]
 use super::decode;
 use super::encode;
-use crate::config::Paths;
 #[cfg(not(target_os = "macos"))]
-use crate::config::{private_dir, write_private};
+use crate::infra::filesystem::{private_dir, write_private};
+use crate::infra::paths::Paths;
 #[cfg(not(target_os = "macos"))]
 use anyhow::Context;
 use anyhow::Result;
@@ -52,10 +52,10 @@ pub async fn delete(paths: &Paths) -> Result<()> {
     {
         // Do not construct MachineStore: its validation intentionally rejects
         // conflicting storage modes, but cleanup must handle both files.
-        crate::cleanup::validate_directory(&paths.secrets)?;
+        crate::infra::cleanup::validate_directory(&paths.secrets)?;
         let mut errors = Vec::new();
         for name in ["login.cred", "login.json"] {
-            if let Err(error) = crate::cleanup::remove_file(&paths.secrets.join(name)) {
+            if let Err(error) = crate::infra::cleanup::remove_file(&paths.secrets.join(name)) {
                 errors.push(format!("{error:#}"));
             }
         }

@@ -29,7 +29,7 @@ pub fn dispatch() -> std::process::ExitCode {
     ];
     // SAFETY: table/name live throughout the blocking dispatcher call.
     if unsafe { StartServiceCtrlDispatcherW(table.as_ptr()) } == 0 {
-        let _ = crate::logging::init(None);
+        let _ = crate::infra::logging::init(None);
         tracing::error!(
             "无法连接 Windows 服务管理器：{}；直接运行请使用 daemon",
             std::io::Error::last_os_error()
@@ -54,7 +54,7 @@ unsafe extern "system" fn service_main(_: u32, _: *mut windows_sys::core::PWSTR)
         let runtime = tokio::runtime::Runtime::new()?;
         report(SERVICE_RUNNING, 0);
         let result = runtime.block_on(crate::app::run_service());
-        runtime.shutdown_timeout(crate::shutdown::RUNTIME_GRACE);
+        runtime.shutdown_timeout(crate::infra::shutdown::RUNTIME_GRACE);
         Ok::<_, anyhow::Error>(result)
     });
     let code = match result {

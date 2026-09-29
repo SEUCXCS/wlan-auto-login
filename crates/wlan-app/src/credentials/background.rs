@@ -11,7 +11,7 @@ pub struct BackgroundReader {
 }
 
 impl BackgroundReader {
-    pub fn new(paths: &crate::config::Paths) -> Result<Self> {
+    pub fn new(paths: &crate::infra::paths::Paths) -> Result<Self> {
         Ok(Self {
             store: Arc::new(ScopedStore::new(paths, None)?),
             pending: None,
@@ -54,7 +54,7 @@ mod tests {
     #[tokio::test]
     async fn timed_out_background_read_is_reused_until_it_finishes() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let mut reader = BackgroundReader::new(&crate::config::Paths::test(dir.path()))?;
+        let mut reader = BackgroundReader::new(&crate::infra::paths::Paths::test(dir.path()))?;
         let release = Arc::new(tokio::sync::Notify::new());
         let wait = release.clone();
         assert!(

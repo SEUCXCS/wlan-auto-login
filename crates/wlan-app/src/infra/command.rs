@@ -6,13 +6,13 @@ use std::{
 };
 
 #[derive(Clone, Debug)]
-pub(super) struct Invocation {
-    pub(super) program: OsString,
-    pub(super) args: Vec<OsString>,
-    pub(super) optional: bool,
+pub(crate) struct Invocation {
+    pub(crate) program: OsString,
+    pub(crate) args: Vec<OsString>,
+    pub(crate) optional: bool,
 }
 impl Invocation {
-    pub(super) fn new(
+    pub(crate) fn new(
         program: impl AsRef<OsStr>,
         args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     ) -> Self {
@@ -22,18 +22,18 @@ impl Invocation {
             optional: false,
         }
     }
-    pub(super) fn optional(mut self) -> Self {
+    pub(crate) fn optional(mut self) -> Self {
         self.optional = true;
         self
     }
-    pub(super) async fn run(&self) -> Result<()> {
+    pub(crate) async fn run(&self) -> Result<()> {
         let result = self.output().await?;
         if !self.optional {
             result.check(self)?;
         }
         Ok(())
     }
-    pub(super) async fn output(&self) -> Result<CommandOutput> {
+    pub(crate) async fn output(&self) -> Result<CommandOutput> {
         let mut command = tokio::process::Command::new(&self.program);
         command.args(&self.args).kill_on_drop(true);
         #[cfg(windows)]
@@ -49,13 +49,13 @@ impl Invocation {
     }
 }
 
-pub(super) struct CommandOutput {
-    pub(super) success: bool,
-    pub(super) stdout: String,
-    pub(super) stderr: String,
+pub(crate) struct CommandOutput {
+    pub(crate) success: bool,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
 }
 impl CommandOutput {
-    pub(super) fn check(&self, command: &Invocation) -> Result<()> {
+    pub(crate) fn check(&self, command: &Invocation) -> Result<()> {
         if !self.success {
             bail!(
                 "{} {:?} 执行失败：{}",
@@ -72,14 +72,14 @@ impl CommandOutput {
     }
 }
 
-pub(super) trait Runner {
+pub(crate) trait Runner {
     fn output(
         &self,
         command: &Invocation,
     ) -> impl std::future::Future<Output = Result<CommandOutput>>;
 }
 
-pub(super) struct SystemRunner;
+pub(crate) struct SystemRunner;
 impl Runner for SystemRunner {
     async fn output(&self, command: &Invocation) -> Result<CommandOutput> {
         command.output().await

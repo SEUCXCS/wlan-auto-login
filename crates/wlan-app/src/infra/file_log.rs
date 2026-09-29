@@ -1,4 +1,10 @@
-use super::LogOptions;
+/// Options shared by historical and streaming service-log readers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LogOptions {
+    pub lines: u32,
+    pub follow: bool,
+}
+
 use anyhow::{Context, Result, ensure};
 use std::io::Write;
 use std::{
@@ -107,7 +113,7 @@ fn tail_start(file: &mut File, end: u64, lines: u32) -> Result<u64> {
     Ok(0)
 }
 
-pub(super) async fn file_logs(path: &Path, options: LogOptions) -> Result<()> {
+pub(crate) async fn file_logs(path: &Path, options: LogOptions) -> Result<()> {
     let mut cursor = Cursor::default();
     let mut output = std::io::stdout();
     match cursor.read(path, options, &mut output)? {

@@ -13,7 +13,7 @@ mod windows;
 pub(super) use windows::{windows_plan, windows_system_plan};
 
 use super::{command::Invocation, manager::Manager};
-use crate::config::Paths;
+use crate::infra::paths::Paths;
 use anyhow::{Context, Result, bail};
 use std::{
     fs,
@@ -23,7 +23,7 @@ use std::{
 pub(super) const LABEL: &str = "org.seucxcs.cxxy-wlanlogin";
 
 pub(super) struct Plan {
-    pub(super) scope: crate::scope::Scope,
+    pub(super) scope: crate::infra::scope::Scope,
     pub(super) manager: Manager,
     pub(super) executable: PathBuf,
     pub(super) definition: PathBuf,
@@ -35,7 +35,7 @@ pub(super) struct Plan {
 }
 
 pub(super) fn plan(paths: &Paths) -> Result<Plan> {
-    if paths.scope == crate::scope::Scope::System {
+    if paths.scope == crate::infra::scope::Scope::System {
         return system_plan(paths);
     }
     let dirs = directories::ProjectDirs::from("org", "seucxcs", "cxxy-wlanlogin")
@@ -71,7 +71,7 @@ pub(super) fn plan(paths: &Paths) -> Result<Plan> {
     }
     #[cfg(target_os = "windows")]
     {
-        let sid = crate::scope::current_sid()?;
+        let sid = crate::infra::scope::current_sid()?;
         windows_plan(executable, paths.config.join("daemon-task.xml"), &sid)
     }
 }
@@ -98,15 +98,16 @@ fn system_plan(paths: &Paths) -> Result<Plan> {
         use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramData, FOLDERID_ProgramFiles};
         let _ = paths;
         windows_system_plan(
-            crate::config::known_folder(&FOLDERID_ProgramFiles)?
+            crate::infra::paths::known_folder(&FOLDERID_ProgramFiles)?
                 .join("cxxy-wlanlogin/cxxy-wlanlogin-daemon.exe"),
-            crate::config::known_folder(&FOLDERID_ProgramData)?.join("cxxy-wlanlogin/service.json"),
+            crate::infra::paths::known_folder(&FOLDERID_ProgramData)?
+                .join("cxxy-wlanlogin/service.json"),
         )
     }
 }
 
 pub(crate) fn ensure_no_conflicting_install(paths: &Paths) -> Result<()> {
-    use crate::scope::Scope;
+    use crate::infra::scope::Scope;
     let other = match paths.scope {
         Scope::User => system_plan(&Paths::new(Scope::System)?)?.definition,
         Scope::System => {
@@ -267,7 +268,7 @@ mod tests {
         );
         assert!(matches!(windows.manager, Manager::WindowsService));
         for plan in [linux, macos, windows] {
-            assert_eq!(plan.scope, crate::scope::Scope::System);
+            assert_eq!(plan.scope, crate::infra::scope::Scope::System);
             assert!(plan.content.contains(LABEL));
             assert!(!plan.content.contains("user_password"));
         }

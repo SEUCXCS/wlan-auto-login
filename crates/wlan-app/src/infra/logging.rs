@@ -1,4 +1,7 @@
-use crate::config::{Paths, private_dir, write_private};
+use crate::infra::{
+    filesystem::{private_dir, write_private},
+    paths::Paths,
+};
 use anyhow::Result;
 use std::fs;
 use tracing::{Event, Subscriber};
