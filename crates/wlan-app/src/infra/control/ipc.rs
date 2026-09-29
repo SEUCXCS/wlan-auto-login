@@ -159,14 +159,17 @@ pub async fn managed_pid(paths: &Paths) -> Option<u32> {
 }
 #[cfg(target_os = "macos")]
 pub async fn stop_managed(paths: &Paths) -> Result<()> {
-    for _ in 0..250 {
-        managed_command(paths, b'm').await;
-        if super::lock::managed_lock(paths).is_ok() {
-            return Ok(());
+    tokio::time::timeout(Duration::from_secs(25), async {
+        loop {
+            managed_command(paths, b'm').await;
+            if super::lock::managed_lock(paths).is_ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    crate::infra::error::bail!(Message::DaemonHasNotExitedStopTheRunningDaemon)
+    })
+    .await
+    .map_err(|_| crate::infra::error::error!(Message::DaemonHasNotExitedStopTheRunningDaemon))
 }
 
 #[cfg(test)]

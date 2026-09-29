@@ -64,7 +64,11 @@ unsafe extern "C" {
 }
 
 /// Authenticate the live socket peer using its kernel audit token, never a peer-supplied PID.
-pub fn verify_peer(stream: &tokio::net::UnixStream, expected_uid: u32, app: &Path) -> Result<()> {
+pub async fn verify_peer(
+    stream: &tokio::net::UnixStream,
+    expected_uid: u32,
+    app: &Path,
+) -> Result<()> {
     ensure!(
         stream.peer_cred()?.uid() == expected_uid,
         Message::MacosHostIdentity
@@ -84,7 +88,25 @@ pub fn verify_peer(stream: &tokio::net::UnixStream, expected_uid: u32, app: &Pat
         status == 0 && length as usize == token.len(),
         Message::MacosHostIdentity
     );
-    let data = CFData::from_buffer(&token);
+    // Keep at most one native signing check in flight. A timed-out securityd
+    // call cannot create an unbounded queue of blocking workers.
+    static CHECK: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    let permit = CHECK.try_acquire().context(Message::MacosHostUnavailable)?;
+    let app = app.to_owned();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            verify_token(&token, &app)
+        }),
+    )
+    .await
+    .context(Message::MacosHostUnavailable)?
+    .context(Message::MacosHostIdentity)?
+}
+
+fn verify_token(token: &[u8], app: &Path) -> Result<()> {
+    let data = CFData::from_buffer(token);
     let mut attributes = GuestAttributes::new();
     attributes.set_audit_token(data.as_concrete_TypeRef());
     let peer = SecCode::copy_guest_with_attribues(None, &attributes, Flags::NONE)?;

@@ -19,3 +19,19 @@ pub const LAUNCHD_PLIST: &str = "dev.cxcs.tools.wlanlogin.plist";
 pub const SYSTEM_CREDENTIAL_SERVICE: &str = "dev.cxcs.tools.wlanlogin.system";
 #[cfg(target_os = "macos")]
 pub const NETWORK_QUEUE: &str = "dev.cxcs.tools.wlanlogin.network";
+
+// Shared with xtask, including when the app itself is built for another OS.
+#[allow(dead_code)]
+pub const MACOS_BUNDLE_DIRECTORIES: &[&str] = &[
+    "Contents",
+    "Contents/MacOS",
+    "Contents/Resources",
+    "Contents/_CodeSignature",
+];
+#[allow(dead_code)]
+pub const MACOS_BUNDLE_FILES: &[&str] = &[
+    "Contents/Info.plist",
+    "Contents/PkgInfo",
+    "Contents/MacOS/wlanlogin",
+    "Contents/_CodeSignature/CodeResources",
+];

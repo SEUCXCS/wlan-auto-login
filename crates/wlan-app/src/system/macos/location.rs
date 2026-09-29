@@ -143,8 +143,23 @@ impl Location {
                     manager.setDelegate(None);
                 });
             })
-            .context("Failed to start Core Location run loop")?;
+            .context(Message::LocationRunLoopFailed)?;
         Ok(Self { state, status })
+    }
+
+    pub async fn ready(&self) -> Result<()> {
+        let mut receiver = self.status.clone();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while *receiver.borrow_and_update() == Status::Unknown {
+                receiver
+                    .changed()
+                    .await
+                    .context(Message::LocationManagerStopped)?;
+            }
+            Ok::<_, crate::infra::error::Error>(())
+        })
+        .await
+        .context(Message::MacosHostUnavailable)?
     }
 
     pub fn status(&self) -> Status {
@@ -159,7 +174,7 @@ impl Location {
                 receiver
                     .changed()
                     .await
-                    .context("Location manager stopped")?;
+                    .context(Message::LocationManagerStopped)?;
             }
             if *receiver.borrow() == Status::NotDetermined {
                 activate();
@@ -168,7 +183,7 @@ impl Location {
                     receiver
                         .changed()
                         .await
-                        .context("Location manager stopped")?;
+                        .context(Message::LocationManagerStopped)?;
                     if *receiver.borrow_and_update() != Status::NotDetermined {
                         break;
                     }
@@ -177,7 +192,7 @@ impl Location {
             Ok(*receiver.borrow())
         })
         .await
-        .context("Location authorization timed out; retry after responding to the system dialog")?
+        .context(Message::LocationAuthorizationTimedOut)?
     }
 }
 

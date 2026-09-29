@@ -53,7 +53,7 @@ pub async fn wait_ready(paths: &Paths, plan: &Plan) -> Result<()> {
         }
     })
     .await
-    .context("Service registration succeeded but the managed application did not become ready")??;
+    .context(Message::ManagedAppNotReady)??;
     // User service startup creates its signed host before publishing control IPC.
     // A root service is ready even before GUI login: SSID must then wait for a user.
     ensure!(plan.executable.is_file(), Message::InstallationIncomplete);

@@ -4,7 +4,7 @@ use crate::infra::{
     cleanup,
     command::{Invocation, SystemRunner},
     control,
-    error::{Context, Result},
+    error::{Context, Message, Result},
     paths::{self, Paths},
     scope::Scope,
 };
@@ -15,12 +15,19 @@ use crate::system::{
 use std::{fs, path::Path};
 
 pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
+    crate::infra::error::ensure!(
+        paths.scope == plan.scope,
+        crate::infra::error::Message::ServicePlanDoesNotMatchTheSelected
+    );
+    if paths.scope == Scope::System {
+        prepare_system_directories()?;
+    }
     let _lock = control::service_lock(paths)?;
     crate::system::shared::services::artifacts::assert_owned(&plan.definition)?;
     cleanup::validate_directory(
         plan.definition
             .parent()
-            .context("Service definition has no parent")?,
+            .context(Message::ServiceDefinitionHasNoParentDirectory)?,
     )?;
     let source = bundle::source()?;
     payload::validate(&source).await?;
@@ -32,7 +39,7 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
     }
     let legacy = destination
         .parent()
-        .context("Bundle parent missing")?
+        .context(Message::InstallationPathHasNoParentDirectory)?
         .join("bin")
         .join(crate::infra::identity::DAEMON_BINARY);
     let previous = match fs::read(&plan.definition) {
@@ -51,7 +58,7 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
     fs::create_dir_all(
         plan.definition
             .parent()
-            .context("Service definition has no parent")?,
+            .context(Message::ServiceDefinitionHasNoParentDirectory)?,
     )?;
     let state = plan.manager.query(&SystemRunner).await?;
     stop(paths, &plan).await?;
@@ -70,7 +77,7 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
         if paths.scope == Scope::System {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(
-                destination.parent().context("Bundle parent missing")?,
+                destination.parent().context(Message::InstallationPathHasNoParentDirectory)?,
                 fs::Permissions::from_mode(0o755),
             )?;
         }
@@ -147,23 +154,22 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
         }
         if !failures.is_empty() {
             let backup = transaction.retain();
-            return Err(error).with_context(|| {
-                format!(
-                    "Installation rollback incomplete: {}; recovery files: {}",
-                    failures.join("; "),
-                    backup.display()
-                )
+            return Err(error).context(Message::BundleRollbackIncomplete {
+                failures: failures.join("; "),
+                backup: backup.display().to_string(),
             });
         }
-        return Err(error).context(
-            "Installation failed; previous bundle, definition and credential access restored",
-        );
+        return Err(error).context(Message::BundleInstallationRestored);
     }
     transaction.commit();
     // Remove only the same-ID legacy loose executable identified by the old plist.
     if legacy_owned {
         cleanup::remove_file(&legacy)?;
-        cleanup::prune_empty_directories(legacy.parent().context("Legacy parent missing")?)?;
+        cleanup::prune_empty_directories(
+            legacy
+                .parent()
+                .context(Message::InstallationPathHasNoParentDirectory)?,
+        )?;
     }
     tracing::info!(
         scope = paths.scope.label(),
@@ -179,7 +185,7 @@ async fn authorize(scope: Scope, executable: &Path) -> Result<()> {
         tokio::task::spawn_blocking(move || access::authorize_binary(scope, &executable)),
     )
     .await
-    .context("Timed out authorizing installed Keychain identity")??
+    .context(Message::KeychainAuthorizationTimedOut)??
 }
 async fn verify_credentials(plan: &Plan) -> Result<()> {
     Invocation::new(
@@ -195,7 +201,7 @@ async fn verify_credentials(plan: &Plan) -> Result<()> {
     )
     .run()
     .await
-    .context("Installed application cannot read its saved credentials silently")
+    .context(Message::InstalledCredentialCheckFailed)
 }
 async fn stop(paths: &Paths, plan: &Plan) -> Result<()> {
     let state = plan.manager.query(&SystemRunner).await?;
@@ -205,4 +211,34 @@ async fn stop(paths: &Paths, plan: &Plan) -> Result<()> {
     control::stop(paths).await;
     control::wait_stopped(paths).await?;
     control::stop_managed(paths).await
+}
+
+fn prepare_system_directories() -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let application = paths::app_dir("/Library/Application Support");
+    let shared = application
+        .parent()
+        .context(Message::InstallationPathHasNoParentDirectory)?;
+    cleanup::validate_directory(&application)?;
+    if !shared.try_exists()? {
+        fs::create_dir(shared)?;
+        fs::set_permissions(shared, fs::Permissions::from_mode(0o755))?;
+    }
+    let metadata = fs::metadata(shared)?;
+    crate::infra::error::ensure!(
+        metadata.uid() == 0 && metadata.mode() & 0o022 == 0 && metadata.mode() & 0o005 == 0o005,
+        Message::SystemApplicationDirectoryPermissions {
+            path: shared.display().to_string()
+        }
+    );
+    fs::create_dir_all(&application)?;
+    let metadata = fs::metadata(&application)?;
+    crate::infra::error::ensure!(
+        metadata.uid() == 0 && metadata.mode() & 0o022 == 0,
+        Message::SystemApplicationDirectoryPermissions {
+            path: application.display().to_string()
+        }
+    );
+    fs::set_permissions(application, fs::Permissions::from_mode(0o755))?;
+    Ok(())
 }

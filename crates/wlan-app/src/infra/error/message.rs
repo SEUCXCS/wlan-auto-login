@@ -2,6 +2,69 @@
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)] // Some messages are used only by other compilation targets.
 pub enum Message {
+    #[error("Failed to configure Keychain interaction: {status}")]
+    KeychainInteractionFailed { status: i32 },
+    #[error("Failed to delete Keychain credential: {status}")]
+    KeychainDeleteFailed { status: i32 },
+    #[error("Failed to establish trusted application identity: {status}")]
+    KeychainTrustedApplicationFailed { status: i32 },
+    #[error("Failed to create credential access control: {status}")]
+    KeychainAccessCreateFailed { status: i32 },
+    #[error("Failed to authorize the installed application to read credentials: {status}")]
+    KeychainAuthorizeFailed { status: i32 },
+    #[error("Unmanaged or redirected bundle member retained: {path}")]
+    BundleUnmanagedMember { path: String },
+    #[error("Unexpected bundle identity: {key}")]
+    UnexpectedBundleIdentity { key: String },
+    #[error("Installation rollback incomplete: {failures}; recovery files: {backup}")]
+    BundleRollbackIncomplete { failures: String, backup: String },
+    #[error(
+        "System application directory must be owned by root, readable and traversable by users, and not writable by them: {path}"
+    )]
+    SystemApplicationDirectoryPermissions { path: String },
+
+    #[error("Keychain operation lock is poisoned")]
+    KeychainOperationLockPoisoned,
+    #[error("Failed to open user Keychain")]
+    FailedToOpenUserKeychain,
+    #[error(
+        "Saved credentials are inaccessible; unlock Keychain or allow WLAN Login during a foreground operation"
+    )]
+    KeychainCredentialInaccessible,
+    #[error("Cannot update the existing credential; the original item has been retained")]
+    KeychainUpdateRetainedCredential,
+    #[error("Failed to save Keychain credentials")]
+    KeychainSaveFailed,
+    #[error("Failed to access credential for deletion; item retained")]
+    KeychainDeleteAccessFailed,
+    #[error("Failed to start Core Location run loop")]
+    LocationRunLoopFailed,
+    #[error("Location manager stopped")]
+    LocationManagerStopped,
+    #[error("Location authorization timed out; retry after responding to the system dialog")]
+    LocationAuthorizationTimedOut,
+    #[error("Wi-Fi host is already running")]
+    MacosHostAlreadyRunning,
+    #[error("Native Wi-Fi query timed out")]
+    NativeWifiQueryTimedOut,
+    #[error("Managed Wi-Fi hosts stop with their service")]
+    ManagedHostStopsWithService,
+    #[error("Wi-Fi helper did not stop; bundle retained")]
+    MacosHostStopFailed,
+    #[error("Bundle member escaped its root")]
+    BundleMemberOutsideRoot,
+    #[error("Non-UTF-8 bundle member")]
+    BundleMemberNotUtf8,
+    #[error("Bundle executable is missing")]
+    BundleExecutableMissing,
+    #[error("Service registration succeeded but the managed application did not become ready")]
+    ManagedAppNotReady,
+    #[error("Timed out authorizing installed Keychain identity")]
+    KeychainAuthorizationTimedOut,
+    #[error("Installed application cannot read its saved credentials silently")]
+    InstalledCredentialCheckFailed,
+    #[error("Installation failed; previous bundle, definition and credential access restored")]
+    BundleInstallationRestored,
     #[error(
         "Location access is unavailable ({state}); allow WLAN Login in System Settings > Privacy & Security > Location Services"
     )]

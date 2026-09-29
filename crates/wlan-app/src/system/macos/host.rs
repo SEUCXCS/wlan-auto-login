@@ -16,7 +16,7 @@ use std::{
     fs::{self, File, OpenOptions},
     os::unix::{
         ffi::OsStrExt,
-        fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
     sync::{
@@ -114,17 +114,26 @@ impl Host {
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
             .open(paths.runtime.join(format!("wifi-{}.lock", role.name())))?;
-        fs2::FileExt::try_lock_exclusive(&lock).context("Wi-Fi host is already running")?;
+        fs2::FileExt::try_lock_exclusive(&lock).context(Message::MacosHostAlreadyRunning)?;
         let path = socket(&paths.runtime, role);
-        match fs::remove_file(&path) {
-            Ok(()) => {}
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_socket() => fs::remove_file(&path)?,
+            Ok(_) => {
+                return Err(crate::infra::error::error!(
+                    Message::ControlSocketPathIsOccupiedByAnotherFile
+                ));
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-        let listener = UnixListener::bind(&path)?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
         let location = Arc::new(Location::new()?);
+        location.ready().await?;
         let wifi = Arc::new(native::Monitor::new().await?);
+        let listener = UnixListener::bind(&path)?;
+        if let Err(error) = fs::set_permissions(&path, fs::Permissions::from_mode(0o600)) {
+            let _ = fs::remove_file(&path);
+            return Err(error.into());
+        }
         let task = tokio::spawn(serve(listener, role, location, wifi));
         Ok(Self {
             task,
@@ -188,7 +197,7 @@ async fn serve(
                             Operation::Snapshot => {
                                 let result = async {
                                     response.location.check()?;
-                                    let snapshot = tokio::time::timeout(Duration::from_secs(4), wifi.snapshot()).await.context("Native Wi-Fi query timed out")??;
+                                    let snapshot = tokio::time::timeout(Duration::from_secs(4), wifi.snapshot()).await.context(Message::NativeWifiQueryTimedOut)??;
                                     location.status().check()?;
                                     Ok::<_, crate::infra::error::Error>(snapshot)
                                 }.await;
@@ -198,7 +207,7 @@ async fn serve(
                                 }
                             },
                             Operation::Stop => {
-                                ensure!(role != Role::Service, "Managed Wi-Fi hosts stop with their service");
+                                ensure!(role != Role::Service, Message::ManagedHostStopsWithService);
                                 ensure!(role != Role::System || uid == 0, Message::MacosHostIdentity);
                             },
                         }
@@ -344,7 +353,7 @@ pub async fn stop_helpers(selected: Scope, app: &Path) -> Result<()> {
         }
         Err(e) => return Err(e.into()),
     };
-    bundle::verify_peer(&stream, session.uid, app)?;
+    bundle::verify_peer(&stream, session.uid, app).await?;
     tokio::time::timeout(Duration::from_secs(5), async {
         let id = REQUEST.fetch_add(1, Ordering::Relaxed);
         write_frame(
@@ -377,7 +386,7 @@ pub async fn stop_helpers(selected: Scope, app: &Path) -> Result<()> {
         }
     })
     .await
-    .context("Wi-Fi helper did not stop; bundle retained")?
+    .context(Message::MacosHostStopFailed)?
 }
 
 async fn connect(session: &Session, scope: Scope, app: &Path) -> Result<Option<UnixStream>> {
@@ -389,7 +398,7 @@ async fn connect(session: &Session, scope: Scope, app: &Path) -> Result<Option<U
     for role in roles {
         match UnixStream::connect(socket(&session.runtime, *role)).await {
             Ok(stream) => {
-                bundle::verify_peer(&stream, session.uid, app)?;
+                bundle::verify_peer(&stream, session.uid, app).await?;
                 return Ok(Some(stream));
             }
             Err(error)

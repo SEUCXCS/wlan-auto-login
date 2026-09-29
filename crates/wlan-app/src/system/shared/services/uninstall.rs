@@ -63,8 +63,18 @@ async fn uninstall_plan(
     let service_lock = control::service_lock(paths)?;
     // Query registrations even when the definition was manually removed.
     let state = plan.manager.query(runner).await?;
-    if state.running || state.pending {
+    let must_stop = state.running || state.pending;
+    #[cfg(target_os = "macos")]
+    let must_stop = must_stop || (bundle.is_some() && state.registered);
+    if must_stop {
         for command in &plan.stop {
+            #[cfg(target_os = "macos")]
+            if bundle.is_some() {
+                let mut required = command.clone();
+                required.optional = false;
+                execute(runner, &required).await?;
+                continue;
+            }
             execute(runner, command).await?;
         }
         wait_for_manager(&plan.manager, runner, false).await?;

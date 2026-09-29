@@ -41,15 +41,13 @@ fn interactive(background: bool) -> bool {
 fn with_interaction<T>(allowed: bool, operation: impl FnOnce() -> Result<T>) -> Result<T> {
     let _lock = OPERATIONS
         .lock()
-        .map_err(|_| crate::infra::error::error!("Keychain operation lock is poisoned"))?;
+        .map_err(|_| crate::infra::error::error!(Message::KeychainOperationLockPoisoned))?;
     unsafe {
         let code =
             security_framework_sys::keychain::SecKeychainSetUserInteractionAllowed(allowed.into());
         ensure!(
             code == 0,
-            Message::FailedToDisableBackgroundKeychainPromptsStatus {
-                status: code.to_string()
-            }
+            Message::KeychainInteractionFailed { status: code }
         );
     }
     struct Disable;
@@ -67,7 +65,7 @@ fn with_interaction<T>(allowed: bool, operation: impl FnOnce() -> Result<T>) -> 
 fn keychain(scope: Scope) -> Result<SecKeychain> {
     match scope {
         Scope::User => SecKeychain::default_for_domain(SecPreferencesDomain::User)
-            .context("Failed to open user Keychain"),
+            .context(Message::FailedToOpenUserKeychain),
         Scope::System => SecKeychain::open("/Library/Keychains/System.keychain")
             .context(Message::FailedToOpenSystemKeychain),
     }
@@ -82,7 +80,7 @@ fn load_native(scope: Scope) -> Result<Option<Credentials>> {
     match keychain(scope)?.find_generic_password(service(scope), CREDENTIAL_ENTRY) {
         Ok((password, _)) => decode(std::str::from_utf8(password.as_ref())?).map(Some),
         Err(error) if error.code() == -25300 => Ok(None),
-        Err(error) => Err(error).context("Saved credentials are inaccessible; unlock Keychain or allow WLAN Login during a foreground operation"),
+        Err(error) => Err(error).context(Message::KeychainCredentialInaccessible),
     }
 }
 pub async fn load(scope: Scope, background: bool) -> Result<Option<Credentials>> {
@@ -99,13 +97,13 @@ pub async fn save(scope: Scope, credentials: Credentials) -> Result<()> {
             let missing = match chain.find_generic_password(service(scope), CREDENTIAL_ENTRY) {
                 Ok(_) => false,
                 Err(error) if error.code() == -25300 => true,
-                Err(error) => return Err(error).context(
-                    "Cannot update the existing credential; the original item has been retained",
-                ),
+                Err(error) => {
+                    return Err(error).context(Message::KeychainUpdateRetainedCredential);
+                }
             };
             chain
                 .set_generic_password(service(scope), CREDENTIAL_ENTRY, text.as_bytes())
-                .context("Failed to save Keychain credentials")?;
+                .context(Message::KeychainSaveFailed)?;
             // Updating a password preserves its ACL. Installation handles upgrades.
             let installed = match scope {
                 Scope::User => crate::infra::paths::user_daemon_executable()?,
@@ -127,8 +125,7 @@ pub async fn delete(scope: Scope) -> Result<()> {
                     Ok(found) => found,
                     Err(error) if error.code() == -25300 => return Ok(()),
                     Err(error) => {
-                        return Err(error)
-                            .context("Failed to access credential for deletion; item retained");
+                        return Err(error).context(Message::KeychainDeleteAccessFailed);
                     }
                 };
             let code = unsafe {
@@ -138,7 +135,7 @@ pub async fn delete(scope: Scope) -> Result<()> {
             };
             ensure!(
                 code == 0 || code == -25300,
-                "Failed to delete Keychain credential: {code}"
+                Message::KeychainDeleteFailed { status: code }
             );
             Ok(())
         })
@@ -175,7 +172,7 @@ fn authorize_native(scope: Scope, binary: &Path) -> Result<()> {
             let code = SecTrustedApplicationCreateFromPath(path.as_ptr(), &mut application);
             ensure!(
                 code == 0 && !application.is_null(),
-                "Failed to establish trusted application identity: {code}"
+                Message::KeychainTrustedApplicationFailed { status: code }
             );
             applications.push(CFType::wrap_under_create_rule(application));
         }
@@ -191,15 +188,12 @@ fn authorize_native(scope: Scope, binary: &Path) -> Result<()> {
         );
         ensure!(
             code == 0 && !access.is_null(),
-            "Failed to create credential access control: {code}"
+            Message::KeychainAccessCreateFailed { status: code }
         );
         let owned = CFType::wrap_under_create_rule(access.cast());
         let code = SecKeychainItemSetAccess(item.as_concrete_TypeRef(), access);
         drop(owned);
-        ensure!(
-            code == 0,
-            "Failed to authorize the installed application to read credentials: {code}"
-        );
+        ensure!(code == 0, Message::KeychainAuthorizeFailed { status: code });
     }
     Ok(())
 }

@@ -1,5 +1,8 @@
 use super::access;
-use crate::infra::{error::Result, scope::Scope};
+use crate::infra::{
+    error::{Message, Result},
+    scope::Scope,
+};
 use wlanlogin_lib::Credentials;
 pub async fn load() -> Result<Option<Credentials>> {
     access::load(Scope::User, false).await
@@ -18,7 +21,7 @@ pub fn prepare_daemon() -> Result<()> {
     let code = unsafe { security_framework_sys::keychain::SecKeychainSetUserInteractionAllowed(0) };
     crate::infra::error::ensure!(
         code == 0,
-        "Failed to disable background Keychain prompts: {code}"
+        Message::KeychainInteractionFailed { status: code }
     );
     Ok(())
 }

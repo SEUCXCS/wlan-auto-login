@@ -2,7 +2,7 @@
 use crate::infra::command::Invocation;
 use crate::infra::{
     cleanup,
-    error::{Context, Result, ensure},
+    error::{Context, Message, Result, ensure},
     identity::APP_ID,
 };
 use crate::system::macos::bundle;
@@ -11,13 +11,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const FILES: &[&str] = &[
-    "Contents/Info.plist",
-    "Contents/PkgInfo",
-    "Contents/MacOS/wlanlogin",
-    "Contents/_CodeSignature/CodeResources",
-];
-const DIRECTORIES: &[&str] = &["Contents", "Contents/MacOS", "Contents/_CodeSignature"];
+use crate::infra::identity::{
+    MACOS_BUNDLE_DIRECTORIES as DIRECTORIES, MACOS_BUNDLE_FILES as FILES,
+};
 
 pub fn inspect(app: &Path) -> Result<()> {
     cleanup::validate_directory(app)?;
@@ -27,28 +23,31 @@ pub fn inspect(app: &Path) -> Result<()> {
             let path = entry.path();
             let relative = path
                 .strip_prefix(root)
-                .context("Bundle member escaped its root")?
+                .context(Message::BundleMemberOutsideRoot)?
                 .to_str()
-                .context("Non-UTF-8 bundle member")?
+                .context(Message::BundleMemberNotUtf8)?
                 .to_owned();
             let kind = entry.file_type()?;
             ensure!(
                 !kind.is_symlink(),
-                "Refusing a symlink in bundle: {}",
-                path.display()
+                Message::BundleUnmanagedMember {
+                    path: path.display().to_string()
+                }
             );
             if kind.is_dir() {
                 ensure!(
                     DIRECTORIES.contains(&relative.as_str()),
-                    "Unmanaged bundle directory retained: {}",
-                    path.display()
+                    Message::BundleUnmanagedMember {
+                        path: path.display().to_string()
+                    }
                 );
                 visit(root, &path)?;
             } else {
                 ensure!(
                     kind.is_file() && FILES.contains(&relative.as_str()),
-                    "Unmanaged bundle file retained: {}",
-                    path.display()
+                    Message::BundleUnmanagedMember {
+                        path: path.display().to_string()
+                    }
                 );
             }
         }
@@ -61,7 +60,7 @@ pub async fn validate(app: &Path) -> Result<()> {
     inspect(app)?;
     ensure!(
         bundle::executable(app).is_file(),
-        "Bundle executable is missing"
+        Message::BundleExecutableMissing
     );
     let plist = app.join("Contents/Info.plist");
     for (key, expected) in [
@@ -83,7 +82,9 @@ pub async fn validate(app: &Path) -> Result<()> {
         output.check(&cmd)?;
         ensure!(
             output.stdout.trim() == expected,
-            "Unexpected bundle identity: {key}"
+            Message::UnexpectedBundleIdentity {
+                key: key.to_string()
+            }
         );
     }
     Invocation::new(
@@ -108,6 +109,16 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
             copy_tree(&entry.path(), &to)?;
         } else {
             fs::copy(entry.path(), &to)?;
+            fs::set_permissions(
+                &to,
+                fs::Permissions::from_mode(
+                    if entry.file_name() == crate::infra::identity::APP_NAME {
+                        0o755
+                    } else {
+                        0o644
+                    },
+                ),
+            )?;
         }
     }
     use std::os::unix::fs::PermissionsExt;
@@ -128,7 +139,7 @@ impl Payload {
         inspect(source)?;
         let parent = destination
             .parent()
-            .context("Bundle destination has no parent")?;
+            .context(Message::InstallationPathHasNoParentDirectory)?;
         cleanup::validate_directory(parent)?;
         fs::create_dir_all(parent)?;
         if destination.try_exists()? {
@@ -230,7 +241,9 @@ pub fn remove(app: &Path) -> Result<()> {
 mod tests {
     use super::*;
     fn fixture(app: &Path, value: &str) -> Result<()> {
-        fs::create_dir_all(app.join("Contents/MacOS"))?;
+        for directory in DIRECTORIES {
+            fs::create_dir_all(app.join(directory))?;
+        }
         fs::write(bundle::executable(app), value)?;
         fs::write(app.join("Contents/Info.plist"), value)?;
         Ok(())
@@ -276,6 +289,22 @@ mod tests {
         std::os::unix::fs::symlink(&outside, bundle::executable(&app))?;
         assert!(remove(&app).is_err());
         assert_eq!(fs::read_to_string(outside)?, "preserve");
+        Ok(())
+    }
+    #[test]
+    fn complete_bundle_cleanup_is_repeatable_and_preserves_sibling_tools() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let application = root.path().join("cxcs-tools/wlanlogin");
+        let app = application.join("wlanlogin.app");
+        fixture(&app, "old")?;
+        let sibling = root.path().join("cxcs-tools/another-tool");
+        fs::create_dir_all(&sibling)?;
+        fs::write(sibling.join("settings"), "preserve")?;
+        remove(&app)?;
+        remove(&app)?;
+        cleanup::prune_empty_directories(&application)?;
+        assert!(root.path().join("cxcs-tools").exists());
+        assert_eq!(fs::read_to_string(sibling.join("settings"))?, "preserve");
         Ok(())
     }
     #[test]

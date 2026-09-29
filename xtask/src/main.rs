@@ -86,8 +86,9 @@ fn bundle(options: &Bundle) -> Result<()> {
     let app_name = format!("{}.app", identity::APP_NAME);
     let app = staging.path().join(&app_name);
     let contents = app.join("Contents");
-    fs::create_dir_all(contents.join("MacOS"))?;
-    fs::create_dir_all(contents.join("Resources"))?;
+    for directory in identity::MACOS_BUNDLE_DIRECTORIES {
+        fs::create_dir_all(app.join(directory))?;
+    }
     fs::copy(&binary, contents.join("MacOS").join(identity::APP_NAME))?;
     fs::write(contents.join("Info.plist"), plist())?;
     fs::write(contents.join("PkgInfo"), b"APPL????")?;
