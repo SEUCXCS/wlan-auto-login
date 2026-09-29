@@ -495,55 +495,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wlanlogin-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "core-foundation 0.10.1",
- "crossterm",
- "wlanlogin-lib",
- "dbus-secret-service",
- "directories",
- "dispatch2",
- "fs2",
- "futures-util",
- "getrandom 0.4.3",
- "keyring",
- "libc",
- "objc2",
- "objc2-core-foundation",
- "objc2-core-wlan",
- "objc2-foundation",
- "objc2-system-configuration",
- "ratatui",
- "security-framework 3.7.0",
- "security-framework-sys",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "windows-sys 0.61.2",
- "zbus",
- "zeroize",
-]
-
-[[package]]
-name = "wlanlogin-lib"
-version = "0.1.0"
-dependencies = [
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "zeroize",
-]
-
-[[package]]
 name = "darling"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2884,6 +2835,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "wlanlogin-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "core-foundation 0.10.1",
+ "crossterm",
+ "dbus-secret-service",
+ "directories",
+ "dispatch2",
+ "fs2",
+ "futures-util",
+ "getrandom 0.4.3",
+ "keyring",
+ "libc",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-core-wlan",
+ "objc2-foundation",
+ "objc2-system-configuration",
+ "ratatui",
+ "security-framework 3.7.0",
+ "security-framework-sys",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "windows-sys 0.61.2",
+ "wlanlogin-lib",
+ "zbus",
+ "zeroize",
+]
+
+[[package]]
+name = "wlanlogin-lib"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2897,6 +2897,16 @@ checksum = "ec1cdab258fb55c0da61328dc52c8764709b249011b2cad0454c72f0bf10a1f6"
 dependencies = [
  "libc",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

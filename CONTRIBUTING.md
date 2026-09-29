@@ -18,6 +18,8 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 ## 模块职责
 
+`xtask/` 提供 `cargo xtask bundle macos`，负责调用 Cargo 构建、生成 plist、组装与验证签名应用包。名称复用 `infra/identity.rs`，版本来自 workspace；plist 模板位于 `packaging/macos/`。普通编译使用 Cargo。维护打包流程时验证参数覆盖环境变量、实际构建产物路径以及失败保留旧 bundle 的行为。
+
 `main.rs` 只调用 `app::run()`。不要向入口增加认证、服务管理或平台分支。
 
 | 路径（相对 `crates/wlan-app/src`） | 维护范围 |

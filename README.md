@@ -35,6 +35,19 @@ cargo build --release --locked --workspace
 
 生成的程序为 `target/release/wlanlogin`，Windows 下带 `.exe` 后缀。将程序放入 `PATH`，即可使用以下命令。
 
+macOS 应用打包使用 xtask（需要 macOS 和 Xcode Command Line Tools）：
+
+```sh
+cargo xtask bundle macos
+cargo xtask bundle macos --codesign-identity wlanlogin-dev
+CODESIGN_IDENTITY=wlanlogin-dev cargo xtask bundle macos
+cargo xtask bundle macos --profile dev --target aarch64-apple-darwin
+```
+
+`bundle macos` 自动编译 `wlanlogin-cli` 的 `wlanlogin` 程序，默认 release，产物在相应构建目录的 `bundle/wlanlogin.app`。支持 `--profile`、`--target`、`--target-dir` 和 `CARGO_TARGET_DIR`；普通编译继续使用 `cargo build`，没有 `xtask build` 命令。
+
+签名身份优先使用 `--codesign-identity`，其次为 `CODESIGN_IDENTITY`，默认 `-`（ad-hoc）。显式使用 `--codesign-identity=-` 可覆盖环境变量。ad-hoc 签名随构建变化，位置和钥匙串授权可能需要重新确认。可先在“钥匙串访问”的证书助理中创建用途为 Code Signing 的固定开发证书，例如 `wlanlogin-dev`；发布使用 Developer ID Application 证书。使用证书时开启 hardened runtime 和时间戳。打包会检查 plist 和签名，签名失败不会降级为 ad-hoc；新产物验证成功后才替换旧 bundle。打包不包含公证或安装操作。
+
 ### 从旧名称升级
 
 本次改名不自动迁移旧版的服务、配置或凭据，也不提供旧命令和旧环境变量别名。升级前先使用旧版 `cxxy-wlanlogin-cli`，按原安装范围卸载服务；需要清除旧配置和凭据时加 `--purge`。普通卸载保留的旧凭据不会被新版读取或清理。

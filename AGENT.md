@@ -27,6 +27,8 @@ NetworkManager, Secret Service, and native service managers are runtime dependen
 
 ## Commands
 
+macOS bundles are built with `cargo xtask bundle macos`, optionally using `--codesign-identity` or `CODESIGN_IDENTITY` (CLI takes precedence; default is ad-hoc `-`). `xtask/` shares `infra/identity.rs` and renders `packaging/macos/Info.plist`; it builds the explicit `wlanlogin` binary, validates the bundle, and publishes it only after successful signing. Ordinary compilation uses Cargo, not an xtask build subcommand. Bundle generation does not install or launch services.
+
 Run relevant checks after each logical change and the complete set before delivery of an architectural change:
 
 ```sh

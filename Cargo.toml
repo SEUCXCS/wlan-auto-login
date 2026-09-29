@@ -1,5 +1,6 @@
 [workspace]
-members = ["crates/wlan-api", "crates/wlan-app"]
+members = ["crates/wlan-api", "crates/wlan-app", "xtask"]
+default-members = ["crates/wlan-api", "crates/wlan-app"]
 resolver = "3"
 
 [profile.release]
