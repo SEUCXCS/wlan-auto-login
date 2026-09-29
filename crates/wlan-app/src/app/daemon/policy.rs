@@ -1,8 +1,8 @@
 //! Login decisions and retry state; no network, filesystem or task operations.
 use crate::infra::control;
-use cxxy_wlanlogin_lib::AuthState;
 use std::time::Duration;
 use tokio::time::Instant;
+use wlanlogin_lib::AuthState;
 
 const INITIAL_STATUS_DELAYS: [u64; 3] = [1, 2, 4];
 const CHECK_INTERVAL: Duration = Duration::from_secs(30);

@@ -391,7 +391,7 @@ pub enum Message {
     #[error("Unknown permission: {id}")]
     UnknownPermission { id: String },
     #[error(
-        "Credentials are missing; provide arguments, CXXY_WLAN_USERNAME/CXXY_WLAN_PASSWORD, or an interactive terminal"
+        "Credentials are missing; provide arguments, WLANLOGIN_USERNAME/WLANLOGIN_PASSWORD, or an interactive terminal"
     )]
     CredentialsRequired,
     #[error("Authenticated but failed to save credentials; service installation cannot continue")]

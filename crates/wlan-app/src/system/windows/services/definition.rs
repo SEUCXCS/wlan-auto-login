@@ -15,7 +15,7 @@ pub(crate) fn windows_system_plan(executable: PathBuf, definition: PathBuf) -> R
             .to_str()
             .context(Message::InstallationPathMustBeUTF8)?
     );
-    let stop = || Invocation::new("sc.exe", ["stop", "cxxy-wlanlogin"]).optional();
+    let stop = || Invocation::new("sc.exe", ["stop", LABEL]).optional();
     Ok(Plan {
         scope: crate::infra::scope::Scope::System,
         manager: Manager::WindowsService,
@@ -30,7 +30,7 @@ pub(crate) fn windows_system_plan(executable: PathBuf, definition: PathBuf) -> R
                 "sc.exe",
                 [
                     "create",
-                    "cxxy-wlanlogin",
+                    LABEL,
                     "binPath=",
                     &binary,
                     "start=",
@@ -44,7 +44,7 @@ pub(crate) fn windows_system_plan(executable: PathBuf, definition: PathBuf) -> R
                 "sc.exe",
                 [
                     "config",
-                    "cxxy-wlanlogin",
+                    LABEL,
                     "binPath=",
                     &binary,
                     "start=",
@@ -57,20 +57,17 @@ pub(crate) fn windows_system_plan(executable: PathBuf, definition: PathBuf) -> R
                 "sc.exe",
                 [
                     "failure",
-                    "cxxy-wlanlogin",
+                    LABEL,
                     "reset=",
                     "86400",
                     "actions=",
                     "restart/30000/restart/60000/restart/300000",
                 ],
             ),
-            Invocation::new("sc.exe", ["failureflag", "cxxy-wlanlogin", "1"]),
-            Invocation::new("sc.exe", ["start", "cxxy-wlanlogin"]),
+            Invocation::new("sc.exe", ["failureflag", LABEL, "1"]),
+            Invocation::new("sc.exe", ["start", LABEL]),
         ],
-        remove: vec![
-            stop(),
-            Invocation::new("sc.exe", ["delete", "cxxy-wlanlogin"]),
-        ],
+        remove: vec![stop(), Invocation::new("sc.exe", ["delete", LABEL])],
         reload: vec![],
     })
 }
@@ -79,7 +76,7 @@ pub(crate) fn windows_plan(executable: PathBuf, definition: PathBuf, sid: &str) 
     let exe = xml(executable
         .to_str()
         .context(Message::InstallationPathMustBeUTF8)?);
-    let name = format!("cxxy-wlanlogin-{sid}");
+    let name = format!("{LABEL}-{sid}");
     let sid = xml(sid);
     let content = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -127,13 +124,7 @@ pub(crate) fn plan(paths: &Paths) -> Result<Plan> {
     if paths.scope == crate::infra::scope::Scope::System {
         return system_plan(paths);
     }
-    let dirs = directories::ProjectDirs::from("org", "seucxcs", "cxxy-wlanlogin")
-        .context(Message::FailedToDetermineInstallationDirectory)?;
-    let executable = dirs.data_local_dir().join("bin").join(if cfg!(windows) {
-        "cxxy-wlanlogin-daemon.exe"
-    } else {
-        "cxxy-wlanlogin-daemon"
-    });
+    let executable = crate::infra::paths::user_daemon_executable()?;
 
     {
         let sid = crate::infra::scope::current_sid()?;
@@ -143,13 +134,12 @@ pub(crate) fn plan(paths: &Paths) -> Result<Plan> {
 #[cfg(target_os = "windows")]
 fn system_plan(paths: &Paths) -> Result<Plan> {
     {
-        use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramData, FOLDERID_ProgramFiles};
+        use windows_sys::Win32::UI::Shell::FOLDERID_ProgramData;
         let _ = paths;
         windows_system_plan(
-            crate::infra::paths::known_folder(&FOLDERID_ProgramFiles)?
-                .join("cxxy-wlanlogin/cxxy-wlanlogin-daemon.exe"),
-            crate::infra::paths::known_folder(&FOLDERID_ProgramData)?
-                .join("cxxy-wlanlogin/service.json"),
+            crate::infra::paths::system_daemon_executable()?,
+            crate::infra::paths::app_dir(crate::infra::paths::known_folder(&FOLDERID_ProgramData)?)
+                .join("service.json"),
         )
     }
 }

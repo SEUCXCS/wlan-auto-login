@@ -104,7 +104,7 @@ fn wants_tui(requested: bool, form: &login::Form) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cxxy_wlanlogin_lib::{Credentials, Line};
+    use wlanlogin_lib::{Credentials, Line};
     #[test]
     fn saved_credentials_skip_tui_unless_requested() {
         let saved = Credentials {

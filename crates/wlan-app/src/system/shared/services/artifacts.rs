@@ -133,6 +133,16 @@ mod tests {
         assert!(linux.content.contains("daemon --background"));
         assert!(linux.content.contains("# ApplicationLog=daemon.log"));
         assert!(linux.content.contains("WantedBy=multi-user.target"));
+        assert!(
+            linux
+                .content
+                .contains("StateDirectory=cxcs-tools/wlanlogin\n")
+        );
+        assert!(
+            linux
+                .content
+                .contains("RuntimeDirectory=cxcs-tools/wlanlogin\n")
+        );
         assert!(!linux.content.contains("--user"));
         let macos = macos_system_plan(exe.clone(), definition.clone(), "/tmp/log".into())?;
         assert!(macos.content.contains("<string>--system</string>"));
@@ -169,7 +179,7 @@ mod tests {
     }
     #[test]
     fn generated_services_use_user_sessions_without_credentials() -> Result<()> {
-        let executable = PathBuf::from("/home/Test User/bin/cxxy");
+        let executable = PathBuf::from("/home/Test User/bin/wlanlogin");
         let definition = PathBuf::from("/tmp/definition");
         let plans = [
             linux_plan(executable.clone(), definition.clone())?,
@@ -184,7 +194,7 @@ mod tests {
         for plan in &plans {
             assert!(plan.content.contains("daemon"));
             assert!(!plan.content.contains("--password"));
-            assert!(!plan.content.contains("CXXY_WLAN_PASSWORD"));
+            assert!(!plan.content.contains("WLANLOGIN_PASSWORD"));
             assert!(plan.content.contains(LABEL));
         }
         assert!(plans[0].content.contains("WantedBy=default.target"));

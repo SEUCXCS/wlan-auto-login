@@ -8,8 +8,8 @@ use crate::{
     system::shared::services as service,
     system::wifi::{WifiConnection, WifiProbe},
 };
-use cxxy_wlanlogin_lib::Client;
 use std::future::Future;
+use wlanlogin_lib::Client;
 
 pub(crate) async fn run(client: &Client, paths: &Paths, forget: bool) -> Result<()> {
     if !forget {
@@ -204,7 +204,7 @@ mod tests {
     async fn offline_forget_never_contacts_the_portal() -> Result<()> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let base = format!("http://{}", listener.local_addr()?);
-        let client = Client::new(cxxy_wlanlogin_lib::PortalConfig {
+        let client = Client::new(wlanlogin_lib::PortalConfig {
             status_url: format!("{base}/status"),
             action_url: format!("{base}/action"),
             ..Default::default()

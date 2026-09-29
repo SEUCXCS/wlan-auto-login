@@ -1,6 +1,7 @@
 use crate::infra::command::Invocation;
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result, bail};
+use crate::infra::identity::{APP_NAME, ORGANIZATION, SYSTEMD_UNIT};
 #[cfg(target_os = "linux")]
 use crate::infra::paths::Paths;
 use crate::system::define::services::{LABEL, Manager, Plan};
@@ -15,27 +16,22 @@ pub(crate) fn linux_system_plan(executable: PathBuf, definition: PathBuf) -> Res
         scope: crate::infra::scope::Scope::System,
         manager: Manager::Systemd { system: true },
         content: format!(
-            "# {LABEL}\n[Unit]\nDescription=Student_CX automatic login\nAfter=NetworkManager.service\nWants=NetworkManager.service\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart={quoted} --system daemon --background\n# ApplicationLog=daemon.log\nRestart=on-failure\nRestartSec=30\nTimeoutStopSec=25\nStateDirectory=cxxy-wlanlogin\nStateDirectoryMode=0700\nRuntimeDirectory=cxxy-wlanlogin\nRuntimeDirectoryMode=0700\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=true\nProtectSystem=strict\n# CREDENTIALS\n\n[Install]\nWantedBy=multi-user.target\n"
+            "# {LABEL}\n[Unit]\nDescription=Student_CX automatic login\nAfter=NetworkManager.service\nWants=NetworkManager.service\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart={quoted} --system daemon --background\n# ApplicationLog=daemon.log\nRestart=on-failure\nRestartSec=30\nTimeoutStopSec=25\nStateDirectory={ORGANIZATION}/{APP_NAME}\nStateDirectoryMode=0700\nRuntimeDirectory={ORGANIZATION}/{APP_NAME}\nRuntimeDirectoryMode=0700\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=true\nProtectSystem=strict\n# CREDENTIALS\n\n[Install]\nWantedBy=multi-user.target\n"
         ),
         executable,
         definition,
-        stop: vec![
-            Invocation::new("systemctl", ["--system", "stop", "cxxy-wlanlogin.service"]).optional(),
-        ],
+        stop: vec![Invocation::new("systemctl", ["--system", "stop", SYSTEMD_UNIT]).optional()],
         start: vec![
             reload(),
+            Invocation::new("systemctl", ["--system", "enable", "--now", SYSTEMD_UNIT]),
             Invocation::new(
                 "systemctl",
-                ["--system", "enable", "--now", "cxxy-wlanlogin.service"],
-            ),
-            Invocation::new(
-                "systemctl",
-                ["--system", "is-active", "--quiet", "cxxy-wlanlogin.service"],
+                ["--system", "is-active", "--quiet", SYSTEMD_UNIT],
             ),
         ],
         remove: vec![Invocation::new(
             "systemctl",
-            ["--system", "disable", "--now", "cxxy-wlanlogin.service"],
+            ["--system", "disable", "--now", SYSTEMD_UNIT],
         )],
         reload: vec![reload()],
     })
@@ -53,23 +49,18 @@ pub(crate) fn linux_plan(executable: PathBuf, definition: PathBuf) -> Result<Pla
         executable,
         definition,
         content,
-        stop: vec![
-            Invocation::new("systemctl", ["--user", "stop", "cxxy-wlanlogin.service"]).optional(),
-        ],
+        stop: vec![Invocation::new("systemctl", ["--user", "stop", SYSTEMD_UNIT]).optional()],
         start: vec![
             reload(),
+            Invocation::new("systemctl", ["--user", "enable", "--now", SYSTEMD_UNIT]),
             Invocation::new(
                 "systemctl",
-                ["--user", "enable", "--now", "cxxy-wlanlogin.service"],
-            ),
-            Invocation::new(
-                "systemctl",
-                ["--user", "is-active", "--quiet", "cxxy-wlanlogin.service"],
+                ["--user", "is-active", "--quiet", SYSTEMD_UNIT],
             ),
         ],
         remove: vec![Invocation::new(
             "systemctl",
-            ["--user", "disable", "--now", "cxxy-wlanlogin.service"],
+            ["--user", "disable", "--now", SYSTEMD_UNIT],
         )],
         reload: vec![reload()],
     })
@@ -93,13 +84,7 @@ pub(crate) fn plan(paths: &Paths) -> Result<Plan> {
     if paths.scope == crate::infra::scope::Scope::System {
         return system_plan(paths);
     }
-    let dirs = directories::ProjectDirs::from("org", "seucxcs", "cxxy-wlanlogin")
-        .context(Message::FailedToDetermineInstallationDirectory)?;
-    let executable = dirs.data_local_dir().join("bin").join(if cfg!(windows) {
-        "cxxy-wlanlogin-daemon.exe"
-    } else {
-        "cxxy-wlanlogin-daemon"
-    });
+    let executable = crate::infra::paths::user_daemon_executable()?;
 
     {
         let base =
@@ -107,8 +92,7 @@ pub(crate) fn plan(paths: &Paths) -> Result<Plan> {
         let _ = paths;
         linux_plan(
             executable,
-            base.config_dir()
-                .join("systemd/user/cxxy-wlanlogin.service"),
+            base.config_dir().join("systemd/user").join(SYSTEMD_UNIT),
         )
     }
 }
@@ -117,8 +101,8 @@ fn system_plan(paths: &Paths) -> Result<Plan> {
     {
         let _ = paths;
         linux_system_plan(
-            "/usr/local/libexec/cxxy-wlanlogin/cxxy-wlanlogin-daemon".into(),
-            "/etc/systemd/system/cxxy-wlanlogin.service".into(),
+            crate::infra::paths::system_daemon_executable()?,
+            Path::new("/etc/systemd/system").join(SYSTEMD_UNIT),
         )
     }
 }
@@ -129,7 +113,7 @@ pub(crate) fn conflicting_definition(paths: &Paths) -> Result<Option<PathBuf>> {
         Scope::User => system_plan(&Paths::new(Scope::System)?)?.definition,
         Scope::System => {
             if let Some(home) = original_user_home()? {
-                home.join(".config/systemd/user/cxxy-wlanlogin.service")
+                home.join(".config/systemd/user").join(SYSTEMD_UNIT)
             } else {
                 return Ok(None);
             }

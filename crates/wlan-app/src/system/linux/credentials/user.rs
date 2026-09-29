@@ -5,10 +5,9 @@ use zeroize::Zeroizing;
 use crate::infra::error::bail;
 use crate::infra::error::{Context, Result};
 pub(crate) use crate::system::shared::credentials::{load_user as load, save_user as save};
-use cxxy_wlanlogin_lib::Credentials;
+use wlanlogin_lib::Credentials;
 
-const SERVICE: &str = "org.seucxcs.cxxy-wlanlogin";
-const ENTRY: &str = "saved-login";
+use crate::infra::identity::{APP_ID as SERVICE, CREDENTIAL_ENTRY as ENTRY};
 
 pub async fn delete() -> Result<()> {
     tokio::task::spawn_blocking(|| {

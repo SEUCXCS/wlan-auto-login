@@ -45,7 +45,7 @@ pub struct Listener {
 #[cfg(windows)]
 impl Listener {
     pub fn bind(paths: &Paths, nonce: &str) -> Result<(Self, String)> {
-        let address = format!(r"\\.\pipe\cxxy-wlanlogin-{nonce}");
+        let address = format!(r"\\.\pipe\{}-{nonce}", crate::infra::identity::APP_ID);
         let inner = pipe(&address, true, paths.scope)?;
         Ok((
             Self {

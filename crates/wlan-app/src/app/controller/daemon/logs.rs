@@ -123,7 +123,7 @@ mod tests {
                         "--user"
                     },
                     "--unit",
-                    "cxxy-wlanlogin.service",
+                    "dev.cxcs.tools.wlanlogin.service",
                     "--no-pager",
                     "--output=cat",
                     "--quiet",

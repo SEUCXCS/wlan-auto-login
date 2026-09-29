@@ -1,5 +1,5 @@
 [package]
-name = "cxxy-wlanlogin-lib"
+name = "wlanlogin-lib"
 version.workspace = true
 edition.workspace = true
 

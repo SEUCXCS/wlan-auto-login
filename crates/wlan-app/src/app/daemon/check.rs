@@ -7,9 +7,9 @@ use crate::infra::{
     paths::Paths,
 };
 use crate::system::define::wifi::WifiConnection;
-use cxxy_wlanlogin_lib::{AuthState, Client, Credentials, LoginOutcome};
 use std::future::Future;
 use tokio::time::Instant;
+use wlanlogin_lib::{AuthState, Client, Credentials, LoginOutcome};
 pub(super) async fn tick(
     client: &Client,
     paths: &Paths,
@@ -108,7 +108,7 @@ mod tests {
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").await?;
             let base = format!("http://{}", listener.local_addr()?);
-            let client = Client::new(cxxy_wlanlogin_lib::PortalConfig {
+            let client = Client::new(wlanlogin_lib::PortalConfig {
                 status_url: format!("{base}/status"),
                 action_url: format!("{base}/action"),
                 timeout: Duration::from_secs(2),

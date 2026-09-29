@@ -1,6 +1,6 @@
 //! Credential storage contract shared by controllers and native backends.
 use crate::infra::error::Result;
-use cxxy_wlanlogin_lib::Credentials;
+use wlanlogin_lib::Credentials;
 #[derive(Clone, Copy, Debug)]
 pub enum CredentialMode {
     Native,

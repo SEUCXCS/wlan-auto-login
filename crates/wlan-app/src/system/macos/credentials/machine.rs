@@ -4,7 +4,7 @@ use crate::system::define::credentials::CredentialMode;
 use crate::system::shared::credentials::encode;
 
 use crate::infra::paths::Paths;
-use cxxy_wlanlogin_lib::Credentials;
+use wlanlogin_lib::Credentials;
 
 pub struct MachineStore;
 
@@ -53,8 +53,7 @@ use std::{
     path::Path,
 };
 
-const SERVICE: &str = "org.seucxcs.cxxy-wlanlogin.system";
-const ACCOUNT: &str = "saved-login";
+use crate::infra::identity::{CREDENTIAL_ENTRY as ACCOUNT, SYSTEM_CREDENTIAL_SERVICE as SERVICE};
 
 #[link(name = "Security", kind = "framework")]
 unsafe extern "C" {
@@ -112,10 +111,9 @@ fn save_native(text: &str) -> Result<()> {
         .set_generic_password(SERVICE, ACCOUNT, text.as_bytes())
         .context(Message::FailedToSaveSystemKeychainCredentials)?;
     let current = std::env::current_exe()?;
-    let installed =
-        Path::new("/Library/Application Support/cxxy-wlanlogin/bin/cxxy-wlanlogin-daemon");
+    let installed = crate::infra::paths::system_daemon_executable()?;
     authorize_binary(if installed.try_exists()? {
-        installed
+        &installed
     } else {
         &current
     })

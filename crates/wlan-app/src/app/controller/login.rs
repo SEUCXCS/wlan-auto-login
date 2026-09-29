@@ -10,7 +10,7 @@ use crate::system::{
     shared::services,
     wifi::{self, WifiConnection},
 };
-use cxxy_wlanlogin_lib::{Client, Credentials, Line, LoginOutcome};
+use wlanlogin_lib::{Client, Credentials, Line, LoginOutcome};
 
 #[derive(Default)]
 pub struct LoginRequest {
@@ -162,13 +162,13 @@ mod tests {
         execute(client, paths, &prepared.form, wifi, store).await
     }
     use crate::system::wifi::WifiConnection;
-    use cxxy_wlanlogin_lib::PortalConfig;
     use std::{cell::RefCell, collections::VecDeque, time::Duration};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
         time::timeout,
     };
+    use wlanlogin_lib::PortalConfig;
 
     struct TestWifi(RefCell<VecDeque<Result<Option<String>>>>);
 

@@ -6,10 +6,12 @@ Work from the repository root. This is a Cargo workspace using Rust edition 2024
 
 | Path | Package | Purpose |
 | --- | --- | --- |
-| `crates/wlan-api` | `cxxy-wlanlogin-lib` | Async portal protocol library |
-| `crates/wlan-app` | `cxxy-wlanlogin-cli` | CLI, TUI, daemon, and native platform adapters |
+| `crates/wlan-api` | `wlanlogin-lib` | Async portal protocol library |
+| `crates/wlan-app` | `wlanlogin-cli` | CLI, TUI, daemon, and native platform adapters |
 
-The binary is `cxxy-wlanlogin-cli` (`.exe` on Windows). The release artifact is under `target/release/`. Keep `Cargo.lock` checked in and use `--locked` for validation. Do not update dependencies incidentally during a refactor.
+The binary is `wlanlogin` (`.exe` on Windows). The release artifact is under `target/release/`. Keep `Cargo.lock` checked in and use `--locked` for validation. Do not update dependencies incidentally during a refactor.
+
+Native identifiers live in `infra/identity.rs`: the application ID is `dev.cxcs.tools.wlanlogin`. Application paths live in `infra/paths.rs` and use the two components `cxcs-tools/wlanlogin` (`ProjectDirs::from_path`, not `ProjectDirs::from`). Cleanup must preserve the shared `cxcs-tools` parent and sibling tools. The rename does not automatically migrate legacy services or credentials; README documents uninstalling with the old binary before installing the new one. The CLI package is `wlanlogin-cli`, its explicit binary target and tracing prefix are `wlanlogin`, and its environment variables use `WLANLOGIN_`.
 
 There is no pinned `rust-toolchain.toml` or declared MSRV. The architecture refactor was validated with Rust/Cargo `1.100.0-nightly`; this is an observed toolchain, not a nightly requirement or a minimum supported version. Check `rustc --version`, `cargo --version`, and installed targets before making toolchain claims. Rust edition support alone does not establish the minimum version of all dependencies.
 
@@ -39,10 +41,10 @@ git diff --check
 Check other platforms when native code, shared interfaces, or conditional compilation change:
 
 ```sh
-cargo check -p cxxy-wlanlogin-cli --locked --target x86_64-pc-windows-gnu
-cargo check -p cxxy-wlanlogin-cli --locked --target aarch64-apple-darwin
-cargo check -p cxxy-wlanlogin-cli --tests --locked --target x86_64-pc-windows-gnu
-cargo check -p cxxy-wlanlogin-cli --tests --locked --target aarch64-apple-darwin
+cargo check -p wlanlogin-cli --locked --target x86_64-pc-windows-gnu
+cargo check -p wlanlogin-cli --locked --target aarch64-apple-darwin
+cargo check -p wlanlogin-cli --tests --locked --target x86_64-pc-windows-gnu
+cargo check -p wlanlogin-cli --tests --locked --target aarch64-apple-darwin
 ```
 
 Use `rustup target add` only when a required target is missing. A successful cross-target check establishes compilation only; it does not establish linking, OS compatibility, or runtime behavior. Report unavailable checks explicitly.

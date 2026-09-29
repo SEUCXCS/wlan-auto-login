@@ -4,7 +4,7 @@ use crate::system::{
     credentials::{CredentialMode, ScopedStore},
     wifi::WifiProbe,
 };
-use cxxy_wlanlogin_lib::{Client, PortalConfig};
+use wlanlogin_lib::{Client, PortalConfig};
 pub struct Context {
     pub client: Client,
     pub paths: Paths,

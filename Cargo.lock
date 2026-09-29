@@ -495,14 +495,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "cxxy-wlanlogin-cli"
+name = "wlanlogin-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
  "core-foundation 0.10.1",
  "crossterm",
- "cxxy-wlanlogin-lib",
+ "wlanlogin-lib",
  "dbus-secret-service",
  "directories",
  "dispatch2",
@@ -532,7 +532,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cxxy-wlanlogin-lib"
+name = "wlanlogin-lib"
 version = "0.1.0"
 dependencies = [
  "reqwest",

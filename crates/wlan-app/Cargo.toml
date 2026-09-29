@@ -1,13 +1,17 @@
 [package]
-name = "cxxy-wlanlogin-cli"
+name = "wlanlogin-cli"
 version.workspace = true
 edition.workspace = true
+
+[[bin]]
+name = "wlanlogin"
+path = "src/main.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
-cxxy-wlanlogin-lib.workspace = true
+wlanlogin-lib.workspace = true
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true

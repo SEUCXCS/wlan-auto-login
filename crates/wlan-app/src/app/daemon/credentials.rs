@@ -1,8 +1,8 @@
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
 use crate::system::credentials::ScopedStore;
-use cxxy_wlanlogin_lib::Credentials;
 use std::{future::Future, sync::Arc, time::Duration};
+use wlanlogin_lib::Credentials;
 
 /// Keep a single read in flight if a native keychain call stops responding.
 /// Timing out a JoinHandle must not detach it and start another read every tick.

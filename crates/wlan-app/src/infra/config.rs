@@ -1,9 +1,9 @@
 use super::{filesystem::write_private, paths::Paths};
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
-use cxxy_wlanlogin_lib::Line;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use wlanlogin_lib::Line;
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct Preferences {

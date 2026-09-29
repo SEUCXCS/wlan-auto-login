@@ -37,13 +37,13 @@ impl ServiceManager for Manager {
     fn name(&self) -> &str {
         match self {
             #[cfg(any(target_os = "linux", test))]
-            Self::Systemd { .. } => "cxxy-wlanlogin.service",
+            Self::Systemd { .. } => crate::infra::identity::SYSTEMD_UNIT,
             #[cfg(any(target_os = "macos", test))]
             Self::Launchd { target, .. } => target,
             #[cfg(any(target_os = "windows", test))]
             Self::TaskScheduler { name } => name,
             #[cfg(any(windows, test))]
-            Self::WindowsService => "cxxy-wlanlogin",
+            Self::WindowsService => crate::infra::identity::APP_ID,
         }
     }
 

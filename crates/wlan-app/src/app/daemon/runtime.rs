@@ -6,9 +6,9 @@ use crate::infra::{
     paths::Paths,
 };
 use crate::system::wifi::Monitor;
-use cxxy_wlanlogin_lib::Client;
 use std::time::Duration;
 use tokio::time::Instant;
+use wlanlogin_lib::Client;
 const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 pub(super) async fn control_stop(
     commands: &mut tokio::sync::mpsc::Receiver<control::Signal>,
@@ -69,7 +69,7 @@ pub(super) async fn run_loop(
             .and_then(|result| result)
         {
             let transient_status = e
-                .downcast_ref::<cxxy_wlanlogin_lib::Error>()
+                .downcast_ref::<wlanlogin_lib::Error>()
                 .is_some_and(|error| error.is_transient_status_failure());
             let delay = policy.failure(Instant::now(), transient_status);
             tracing::warn!(error = %e, retry_after_secs = delay.as_secs(), "{}", Message::CheckFailed);

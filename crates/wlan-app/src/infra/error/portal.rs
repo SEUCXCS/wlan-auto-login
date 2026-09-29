@@ -1,5 +1,5 @@
 //! English summaries without rendering portal response text or request URLs.
-use cxxy_wlanlogin_lib::{Error, RequestOperation};
+use wlanlogin_lib::{Error, RequestOperation};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{summary}")]
@@ -162,12 +162,12 @@ mod tests {
     #[tokio::test]
     async fn known_codes_from_the_api_keep_english_diagnostics_without_server_details()
     -> crate::infra::error::Result<()> {
-        use cxxy_wlanlogin_lib::{Client, PortalConfig};
         use std::time::Duration;
         use tokio::{
             io::{AsyncReadExt, AsyncWriteExt},
             net::TcpListener,
         };
+        use wlanlogin_lib::{Client, PortalConfig};
         for code in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 998, 987654] {
             let listener = TcpListener::bind("127.0.0.1:0").await?;
             let base = format!("http://{}", listener.local_addr()?);

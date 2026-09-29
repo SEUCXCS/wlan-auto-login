@@ -31,7 +31,7 @@ impl Error {
             Ok(error) => return error,
             Err(error) => error,
         };
-        match error.downcast::<cxxy_wlanlogin_lib::Error>() {
+        match error.downcast::<wlanlogin_lib::Error>() {
             Ok(error) => Self::from(error),
             Err(error) => Self::External(error),
         }
@@ -47,8 +47,8 @@ impl Error {
     }
 }
 
-impl From<cxxy_wlanlogin_lib::Error> for Error {
-    fn from(source: cxxy_wlanlogin_lib::Error) -> Self {
+impl From<wlanlogin_lib::Error> for Error {
+    fn from(source: wlanlogin_lib::Error) -> Self {
         Self::Portal(portal::PortalError::new(source))
     }
 }

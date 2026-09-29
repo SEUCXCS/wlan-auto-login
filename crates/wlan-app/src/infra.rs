@@ -6,6 +6,7 @@ pub(crate) mod control;
 pub(crate) mod error;
 pub(crate) mod file_log;
 pub(crate) mod filesystem;
+pub(crate) mod identity;
 pub(crate) mod logging;
 pub(crate) mod paths;
 pub(crate) mod scope;

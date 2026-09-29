@@ -128,7 +128,7 @@ mod tests {
     async fn launchd_unloaded_job_requires_an_accessible_domain() -> Result<()> {
         let manager = Manager::Launchd {
             domain: "gui/501".into(),
-            target: "gui/501/org.seucxcs.cxxy-wlanlogin".into(),
+            target: "gui/501/dev.cxcs.tools.wlanlogin".into(),
         };
         let runner = FakeRunner::new([
             (false, "missing job"),

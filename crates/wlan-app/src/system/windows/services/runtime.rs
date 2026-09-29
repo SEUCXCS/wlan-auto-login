@@ -1,5 +1,6 @@
 //! Native SCM process entry. All used APIs are available on Windows 7.
 use crate::infra::error::Message;
+use crate::infra::identity::APP_ID;
 use std::{
     ptr,
     sync::{
@@ -30,7 +31,7 @@ pub fn dispatch(entry: Entry) -> std::process::ExitCode {
     if ENTRY.set(entry).is_err() {
         return std::process::ExitCode::FAILURE;
     }
-    let mut name: Vec<u16> = "cxxy-wlanlogin".encode_utf16().chain(Some(0)).collect();
+    let mut name: Vec<u16> = APP_ID.encode_utf16().chain(Some(0)).collect();
     let table = [
         SERVICE_TABLE_ENTRYW {
             lpServiceName: name.as_mut_ptr(),
@@ -56,7 +57,7 @@ pub fn dispatch(entry: Entry) -> std::process::ExitCode {
 }
 
 unsafe extern "system" fn service_main(_: u32, _: *mut windows_sys::core::PWSTR) {
-    let name: Vec<u16> = "cxxy-wlanlogin".encode_utf16().chain(Some(0)).collect();
+    let name: Vec<u16> = APP_ID.encode_utf16().chain(Some(0)).collect();
     // SAFETY: SCM owns callbacks for this process and name remains valid during registration.
     let handle =
         unsafe { RegisterServiceCtrlHandlerExW(name.as_ptr(), Some(handler), ptr::null()) };

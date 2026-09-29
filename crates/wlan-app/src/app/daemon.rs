@@ -10,7 +10,7 @@ use crate::infra::{
     shutdown::{Shutdown, until_stopped},
 };
 use crate::system::credentials as stores;
-use cxxy_wlanlogin_lib::Client;
+use wlanlogin_lib::Client;
 fn ensure_scope(paths: &Paths) -> Result<()> {
     // User daemons yield when a system installation exists. A boot service must
     // not inspect user homes (which systemd intentionally hides from it).

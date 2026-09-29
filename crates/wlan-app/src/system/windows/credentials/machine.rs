@@ -6,7 +6,7 @@ use crate::system::shared::credentials::encode;
 
 use crate::infra::filesystem::{private_dir, write_private};
 use crate::infra::paths::Paths;
-use cxxy_wlanlogin_lib::Credentials;
+use wlanlogin_lib::Credentials;
 
 use std::{fs, path::Path, sync::Mutex, time::SystemTime};
 
@@ -217,7 +217,7 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_corrupt_and_conflicting_files_without_decrypting() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let paths = Paths::test(dir.path().join("cxxy-wlanlogin/secrets"));
+        let paths = Paths::test(dir.path().join("cxcs-tools/wlanlogin/secrets"));
         fs::create_dir_all(&paths.secrets)?;
         for name in ["login.cred", "login.json"] {
             fs::write(paths.secrets.join(name), "invalid secret data")?;

@@ -1,10 +1,10 @@
 //! Service contracts, installation descriptions and normalized manager state.
+pub use crate::infra::identity::APP_ID as LABEL;
 use crate::infra::{
     command::{Invocation, Runner},
     error::Result,
 };
 use std::{future::Future, path::PathBuf};
-pub const LABEL: &str = "org.seucxcs.cxxy-wlanlogin";
 #[derive(Clone, Debug)]
 pub(crate) enum Manager {
     #[cfg(any(target_os = "linux", test))]

@@ -70,7 +70,7 @@ impl NativeMonitor {
         let store = unsafe {
             SCDynamicStore::new(
                 None,
-                &CFString::from_str("cxxy-wlanlogin"),
+                &CFString::from_str(crate::infra::identity::APP_ID),
                 Some(changed),
                 &mut context,
             )
@@ -81,7 +81,7 @@ impl NativeMonitor {
             CFString::from_str("State:/Network/Interface/.*/Link"),
             CFString::from_str("State:/Network/Service/.*/IPv4"),
         ]);
-        let queue = DispatchQueue::new("org.seucxcs.cxxy-wlanlogin.network", None);
+        let queue = DispatchQueue::new(crate::infra::identity::NETWORK_QUEUE, None);
         unsafe {
             if !store.set_notification_keys(None, Some(patterns.as_opaque()))
                 || !store.set_dispatch_queue(Some(&queue))

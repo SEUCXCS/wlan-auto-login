@@ -1,12 +1,12 @@
 //! These tests exclusively contact a disposable loopback HTTP server.
-use cxxy_wlanlogin_lib::{
-    AuthState, Client, Credentials, Error, Line, LoginOutcome, PortalConfig, RequestOperation,
-};
 use std::time::Duration;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
     task::JoinHandle,
+};
+use wlanlogin_lib::{
+    AuthState, Client, Credentials, Error, Line, LoginOutcome, PortalConfig, RequestOperation,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
@@ -241,7 +241,7 @@ async fn status_disconnect_can_recover_without_submitting_credentials() -> TestR
     assert!(error.to_string().contains("状态查询"));
     assert_eq!(
         client.status().await?.auth,
-        cxxy_wlanlogin_lib::AuthState::Online
+        wlanlogin_lib::AuthState::Online
     );
     let requests = tokio::time::timeout(Duration::from_secs(3), task).await??;
     assert_eq!(requests.len(), 2);

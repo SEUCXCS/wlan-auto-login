@@ -2,6 +2,8 @@ use crate::infra::command::Invocation;
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
 #[cfg(target_os = "macos")]
+use crate::infra::identity::LAUNCHD_PLIST;
+#[cfg(target_os = "macos")]
 use crate::infra::paths::Paths;
 use crate::system::define::services::{LABEL, Manager, Plan};
 #[cfg(target_os = "macos")]
@@ -101,13 +103,7 @@ pub(crate) fn plan(paths: &Paths) -> Result<Plan> {
     if paths.scope == crate::infra::scope::Scope::System {
         return system_plan(paths);
     }
-    let dirs = directories::ProjectDirs::from("org", "seucxcs", "cxxy-wlanlogin")
-        .context(Message::FailedToDetermineInstallationDirectory)?;
-    let executable = dirs.data_local_dir().join("bin").join(if cfg!(windows) {
-        "cxxy-wlanlogin-daemon.exe"
-    } else {
-        "cxxy-wlanlogin-daemon"
-    });
+    let executable = crate::infra::paths::user_daemon_executable()?;
 
     {
         let base =
@@ -118,7 +114,7 @@ pub(crate) fn plan(paths: &Paths) -> Result<Plan> {
             executable,
             base.home_dir()
                 .join("Library/LaunchAgents")
-                .join(format!("{LABEL}.plist")),
+                .join(LAUNCHD_PLIST),
             log,
             uid,
         )
@@ -128,8 +124,8 @@ pub(crate) fn plan(paths: &Paths) -> Result<Plan> {
 fn system_plan(paths: &Paths) -> Result<Plan> {
     {
         macos_system_plan(
-            "/Library/Application Support/cxxy-wlanlogin/bin/cxxy-wlanlogin-daemon".into(),
-            "/Library/LaunchDaemons/org.seucxcs.cxxy-wlanlogin.plist".into(),
+            crate::infra::paths::system_daemon_executable()?,
+            PathBuf::from("/Library/LaunchDaemons").join(LAUNCHD_PLIST),
             paths.config.join("daemon.log"),
         )
     }
@@ -141,7 +137,7 @@ pub(crate) fn conflicting_definition(paths: &Paths) -> Result<Option<PathBuf>> {
         Scope::User => system_plan(&Paths::new(Scope::System)?)?.definition,
         Scope::System => {
             if let Some(home) = original_user_home()? {
-                home.join("Library/LaunchAgents/org.seucxcs.cxxy-wlanlogin.plist")
+                home.join("Library/LaunchAgents").join(LAUNCHD_PLIST)
             } else {
                 return Ok(None);
             }

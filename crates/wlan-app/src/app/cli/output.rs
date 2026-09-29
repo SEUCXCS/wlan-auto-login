@@ -1,7 +1,7 @@
 //! Terminal rendering for controller results.
 use crate::app::controller::login::LoginResult;
 use crate::infra::error::Message;
-use cxxy_wlanlogin_lib::LoginOutcome;
+use wlanlogin_lib::LoginOutcome;
 pub fn login(result: &LoginResult) {
     if let Some(warning) = &result.warning {
         tracing::warn!("{warning}");
@@ -134,17 +134,14 @@ mod tests {
         assert!(!text.contains("安装位置："));
         assert!(!text.contains("已安装版本："));
         fs::write(&plan.executable, "mock executable, never run")?;
-        let runner = FakeRunner::new([(true, RUNNING), (true, "cxxy-wlanlogin-cli 0.0.9")]);
+        let runner = FakeRunner::new([(true, RUNNING), (true, "wlanlogin 0.0.9")]);
         assert!(
             report(&plan, &runner)
                 .await?
                 .0
                 .starts_with("🟢 安装状态：已安装\n安装范围：system\n")
         );
-        let runner = FakeRunner::new([
-            (false, "LoadState=not-found"),
-            (true, "cxxy-wlanlogin-cli 0.0.9"),
-        ]);
+        let runner = FakeRunner::new([(false, "LoadState=not-found"), (true, "wlanlogin 0.0.9")]);
         assert!(
             report(&plan, &runner)
                 .await?
@@ -179,7 +176,7 @@ mod tests {
         )?;
         fs::write(&plan.definition, &plan.content)?;
         fs::write(&plan.executable, "mock executable, never run")?;
-        let runner = FakeRunner::new([(true, RUNNING), (true, "cxxy-wlanlogin-cli 0.0.9\n")]);
+        let runner = FakeRunner::new([(true, RUNNING), (true, "wlanlogin 0.0.9\n")]);
         let (text, error) = report(&plan, &runner).await?;
         assert!(error.is_none());
         assert!(text.contains("安装状态：已安装"));

@@ -2,7 +2,7 @@ mod login;
 mod output;
 use crate::system::define::credentials::CredentialMode;
 use clap::{Args, Parser, Subcommand};
-use cxxy_wlanlogin_lib::Line;
+use wlanlogin_lib::Line;
 
 impl clap::ValueEnum for CredentialMode {
     fn value_variants<'a>() -> &'a [Self] {
@@ -18,7 +18,7 @@ impl clap::ValueEnum for CredentialMode {
 }
 
 #[derive(Parser)]
-#[command(version, about = "Student_CX 校园网登录工具")]
+#[command(name = crate::infra::identity::APP_NAME, version, about = "Student_CX 校园网登录工具")]
 pub struct Cli {
     /// 使用当前用户的安装、配置和凭据
     #[arg(long, global = true, conflicts_with = "system")]
@@ -89,12 +89,12 @@ pub struct LoginArgs {
     /// 系统凭据存储；Linux 旧系统可显式选择 protected-file
     #[arg(long, value_enum)]
     pub credential_store: Option<crate::system::credentials::CredentialMode>,
-    #[arg(short, long, env = "CXXY_WLAN_USERNAME", hide_env_values = true)]
+    #[arg(short, long, env = "WLANLOGIN_USERNAME", hide_env_values = true)]
     pub username: Option<String>,
     #[arg(
         short,
         long,
-        env = "CXXY_WLAN_PASSWORD",
+        env = "WLANLOGIN_PASSWORD",
         hide_env_values = true,
         conflicts_with = "password_stdin"
     )]
@@ -102,7 +102,7 @@ pub struct LoginArgs {
     /// 从标准输入读取一行密码
     #[arg(long)]
     pub password_stdin: bool,
-    #[arg(long, env = "CXXY_WLAN_LINE", value_name = "free1|free2|campus")]
+    #[arg(long, env = "WLANLOGIN_LINE", value_name = "free1|free2|campus")]
     pub line: Option<Line>,
     /// 登录成功后保存账号和密码至所选范围的凭据存储
     #[arg(long)]

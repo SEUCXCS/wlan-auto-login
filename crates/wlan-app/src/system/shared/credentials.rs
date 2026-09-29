@@ -16,8 +16,8 @@ pub async fn delete(paths: &crate::infra::paths::Paths) -> crate::infra::error::
 }
 
 use crate::infra::error::{Context, Result, bail};
-use cxxy_wlanlogin_lib::Credentials;
 use serde::{Deserialize, Serialize};
+use wlanlogin_lib::Credentials;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub struct ScopedStore {
@@ -94,8 +94,7 @@ pub(crate) fn decode(text: &str) -> Result<Credentials> {
     })
 }
 
-const USER_SERVICE: &str = "org.seucxcs.cxxy-wlanlogin";
-const USER_ENTRY: &str = "saved-login";
+use crate::infra::identity::{APP_ID as USER_SERVICE, CREDENTIAL_ENTRY as USER_ENTRY};
 pub async fn load_user() -> Result<Option<Credentials>> {
     tokio::task::spawn_blocking(|| {
         let entry = keyring::Entry::new(USER_SERVICE, USER_ENTRY)

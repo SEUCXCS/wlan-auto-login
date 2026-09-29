@@ -8,11 +8,11 @@
 
 | 目录 | Cargo 包名 | 职责 |
 | --- | --- | --- |
-| `crates/wlan-api` | `cxxy-wlanlogin-lib` | 门户请求、JSONP 解析、认证状态和协议错误 |
-| `crates/wlan-app` | `cxxy-wlanlogin-cli` | CLI / TUI、业务操作、daemon 与操作系统集成 |
+| `crates/wlan-api` | `wlanlogin-lib` | 门户请求、JSONP 解析、认证状态和协议错误 |
+| `crates/wlan-app` | `wlanlogin-cli` | CLI / TUI、业务操作、daemon 与操作系统集成 |
 | `docs` | — | 登录、注销、状态查询的协议依据 |
 
-安装 Rust、Cargo、rustfmt 和 Clippy，并提交应用依赖的 `Cargo.lock`。仓库没有 `rust-toolchain.toml`，也没有声明 MSRV；本次重构使用 Rust/Cargo `1.100.0-nightly` 验证，这不是强制 nightly 的声明。若要建立稳定工具链或最低版本要求，需要单独验证整个依赖树并更新文档。
+安装 Rust、Cargo、rustfmt 和 Clippy，并提交应用依赖的 `Cargo.lock`。仓库没有 `rust-toolchain.toml`，也没有声明 MSRV；此前架构重构使用 Rust/Cargo `1.100.0-nightly` 验证，这不是强制 nightly 的声明。若要建立稳定工具链或最低版本要求，需要单独验证整个依赖树并更新文档。
 
 Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbus-daemon` 及常见 POSIX 工具。Debian / Ubuntu 可安装 `build-essential pkg-config libdbus-1-dev dbus-daemon`。macOS 使用 Xcode Command Line Tools；Windows 使用与 Rust target 对应的 MSVC 或 GNU 构建工具。
 
@@ -41,6 +41,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 | `infra/control.rs`、`infra/control/` | IPC 协议与传输、控制状态、单实例锁和操作锁 |
 | `infra/command.rs`、`infra/shutdown.rs` | 可替换的外部命令执行、超时和进程停止信号 |
 | `infra/filesystem.rs`、`infra/cleanup.rs` | 私有目录、文件写入及有边界的清理机制 |
+| `infra/identity.rs` | 应用 ID、组织目录名、命令名和原生服务／凭据名称 |
 | `system.rs` | 编译期选择原生平台，暴露系统能力入口 |
 | `system/define.rs`、`system/define/` | credentials、services、wifi、permission 的公共契约与数据模型 |
 | `system/shared/credentials.rs`、`system/shared/wifi.rs` | 凭据作用域与编码、共用 keyring 访问、Wi-Fi 查询超时和工作线程 |
@@ -67,6 +68,10 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 先在 `system/define/` 定义必要契约，再在平台目录实现。服务模板、管理器命令及状态解析分别归 `definition.rs`、`manager.rs`；共享安装器负责备份、回滚和停止后的清理顺序。构造服务计划与命令应能在不调用真实服务管理器的情况下测试。
 
 新增平台后更新 `system.rs`、目标依赖、构建检查和 README。将运行验证与交叉编译结果分开记录。
+
+应用 ID 固定为 `dev.cxcs.tools.wlanlogin`，目录采用 `cxcs-tools/wlanlogin` 两级结构；名称常量集中在 `infra/identity.rs`，路径通过 `infra/paths.rs` 构造。不要使用 `ProjectDirs::from` 推导这个布局：Linux 会忽略组织参数，macOS 会拼成点分名称；用户目录使用 `ProjectDirs::from_path`。macOS 系统 Keychain 授权和服务安装必须共用后台程序路径。Windows 服务的创建、查询、启停和 SCM 回调注册使用同一个 ID，用户计划任务追加 SID。
+
+改名不自动迁移旧安装，升级步骤见 README。清理只能删除应用自己的文件和清空后的 `wlanlogin` 目录，必须保留 `cxcs-tools` 父目录和同级工具；验证组织目录与应用目录的符号链接／reparse point 边界。Cargo 包为 `wlanlogin-cli` / `wlanlogin-lib`，可执行文件通过 `[[bin]]` 命名为 `wlanlogin`，日志 target 前缀也为 `wlanlogin`。
 
 ### 权限接口
 
@@ -105,13 +110,13 @@ git diff --check
 
 ```sh
 rustup target add x86_64-pc-windows-gnu aarch64-apple-darwin
-cargo check -p cxxy-wlanlogin-cli --locked --target x86_64-pc-windows-gnu
-cargo check -p cxxy-wlanlogin-cli --locked --target aarch64-apple-darwin
-cargo check -p cxxy-wlanlogin-cli --tests --locked --target x86_64-pc-windows-gnu
-cargo check -p cxxy-wlanlogin-cli --tests --locked --target aarch64-apple-darwin
+cargo check -p wlanlogin-cli --locked --target x86_64-pc-windows-gnu
+cargo check -p wlanlogin-cli --locked --target aarch64-apple-darwin
+cargo check -p wlanlogin-cli --tests --locked --target x86_64-pc-windows-gnu
+cargo check -p wlanlogin-cli --tests --locked --target aarch64-apple-darwin
 ```
 
-这些命令检查编译，不链接或运行对应平台程序。验证 CLI 帮助可执行 `cargo run -p cxxy-wlanlogin-cli -- --help`，不要将真实登录、注销或服务命令作为 smoke test。信号测试中的 `signal_child` 标记为 ignored，由父测试显式启动，不要用 `--include-ignored` 直接运行整个套件。
+这些命令检查编译，不链接或运行对应平台程序。验证 CLI 帮助可执行 `cargo run -p wlanlogin-cli -- --help`，不要将真实登录、注销或服务命令作为 smoke test。信号测试中的 `signal_child` 标记为 ignored，由父测试显式启动，不要用 `--include-ignored` 直接运行整个套件。
 
 ## 提交与审查
 

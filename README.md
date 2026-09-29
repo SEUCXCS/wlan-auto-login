@@ -7,7 +7,7 @@
 - 用户与系统两种安装范围，各自保存配置、凭据和运行状态。
 - 离线预配置、自动重试、服务日志查看与完整卸载。
 
-本仓库是一个 Cargo workspace：`crates/wlan-api`（包名 `cxxy-wlanlogin-lib`）负责门户协议，`crates/wlan-app`（包名及可执行文件名 `cxxy-wlanlogin-cli`）负责应用与系统集成。
+本仓库是一个 Cargo workspace：`crates/wlan-api`（包名 `wlanlogin-lib`）负责门户协议，`crates/wlan-app`（包名 `wlanlogin-cli`，可执行文件名 `wlanlogin`）负责应用与系统集成。
 
 [构建](#构建) · [使用](#使用) · [后台自动登录](#后台自动登录) · [日志与排障](#日志与排障) · [项目结构](#项目结构) · [参与贡献](#参与贡献)
 
@@ -25,7 +25,7 @@ macOS 的 SSID 读取和 Keychain 访问受系统权限限制。项目已预留�
 
 ## 构建
 
-安装 Rust 与 Cargo 后，在仓库根目录构建。项目使用 Rust 2024 edition，未固定工具链，也未声明 MSRV；不要把 edition 的最低版本当作整个依赖树的最低版本。本次重构在 Rust/Cargo `1.100.0-nightly` 上验证。
+安装 Rust 与 Cargo 后，在仓库根目录构建。项目使用 Rust 2024 edition，未固定工具链，也未声明 MSRV；不要把 edition 的最低版本当作整个依赖树的最低版本。此前架构重构在 Rust/Cargo `1.100.0-nightly` 上验证，这不是强制 nightly 的要求。
 
 ```sh
 git clone https://github.com/SEUCXCS/wlan-auto-login.git
@@ -33,18 +33,31 @@ cd wlan-auto-login
 cargo build --release --locked --workspace
 ```
 
-生成的程序为 `target/release/cxxy-wlanlogin-cli`，Windows 下带 `.exe` 后缀。将程序放入 `PATH`，即可使用以下命令。
+生成的程序为 `target/release/wlanlogin`，Windows 下带 `.exe` 后缀。将程序放入 `PATH`，即可使用以下命令。
 
-Linux 已通过本地测试和 release 构建；Windows GNU 与 macOS ARM64 已通过交叉编译检查，包括测试代码。交叉编译结果不代表对应平台的运行验证。
+### 从旧名称升级
+
+本次改名不自动迁移旧版的服务、配置或凭据，也不提供旧命令和旧环境变量别名。升级前先使用旧版 `cxxy-wlanlogin-cli`，按原安装范围卸载服务；需要清除旧配置和凭据时加 `--purge`。普通卸载保留的旧凭据不会被新版读取或清理。
+
+```sh
+cxxy-wlanlogin-cli --user uninstall --purge        # 原用户范围安装
+sudo cxxy-wlanlogin-cli --system uninstall --purge # 原系统范围安装，Linux / macOS
+```
+
+Windows 原系统范围安装，在管理员终端执行 `cxxy-wlanlogin-cli --system uninstall --purge`。以上命令按实际安装范围选择；没有安装服务但保存过旧凭据时，也可用旧版在对应范围执行 `uninstall --purge`。保留旧版程序直到清理完成，避免旧服务与新版同时运行。
+
+之后安装新版，在同一范围执行 `wlanlogin login --interactive --remember-me` 重新保存账号、密码和线路，再执行 `wlanlogin install`。系统范围为两条命令都添加 `--system` 并使用 sudo／管理员终端。自动化脚本同步改用 `wlanlogin` 和 `WLANLOGIN_USERNAME`、`WLANLOGIN_PASSWORD`、`WLANLOGIN_LINE`。
+
+平台验证命令见 [CONTRIBUTING.md](CONTRIBUTING.md#测试与验证)。交叉编译检查覆盖目标平台的代码与测试编译，不代表对应平台的运行验证。
 
 ## 使用
 
 ```sh
-cxxy-wlanlogin-cli login                         # 使用已保存的凭据，或打开交互界面
-cxxy-wlanlogin-cli login --remember-me           # 登录并保存账号密码
-cxxy-wlanlogin-cli login --interactive           # 修改账号、密码或线路
-cxxy-wlanlogin-cli logout                       # 注销，并暂停当前连接的自动登录
-cxxy-wlanlogin-cli logout --forget              # 注销、停止后台进程并删除所选范围的凭据
+wlanlogin login                         # 使用已保存的凭据，或打开交互界面
+wlanlogin login --remember-me           # 登录并保存账号密码
+wlanlogin login --interactive           # 修改账号、密码或线路
+wlanlogin logout                        # 注销，并暂停当前连接的自动登录
+wlanlogin logout --forget               # 注销、停止后台进程并删除所选范围的凭据
 ```
 
 交互界面支持输入账号密码、选择线路和勾选 Remember me。Tab 切换控件，方向键选择线路，空格切换复选框，Esc 取消。
@@ -57,9 +70,9 @@ cxxy-wlanlogin-cli logout --forget              # 注销、停止后台进程并
 
 | 参数 | 环境变量 | 说明 |
 | --- | --- | --- |
-| `--username` / `-u` | `CXXY_WLAN_USERNAME` | 账号 |
-| `--password` / `-p` | `CXXY_WLAN_PASSWORD` | 密码；也可用 `--password-stdin` 从标准输入读取 |
-| `--line` | `CXXY_WLAN_LINE` | `free1`（免费 1）、`free2`（免费 2）、`campus`（内网） |
+| `--username` / `-u` | `WLANLOGIN_USERNAME` | 账号 |
+| `--password` / `-p` | `WLANLOGIN_PASSWORD` | 密码；也可用 `--password-stdin` 从标准输入读取 |
+| `--line` | `WLANLOGIN_LINE` | `free1`（免费 1）、`free2`（免费 2）、`campus`（内网） |
 | `--non-interactive` | — | 凭据不足时直接报错 |
 
 自动化场景优先使用 `--password-stdin`；直接在命令行传入密码可能进入 shell 历史或进程参数列表。
@@ -67,46 +80,69 @@ cxxy-wlanlogin-cli logout --forget              # 注销、停止后台进程并
 ## 后台自动登录
 
 ```sh
-cxxy-wlanlogin-cli install          # 安装并启动后台服务
-cxxy-wlanlogin-cli daemon status    # 查看安装与运行状态
-cxxy-wlanlogin-cli daemon logs      # 查看最近 100 行服务日志
-cxxy-wlanlogin-cli daemon logs -f   # 持续查看新日志，Ctrl+C 退出
-cxxy-wlanlogin-cli daemon start     # 启动服务
-cxxy-wlanlogin-cli daemon stop      # 停止服务，保留自动启动设置
-cxxy-wlanlogin-cli daemon restart   # 重启服务
-cxxy-wlanlogin-cli uninstall        # 卸载服务，保留已保存的凭据
-cxxy-wlanlogin-cli uninstall --purge # 卸载服务并清理所选范围的应用数据和凭据
+wlanlogin install          # 安装并启动后台服务
+wlanlogin daemon status    # 查看安装与运行状态
+wlanlogin daemon logs      # 查看最近 100 行服务日志
+wlanlogin daemon logs -f   # 持续查看新日志，Ctrl+C 退出
+wlanlogin daemon start     # 启动服务
+wlanlogin daemon stop      # 停止服务，保留自动启动设置
+wlanlogin daemon restart   # 重启服务
+wlanlogin uninstall        # 卸载服务，保留已保存的凭据
+wlanlogin uninstall --purge # 卸载服务并清理所选范围的应用数据和凭据
 ```
 
-`daemon logs -n 200` 可指定历史日志行数，`-n 0 -f` 只查看新日志。新安装的 Linux 服务、macOS 与 Windows 服务均读取应用配置目录中的 `daemon.log`；旧 Linux 服务仍按已安装的服务定义读取 journal，重新执行 `install` 后改用独立日志文件。按 `--user` / `--system` 选择范围；读取系统日志可能需要 sudo 或管理员权限。未安装时会报错，服务停止后仍可查看已有日志。
+`daemon logs -n 200` 可指定历史日志行数，`-n 0 -f` 只查看新日志。新安装的 Linux 服务、macOS 与 Windows 服务均读取应用配置目录中的 `daemon.log`；同一应用 ID 下没有应用日志标记的 Linux 服务定义仍读取 journal。改名前的旧服务按上文升级步骤卸载，新版不接管旧名称的服务。按 `--user` / `--system` 选择范围；读取系统日志可能需要 sudo 或管理员权限。未安装时会报错，服务停止后仍可查看已有日志。
 
 `install` 缺少已保存凭据时会先进入登录流程，强制开启 Remember me，并在交互界面显示黄色提示。不在 `Student_CX` 时可先保存凭据并完成安装。
 
 - **普通用户安装**：用户登录操作系统后启动。
-- **sudo／管理员安装**：安装系统服务，随开机启动。Linux、macOS 使用 `sudo cxxy-wlanlogin-cli install`，Windows 使用管理员终端。
+- **sudo／管理员安装**：安装系统服务，随开机启动。Linux、macOS 使用 `sudo wlanlogin install`，Windows 使用管理员终端。
 
 可用全局参数 `--user` / `--system` 指定范围；系统服务的登录、注销及启停也需要管理员权限。两个范围的凭据独立，切换安装范围前需先卸载原服务。系统凭据在 Linux 使用 `systemd-creds` 加密，在 macOS 使用 System Keychain，在 Windows 使用机器 DPAPI；Linux 系统安装需要支持加密凭据的 systemd。
 
-Linux 旧系统可显式使用 `--credential-store protected-file`，例如 `sudo cxxy-wlanlogin-cli --system install --credential-store protected-file`。此模式以仅管理员可读的文件权限保护**明文**凭据；默认加密模式失败时不会自动降级。该选项仅用于系统范围，macOS / Windows 不支持此明文模式。
+Linux 旧系统可显式使用 `--credential-store protected-file`，例如 `sudo wlanlogin --system install --credential-store protected-file`。此模式以仅管理员可读的文件权限保护**明文**凭据；默认加密模式失败时不会自动降级。该选项仅用于系统范围，macOS / Windows 不支持此明文模式。
 
 后台仅在连接 `Student_CX` 时访问门户，使用 `chkstatus` 的 `result=1` / `0` 判断在线 / 离线，确认离线后登录；未知状态不自动提交登录。确认在线后每 4 分钟检查一次，登录成功后先在 30 秒后确认状态；新 Wi-Fi 会话仍会立即触发检查。首次取得状态前遇到临时网络错误时，按 1、2、4 秒最多快速重试三次，之后进入 30、60、120 秒的常规退避，最多等待 2 分钟；重试到期直接触发，不再等待下一个检查周期。日志标明失败阶段、门户返回码含义和等待时间。手动注销后，手动登录或重新接入目标 Wi-Fi 可恢复自动登录。
 
-直接运行 `cxxy-wlanlogin-cli daemon` 会在当前进程运行后台循环，需要事先在同一范围保存凭据。`start`、`stop`、`restart` 仅管理已安装服务，未安装时会报错。
+直接运行 `wlanlogin daemon` 会在当前进程运行后台循环，需要事先在同一范围保存凭据。`start`、`stop`、`restart` 仅管理已安装服务，未安装时会报错。
 
-更多参数见 `cxxy-wlanlogin-cli --help` 和各子命令的 `--help`。
+更多参数见 `wlanlogin --help` 和各子命令的 `--help`。
+
+### 应用标识与目录
+
+应用 ID 为 `dev.cxcs.tools.wlanlogin`，数据和程序目录采用 `cxcs-tools/wlanlogin` 两级结构。ID 与目录路径分别使用；Windows 服务名不含斜杠。
+
+| 用途 | 名称 |
+| --- | --- |
+| Linux systemd unit | `dev.cxcs.tools.wlanlogin.service` |
+| macOS launchd Label / plist | `dev.cxcs.tools.wlanlogin` / `dev.cxcs.tools.wlanlogin.plist` |
+| Windows 系统服务 | `dev.cxcs.tools.wlanlogin` |
+| Windows 用户计划任务 | `dev.cxcs.tools.wlanlogin-{SID}`，每个用户独立 |
+| 用户凭据 service / entry | `dev.cxcs.tools.wlanlogin` / `saved-login` |
+| macOS 系统凭据 service / account | `dev.cxcs.tools.wlanlogin.system` / `saved-login` |
+
+下表列出默认路径；Linux 用户目录遵循 XDG 环境变量，Windows 基础目录通过系统 Known Folder API 定位。
+
+| 平台 | 用户配置、日志和运行文件 | 系统配置、运行文件和凭据 |
+| --- | --- | --- |
+| Linux | `~/.config/cxcs-tools/wlanlogin/` | `/var/lib/cxcs-tools/wlanlogin/`、`/run/cxcs-tools/wlanlogin/`、`/etc/cxcs-tools/wlanlogin/` |
+| macOS | `~/Library/Application Support/cxcs-tools/wlanlogin/` | `/Library/Application Support/cxcs-tools/wlanlogin/state/`、`/var/run/cxcs-tools/wlanlogin/`；凭据在 System Keychain |
+| Windows | `%APPDATA%\cxcs-tools\wlanlogin\config\` | `%ProgramData%\cxcs-tools\wlanlogin\` 下的 `state`、`run`、`secrets` |
+
+用户后台程序副本位于 Linux 的 `~/.local/share/cxcs-tools/wlanlogin/bin/`、macOS 的用户应用目录下 `bin/`、Windows 的 `%LOCALAPPDATA%\cxcs-tools\wlanlogin\data\bin\`。系统后台程序副本位于 Linux 的 `/usr/local/libexec/cxcs-tools/wlanlogin/`、macOS 的 `/Library/Application Support/cxcs-tools/wlanlogin/bin/`、Windows 的 `%ProgramFiles%\cxcs-tools\wlanlogin\`。文件名为 `wlanlogin-daemon`，Windows 加 `.exe`。
 
 ## 日志与排障
 
 应用日志使用英文事件文本、UTC RFC 3339 时间、日志级别、模块路径以及结构化字段，例如：
 
 ```text
-2026-09-29T08:00:00Z INFO  cxxy_wlanlogin_cli::app::daemon::runtime: Daemon started scope="user" ssid="Student_CX"
+2026-09-29T08:00:00Z INFO  wlanlogin::app::daemon::runtime: Daemon started scope="user" ssid="Student_CX"
 ```
 
 默认级别为 `info`，可用 `RUST_LOG` 调整；前台运行时日志写入 stderr。以下设置仅作用于本次启动的进程，已安装服务需要在服务环境中配置：
 
 ```sh
-RUST_LOG=cxxy_wlanlogin_cli=debug cxxy-wlanlogin-cli --user daemon
+RUST_LOG=wlanlogin=debug wlanlogin --user daemon
 ```
 
 后台日志写入所选范围配置目录下的 `daemon.log`。程序启动时若已有日志超过 2 MiB，会清空该文件；这不是持续轮转或历史归档。门户错误会转换为英文诊断并保留错误分类；可识别的已知返回码保留英文说明，未知、脱敏或截断后无法识别的内容使用通用摘要，不输出原始门户响应或凭据。CLI 帮助和 TUI 保留中文，底层操作系统错误可能使用系统语言。
@@ -131,14 +167,14 @@ RUST_LOG=cxxy_wlanlogin_cli=debug cxxy-wlanlogin-cli --user daemon
 两个选项都只作用于所选的 `--user` 或 `--system` 范围，不跨用户清理。普通终端默认使用用户范围，sudo／管理员终端默认使用系统范围。例如：
 
 ```sh
-cxxy-wlanlogin-cli --user logout --forget
-cxxy-wlanlogin-cli --user uninstall --purge
-sudo cxxy-wlanlogin-cli --system uninstall --purge  # Linux / macOS 系统范围
+wlanlogin --user logout --forget
+wlanlogin --user uninstall --purge
+sudo wlanlogin --system uninstall --purge  # Linux / macOS 系统范围
 ```
 
-Windows 系统范围在管理员终端运行 `cxxy-wlanlogin-cli --system uninstall --purge`。
+Windows 系统范围在管理员终端运行 `wlanlogin --system uninstall --purge`。
 
-`--purge` 清理本程序管理的文件，保留原始 CLI 文件和目录中的其他文件。旧 Linux 共享 journal 中的历史日志，以及 Windows/macOS/Linux 的系统服务审计记录，无法作为应用文件单独删除，仍由操作系统的日志保留策略管理；本工具不会清空全系统日志。
+`--purge` 清理本程序管理的文件，保留原始 CLI 文件、目录中的其他文件、共享的 `cxcs-tools` 父目录及其中的其他工具。旧 Linux 共享 journal 中的历史日志，以及 Windows/macOS/Linux 的系统服务审计记录，无法作为应用文件单独删除，仍由操作系统的日志保留策略管理；本工具不会清空全系统日志。
 
 ## 协议文档
 

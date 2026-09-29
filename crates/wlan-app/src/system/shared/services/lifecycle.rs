@@ -127,7 +127,12 @@ mod tests {
             manage_plan(&paths, &plan, action, &runner).await?;
             assert_eq!(
                 calls(&runner)[1],
-                ["systemctl", "--system", verb, "cxxy-wlanlogin.service"]
+                [
+                    "systemctl",
+                    "--system",
+                    verb,
+                    "dev.cxcs.tools.wlanlogin.service"
+                ]
             );
 
             let plan = crate::system::shared::services::artifacts::windows_system_plan(
@@ -140,7 +145,10 @@ mod tests {
             if matches!(action, Action::Stop) {
                 assert_eq!(calls(&runner).len(), 1);
             } else {
-                assert_eq!(calls(&runner)[1], ["sc.exe", "start", "cxxy-wlanlogin"]);
+                assert_eq!(
+                    calls(&runner)[1],
+                    ["sc.exe", "start", "dev.cxcs.tools.wlanlogin"]
+                );
             }
         }
         Ok(())
@@ -164,10 +172,13 @@ mod tests {
         ]);
         manage_plan(&paths, &plan, Action::Restart, &runner).await?;
         let submitted = calls(&runner);
-        assert_eq!(submitted[1], ["sc.exe", "stop", "cxxy-wlanlogin"]);
+        assert_eq!(submitted[1], ["sc.exe", "stop", "dev.cxcs.tools.wlanlogin"]);
         assert_eq!(submitted[2][0], "powershell.exe");
         assert_eq!(submitted[3][0], "powershell.exe");
-        assert_eq!(submitted[4], ["sc.exe", "start", "cxxy-wlanlogin"]);
+        assert_eq!(
+            submitted[4],
+            ["sc.exe", "start", "dev.cxcs.tools.wlanlogin"]
+        );
         let runner = FakeRunner::new([(true, "Installed=1\nState=4"), (false, "stop failed")]);
         assert!(
             manage_plan(&paths, &plan, Action::Restart, &runner)
@@ -233,7 +244,12 @@ mod tests {
             manage_plan(&paths, &plan, action, &runner).await?;
             assert_eq!(
                 calls(&runner)[1],
-                ["systemctl", "--user", verb, "cxxy-wlanlogin.service"]
+                [
+                    "systemctl",
+                    "--user",
+                    verb,
+                    "dev.cxcs.tools.wlanlogin.service"
+                ]
             );
             assert!(control::singleton(&paths).is_err());
             assert!(control::State::load(&paths)?.paused);
@@ -261,8 +277,7 @@ mod tests {
         Ok(())
     }
 
-    const MAC_RUNNING: &str =
-        "gui/501/org.seucxcs.cxxy-wlanlogin = {\nstate = running\npid = 123\n}";
+    const MAC_RUNNING: &str = "gui/501/dev.cxcs.tools.wlanlogin = {\nstate = running\npid = 123\n}";
     const MAC_DOMAIN: &str = "gui/501 = {\nservices = {\n}\n}";
 
     #[tokio::test]
@@ -281,7 +296,7 @@ mod tests {
             let calls = calls(&runner);
             assert_eq!(
                 calls[1],
-                ["launchctl", "bootout", "gui/501/org.seucxcs.cxxy-wlanlogin"]
+                ["launchctl", "bootout", "gui/501/dev.cxcs.tools.wlanlogin"]
             );
             if matches!(action, Action::Restart) {
                 assert_eq!(
@@ -356,13 +371,23 @@ mod tests {
         let calls = calls(&runner);
         assert_eq!(
             calls[1],
-            ["schtasks", "/End", "/TN", "cxxy-wlanlogin-S-1-5-21-123"]
+            [
+                "schtasks",
+                "/End",
+                "/TN",
+                "dev.cxcs.tools.wlanlogin-S-1-5-21-123"
+            ]
         );
         assert_eq!(calls[2][0], "powershell.exe");
         assert_eq!(calls[3][0], "powershell.exe");
         assert_eq!(
             calls[4],
-            ["schtasks", "/Run", "/TN", "cxxy-wlanlogin-S-1-5-21-123"]
+            [
+                "schtasks",
+                "/Run",
+                "/TN",
+                "dev.cxcs.tools.wlanlogin-S-1-5-21-123"
+            ]
         );
         assert_eq!(fs::read_to_string(&plan.definition)?, plan.content);
         Ok(())
@@ -386,7 +411,12 @@ mod tests {
             } else {
                 assert_eq!(
                     calls[1],
-                    ["schtasks", "/Run", "/TN", "cxxy-wlanlogin-S-1-5-21-123"]
+                    [
+                        "schtasks",
+                        "/Run",
+                        "/TN",
+                        "dev.cxcs.tools.wlanlogin-S-1-5-21-123"
+                    ]
                 );
             }
         }

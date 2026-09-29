@@ -138,7 +138,7 @@ mod tests {
             .with_writer(move || writer.clone())
             .event_format(Format)
             .finish();
-        let error = crate::infra::error::Error::from(cxxy_wlanlogin_lib::Error::Rejected {
+        let error = crate::infra::error::Error::from(wlanlogin_lib::Error::Rejected {
             message: "password=never-log-this\nforged log entry".into(),
             credential_rejected: true,
         });

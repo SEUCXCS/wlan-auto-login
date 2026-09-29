@@ -3,7 +3,7 @@ use crate::infra::{
     command::{Invocation, Runner},
     error::{Message, Result},
 };
-use crate::system::define::services::{Action, Plan, ServiceState};
+use crate::system::define::services::{Action, LABEL, Plan, ServiceState};
 use crate::system::shared::services::lifecycle::wait_task_stopped;
 use crate::system::shared::services::{fields, lifecycle::execute};
 pub(crate) async fn query_task(name: &str, runner: &impl Runner) -> Result<ServiceState> {
@@ -46,20 +46,12 @@ pub(crate) async fn manage_service(
 ) -> Result<()> {
     let mut state = state;
     if matches!(action, Action::Stop | Action::Restart) && (state.running || state.pending) {
-        execute(
-            runner,
-            Invocation::new("sc.exe", ["stop", "cxxy-wlanlogin"]),
-        )
-        .await?;
+        execute(runner, Invocation::new("sc.exe", ["stop", LABEL])).await?;
         state = wait_task_stopped(&plan.manager, runner).await?;
     }
     if matches!(action, Action::Start | Action::Restart) && !state.running && !state.pending {
         crate::infra::error::ensure!(state.registered, Message::ServiceRegistrationRemoved);
-        execute(
-            runner,
-            Invocation::new("sc.exe", ["start", "cxxy-wlanlogin"]),
-        )
-        .await?;
+        execute(runner, Invocation::new("sc.exe", ["start", LABEL])).await?;
     }
     Ok(())
 }
@@ -144,14 +136,15 @@ fn windows_service_query() -> Invocation {
     let script = r#"$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
 try {
-    $service = Get-Service | Where-Object { $_.ServiceName -eq 'cxxy-wlanlogin' }
+    $service = Get-Service | Where-Object { $_.ServiceName -eq '{service}' }
     if ($null -eq $service) { [Console]::WriteLine('Installed=0'); exit 0 }
     [Console]::WriteLine('Installed=1')
     [Console]::WriteLine('State=' + [int]$service.Status)
-    $start = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\cxxy-wlanlogin').Start
+    $start = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\{service}').Start
     [Console]::WriteLine('Enabled=' + [int]($start -eq 2))
 } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
-"#;
+"#
+    .replace("{service}", LABEL);
     Invocation::new(
         "powershell.exe",
         [
@@ -159,7 +152,7 @@ try {
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            script,
+            &script,
         ],
     )
 }
@@ -196,6 +189,32 @@ fn parse_windows_service(text: &str) -> Result<ServiceState> {
 mod tests {
     use super::*;
     use crate::infra::error::Context;
+    use crate::system::define::services::ServiceManager;
+
+    #[test]
+    fn scm_registration_commands_and_query_share_the_service_name() -> Result<()> {
+        let plan = crate::system::windows::services::definition::windows_system_plan(
+            r"C:\Program Files\cxcs-tools\wlanlogin\wlanlogin-daemon.exe".into(),
+            r"C:\ProgramData\cxcs-tools\wlanlogin\service.json".into(),
+        )?;
+        let name = plan.manager.name();
+        assert_eq!(name, "dev.cxcs.tools.wlanlogin");
+        for command in plan.start.iter().chain(&plan.stop).chain(&plan.remove) {
+            assert_eq!(command.program, "sc.exe");
+            assert_eq!(command.args[1], name);
+        }
+        let query = windows_service_query();
+        let script = query
+            .args
+            .last()
+            .context("missing script")?
+            .to_string_lossy();
+        assert!(script.contains(&format!("$_.ServiceName -eq '{name}'")));
+        assert!(script.contains(&format!(r"HKLM:\SYSTEM\CurrentControlSet\Services\{name}")));
+        assert!(!script.contains("{service}"));
+        Ok(())
+    }
+
     #[test]
     fn windows_numeric_states_do_not_depend_on_system_language() -> Result<()> {
         for number in 1..=4 {

@@ -86,7 +86,8 @@ async fn installed_version(plan: &Plan, runner: &impl Runner) -> Result<String> 
     let version = result
         .stdout
         .trim()
-        .strip_prefix(concat!(env!("CARGO_PKG_NAME"), " "))
+        .strip_prefix(crate::infra::identity::APP_NAME)
+        .and_then(|value| value.strip_prefix(' '))
         .filter(|value| {
             !value.is_empty()
                 && value

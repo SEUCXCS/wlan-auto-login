@@ -70,11 +70,11 @@ pub fn prompt(
                     KeyCode::Tab | KeyCode::Down => focus = (focus + 1) % 5,
                     KeyCode::BackTab | KeyCode::Up => focus = (focus + 4) % 5,
                     KeyCode::Left | KeyCode::Right if focus == 3 => {
-                        let index = cxxy_wlanlogin_lib::Line::ALL
+                        let index = wlanlogin_lib::Line::ALL
                             .iter()
                             .position(|line| *line == form.line)
                             .unwrap_or_default();
-                        form.line = cxxy_wlanlogin_lib::Line::ALL
+                        form.line = wlanlogin_lib::Line::ALL
                             [(index + if key.code == KeyCode::Left { 2 } else { 1 }) % 3];
                     }
                     KeyCode::Char(' ') | KeyCode::Enter if focus == 2 => {
@@ -241,7 +241,7 @@ mod tests {
                 let backend = ratatui::backend::TestBackend::new(width, 22);
                 let mut terminal = Terminal::new(backend).unwrap_or_else(|never| match never {});
                 let form = Form {
-                    credentials: cxxy_wlanlogin_lib::Credentials {
+                    credentials: wlanlogin_lib::Credentials {
                         username: "student".into(),
                         password: "never-echo-this".into(),
                     },
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn required_remember_cannot_be_unchecked() {
         let mut form = Form {
-            credentials: cxxy_wlanlogin_lib::Credentials {
+            credentials: wlanlogin_lib::Credentials {
                 username: String::new(),
                 password: String::new(),
             },
