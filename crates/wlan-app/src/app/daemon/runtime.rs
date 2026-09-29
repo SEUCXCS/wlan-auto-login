@@ -1,5 +1,9 @@
 //! Schedule checks against deadlines and process Wi-Fi and IPC events.
-use super::{check::tick, credentials, ensure_scope, policy::Policy};
+use super::{
+    check::{Outcome, tick},
+    credentials, ensure_scope,
+    policy::Policy,
+};
 use crate::infra::{
     control,
     error::{Context, Message, Result, bail},
@@ -40,6 +44,7 @@ pub(super) async fn run_loop(
     }
     let mut monitor = None;
     let mut scheduled = true;
+    let mut last_outcome = None;
     tracing::info!(
         scope = paths.scope.label(),
         ssid = "Student_CX",
@@ -59,20 +64,40 @@ pub(super) async fn run_loop(
                 }
             }
         }
-        if let Some(monitor) = &monitor
-            && let Err(e) = tokio::time::timeout(
+        if let Some(monitor) = &monitor {
+            let result = tokio::time::timeout(
                 CHECK_TIMEOUT,
                 tick(client, paths, monitor, store.load(), &mut policy, scheduled),
             )
             .await
             .context(Message::NetworkCheckTimedOut)
-            .and_then(|result| result)
-        {
-            let transient_status = e
-                .downcast_ref::<wlanlogin_lib::Error>()
-                .is_some_and(|error| error.is_transient_status_failure());
-            let delay = policy.failure(Instant::now(), transient_status);
-            tracing::warn!(error = %e, retry_after_secs = delay.as_secs(), "{}", Message::CheckFailed);
+            .and_then(|result| result);
+            match result {
+                // Notifications and early wakes must not obscure the last actual
+                // result or repeat the same waiting message every poll interval.
+                Ok(Outcome::Unchanged | Outcome::WaitingForDeadline) => {}
+                Ok(outcome) => {
+                    if last_outcome != Some(outcome) {
+                        let now = Instant::now();
+                        let delay = policy.next_deadline(now).saturating_duration_since(now);
+                        tracing::info!(
+                            outcome = outcome.label(),
+                            next_check_secs = delay.as_secs_f64().ceil() as u64,
+                            "{}",
+                            Message::NetworkCheckCompleted
+                        );
+                    }
+                    last_outcome = Some(outcome);
+                }
+                Err(e) => {
+                    last_outcome = None;
+                    let transient_status = e
+                        .downcast_ref::<wlanlogin_lib::Error>()
+                        .is_some_and(|error| error.is_transient_status_failure());
+                    let delay = policy.failure(Instant::now(), transient_status);
+                    tracing::warn!(error = %e, retry_after_secs = delay.as_secs(), "{}", Message::CheckFailed);
+                }
+            }
         }
         tokio::select! {
             _ = next_scheduled_check(&mut policy) => { scheduled = true; },
@@ -88,6 +113,9 @@ pub(super) async fn run_loop(
 }
 pub(super) async fn next_scheduled_check(policy: &mut Policy) {
     tokio::time::sleep_until(policy.next_deadline(Instant::now())).await;
+    if policy.retry_deadline().is_some() {
+        tracing::info!("{}", Message::RetryingNetworkCheck);
+    }
     // Consume even skipped checks so a pause cannot leave a ready timer spinning.
     policy.clear_due_check(Instant::now());
 }

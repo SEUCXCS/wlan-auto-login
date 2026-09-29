@@ -122,7 +122,9 @@ wlanlogin uninstall --purge # 卸载服务并清理所选范围的应用数据�
 
 Linux 旧系统可显式使用 `--credential-store protected-file`，例如 `sudo wlanlogin --system install --credential-store protected-file`。此模式以仅管理员可读的文件权限保护**明文**凭据；默认加密模式失败时不会自动降级。该选项仅用于系统范围，macOS / Windows 不支持此明文模式。
 
-后台仅在连接 `Student_CX` 时访问门户，使用 `chkstatus` 的 `result=1` / `0` 判断在线 / 离线，确认离线后登录；未知状态不自动提交登录。确认在线后每 4 分钟检查一次，登录成功后先在 30 秒后确认状态；新 Wi-Fi 会话仍会立即触发检查。首次取得状态前遇到临时网络错误时，按 1、2、4 秒最多快速重试三次，之后进入 30、60、120 秒的常规退避，最多等待 2 分钟；重试到期直接触发，不再等待下一个检查周期。日志标明失败阶段、门户返回码含义和等待时间。手动注销后，手动登录或重新接入目标 Wi-Fi 可恢复自动登录。
+后台仅在连接 `Student_CX` 时访问门户，使用 `chkstatus` 的 `result=1` / `0` 判断在线 / 离线，确认离线后登录；未知状态不自动提交登录。确认在线后每 4 分钟检查一次，登录成功后先在 30 秒后确认状态；新 Wi-Fi 会话仍会立即触发检查。首次取得状态前遇到临时网络错误时，按 1、2、4 秒最多快速重试三次，之后进入 30、60、120 秒的常规退避，最多等待 2 分钟；重试到期直接触发，不再等待下一个检查周期。手动注销后，需在同一范围手动登录或重新接入目标 Wi-Fi 才能恢复自动登录；重启 daemon 会保留同一连接的暂停状态。
+
+`retry_after_secs` 表示下次重新检查的等待时间，不保证届时一定提交登录。默认日志会记录重试开始，并在首次检查、结果变化或错误恢复后输出 `Network check completed`：`outcome` 区分 `online`（已在线）、`waiting_for_target_wifi`（未识别到目标 Wi-Fi）、`automatic_login_paused`（手动注销后暂停）、`unknown_portal_state`（门户状态未知）等，`next_check_secs` 表示下次计划检查的等待时间。相同结果不会每次轮询重复输出。macOS 已连接但无法读取 SSID 时会明确报错并重试，不会因 BSSID 同时不可读而误判为未连接；Wi-Fi 宿主通信错误也会标明来源。
 
 直接运行 `wlanlogin daemon` 会在当前进程运行后台循环，需要事先在同一范围保存凭据。`start`、`stop`、`restart` 仅管理已安装服务，未安装时会报错。
 

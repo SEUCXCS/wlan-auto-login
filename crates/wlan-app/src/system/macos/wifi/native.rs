@@ -3,7 +3,7 @@ use crate::infra::error::{Context, Result, bail};
 use crate::system::{define::wifi::TARGET_SSID, shared::wifi::Worker};
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2_core_foundation::{CFArray, CFRetained, CFString};
-use objc2_core_wlan::CWWiFiClient;
+use objc2_core_wlan::{CWInterfaceMode, CWWiFiClient};
 use objc2_system_configuration::{SCDynamicStore, SCDynamicStoreContext};
 use std::{
     ffi::c_void,
@@ -122,23 +122,29 @@ fn current_interface() -> Result<Option<String>> {
                 return Ok(None);
             };
             for interface in interfaces.iter() {
-                let ssid = interface.ssid();
-                if let Some(ssid) = ssid {
-                    if ssid.to_string().as_bytes() == TARGET_SSID {
-                        let name = interface
-                            .interfaceName()
-                            .context(Message::FailedToReadWiFiInterfaceName)?;
-                        return Ok(Some(name.to_string()));
-                    }
-                } else if interface.powerOn() && interface.bssid().is_some() {
-                    bail!(
-                        "The connected Wi-Fi network name is unavailable despite Location authorization"
-                    );
+                let ssid = interface.ssid().map(|value| value.to_string());
+                // SSID and BSSID can both be redacted. Interface mode does not
+                // require Location access and distinguishes this from disconnect.
+                let connected =
+                    interface.powerOn() && interface.interfaceMode() != CWInterfaceMode::None;
+                if is_target(ssid.as_deref(), connected)? {
+                    let name = interface
+                        .interfaceName()
+                        .context(Message::FailedToReadWiFiInterfaceName)?;
+                    return Ok(Some(name.to_string()));
                 }
             }
             Ok(None)
         }
     })
+}
+
+fn is_target(ssid: Option<&str>, connected: bool) -> Result<bool> {
+    match ssid {
+        Some(ssid) => Ok(ssid.as_bytes() == TARGET_SSID),
+        None if connected => bail!(Message::ConnectedWifiNameUnavailable),
+        None => Ok(false),
+    }
 }
 
 impl Drop for NativeMonitor {
@@ -181,5 +187,19 @@ impl crate::system::define::wifi::WifiConnection for Monitor {
 impl crate::system::define::wifi::WifiMonitor for Monitor {
     async fn changed(&mut self) -> Result<()> {
         Monitor::changed(self).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redacted_network_name_is_unavailable_instead_of_disconnected() -> Result<()> {
+        assert!(is_target(None, true).is_err());
+        assert!(!is_target(None, false)?);
+        assert!(!is_target(Some("Other Wi-Fi"), true)?);
+        assert!(is_target(Some("Student_CX"), true)?);
+        Ok(())
     }
 }

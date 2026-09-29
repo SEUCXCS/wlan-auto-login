@@ -47,6 +47,12 @@ pub enum Message {
     MacosHostAlreadyRunning,
     #[error("Native Wi-Fi query timed out")]
     NativeWifiQueryTimedOut,
+    #[error("The connected Wi-Fi network name is unavailable despite Location authorization")]
+    ConnectedWifiNameUnavailable,
+    #[error("Wi-Fi host request failed")]
+    MacosHostRequestFailed,
+    #[error("Failed to identify the current Wi-Fi connection")]
+    WifiIdentificationFailed,
     #[error("Managed Wi-Fi hosts stop with their service")]
     ManagedHostStopsWithService,
     #[error("Wi-Fi helper did not stop; bundle retained")]
@@ -461,6 +467,10 @@ pub enum Message {
     MonitorUnavailable,
     #[error("Network check failed")]
     CheckFailed,
+    #[error("Retrying network check")]
+    RetryingNetworkCheck,
+    #[error("Network check completed")]
+    NetworkCheckCompleted,
     #[error("Network event subscription disconnected")]
     MonitorDisconnected,
     #[error("Authentication succeeded")]

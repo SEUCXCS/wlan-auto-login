@@ -89,7 +89,7 @@ macOS Wi-Fi 宿主使用有长度限制的 IPC 帧、协议版本和请求 ID；
 
 通过 `context` / `with_context` 保留错误来源；门户错误由 `infra/error/portal.rs` 转换为英文、安全的摘要，同时保留供重试分类使用的原始错误类型。当前协议库只在本地化错误文本中提供返回码，应用边界仅识别已知的标准说明与返回码组合，并用静态英文模板输出；无法识别时退回通用摘要。维护映射时用真实 API 加 loopback 响应验证，不要依赖任意门户文本。不要把门户原始响应、URL 查询参数或凭据写入日志。
 
-日志使用 `tracing`，事件文本采用英文句式；使用 `error`、`scope`、`retry_after_secs` 等结构化字段。成功事件用 `info`，可恢复故障用 `warn`，终止或需人工处理的故障用 `error`，跳过检查等诊断用 `debug`。时间和格式由 `infra/logging.rs` 统一处理，业务模块不自行拼时间戳。中文 CLI / TUI 文案留在前端。
+日志使用 `tracing`，事件文本采用英文句式；使用 `error`、`scope`、`retry_after_secs` 等结构化字段。成功事件用 `info`，可恢复故障用 `warn`，终止或需人工处理的故障用 `error`，重复的跳过检查等诊断用 `debug`。daemon 的 `check.rs` 返回检查结果，由 `runtime.rs` 在首次检查、结果变化或错误恢复时用 `info` 输出 `outcome` 和 `next_check_secs`，并记录重试开始，避免静默跳过被误判为定时器失效。macOS 不能用同样受定位权限限制的 BSSID 判断 SSID 不可读时是否断网；已连接但名称不可读必须返回错误，保留重试及凭据保护。时间和格式由 `infra/logging.rs` 统一处理，业务模块不自行拼时间戳。中文 CLI / TUI 文案留在前端。
 
 ## 测试与验证
 

@@ -308,7 +308,8 @@ async fn call(operation: Operation, launch: bool) -> Result<Response> {
         },
     )
     .await
-    .context(Message::MacosHostUnavailable)??;
+    .context(Message::MacosHostUnavailable)?
+    .context(Message::MacosHostRequestFailed)?;
     ensure!(
         response.version == VERSION && response.id == id,
         Message::MacosHostProtocol
