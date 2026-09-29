@@ -1,4 +1,6 @@
 //! Pause authentication, optionally stop the daemon and forget local credentials.
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use crate::{
     credentials,
     infra::control,
@@ -6,7 +8,6 @@ use crate::{
     service,
     wifi::{WifiConnection, WifiProbe},
 };
-use anyhow::{Context, Result};
 use cxxy_wlanlogin_lib::Client;
 use std::future::Future;
 
@@ -37,11 +38,11 @@ async fn logout_if_target(client: &Client, wifi: &impl WifiConnection) -> Result
     match wifi
         .target_session()
         .await
-        .context("无法确认 Wi-Fi，未请求门户注销")?
+        .context(Message::WiFiIdentificationFailedPortalLogoutWasNot)?
     {
         Some(_) => client.logout().await.map_err(Into::into),
         None => {
-            tracing::info!("当前未连接 Student_CX，仅清除本地登录凭据，未请求门户注销");
+            tracing::info!("{}", Message::NotConnectedToStudentCXDeletingLocal);
             Ok(())
         }
     }
@@ -65,28 +66,47 @@ async fn run_with(
         // automatic login. Attempt all steps and report any incomplete work.
         let mut errors = Vec::new();
         if let Err(error) = stop.await {
-            errors.push(format!("停止后台进程失败：{error:#}"));
+            errors.push(
+                (Message::FailedToStopDaemonError {
+                    error: format!("{:#}", error),
+                })
+                .to_string(),
+            );
         }
         if let Err(error) = logout.await {
-            errors.push(format!("门户注销未完成：{error:#}"));
+            errors.push(
+                (Message::PortalLogoutFailedError {
+                    error: format!("{:#}", error),
+                })
+                .to_string(),
+            );
         }
         match delete.await {
-            Ok(()) => tracing::info!("所选范围的已保存凭据已删除"),
-            Err(error) => errors.push(format!("删除凭据失败：{error:#}")),
+            Ok(()) => tracing::info!("{}", Message::SavedCredentialsDeletedForTheSelectedScope),
+            Err(error) => errors.push(
+                (Message::FailedToDeleteCredentialsError {
+                    error: format!("{:#}", error),
+                })
+                .to_string(),
+            ),
         }
-        anyhow::ensure!(
+        crate::infra::error::ensure!(
             errors.is_empty(),
-            "完全登出未完成，自动登录保持暂停：{}",
-            errors.join("；")
+            Message::FullLogoutIncompleteAutomaticLoginRemainsPaused {
+                value0: (errors.join("；")).to_string()
+            }
         );
-        tracing::info!("本地登录信息已清除，后台自动登录已停止");
+        tracing::info!(
+            "{}",
+            Message::LocalCredentialsClearedAndAutomaticLoginStopped
+        );
     } else {
         if let Err(error) = logout.await {
             previous.save(paths)?;
             return Err(error);
         }
         control::wake(paths).await;
-        tracing::info!("已注销");
+        tracing::info!("{}", Message::LoggedOut);
     }
     Ok(())
 }
@@ -106,12 +126,12 @@ mod tests {
         let result = run_with(
             &paths,
             true,
-            async { anyhow::bail!("portal unavailable") },
+            async { crate::infra::error::bail!("portal unavailable") },
             async {
                 fs::remove_file(&secret)?;
                 Ok(())
             },
-            async { anyhow::bail!("stop failed") },
+            async { crate::infra::error::bail!("stop failed") },
         )
         .await;
         let message = format!("{:#}", result.err().context("expected partial failure")?);
@@ -130,7 +150,7 @@ mod tests {
             &paths,
             true,
             async { Ok(()) },
-            async { anyhow::bail!("keyring locked") },
+            async { crate::infra::error::bail!("keyring locked") },
             async {
                 stopped.set(true);
                 Ok(())
@@ -154,7 +174,7 @@ mod tests {
         let result = run_with(
             &paths,
             false,
-            async { anyhow::bail!("portal unavailable") },
+            async { crate::infra::error::bail!("portal unavailable") },
             async { panic!("ordinary logout must not delete credentials") },
             async { panic!("ordinary logout must not stop the daemon") },
         )

@@ -1,4 +1,5 @@
 //! Platform service definitions, installation paths and ownership checks.
+use crate::infra::error::Message;
 #[cfg(any(target_os = "linux", test))]
 mod linux;
 #[cfg(any(target_os = "linux", test))]
@@ -13,8 +14,8 @@ mod windows;
 pub(super) use windows::{windows_plan, windows_system_plan};
 
 use super::{command::Invocation, manager::Manager};
+use crate::infra::error::{Context, Result, bail};
 use crate::infra::paths::Paths;
-use anyhow::{Context, Result, bail};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -39,7 +40,7 @@ pub(super) fn plan(paths: &Paths) -> Result<Plan> {
         return system_plan(paths);
     }
     let dirs = directories::ProjectDirs::from("org", "seucxcs", "cxxy-wlanlogin")
-        .context("无法确定安装目录")?;
+        .context(Message::FailedToDetermineInstallationDirectory)?;
     let executable = dirs.data_local_dir().join("bin").join(if cfg!(windows) {
         "cxxy-wlanlogin-daemon.exe"
     } else {
@@ -47,7 +48,8 @@ pub(super) fn plan(paths: &Paths) -> Result<Plan> {
     });
     #[cfg(target_os = "linux")]
     {
-        let base = directories::BaseDirs::new().context("无法确定用户服务目录")?;
+        let base =
+            directories::BaseDirs::new().context(Message::FailedToDetermineUserServiceDirectory)?;
         let _ = paths;
         linux_plan(
             executable,
@@ -57,7 +59,8 @@ pub(super) fn plan(paths: &Paths) -> Result<Plan> {
     }
     #[cfg(target_os = "macos")]
     {
-        let base = directories::BaseDirs::new().context("无法确定用户服务目录")?;
+        let base =
+            directories::BaseDirs::new().context(Message::FailedToDetermineUserServiceDirectory)?;
         let uid = unsafe { libc::geteuid() };
         let log = paths.config.join("daemon.log");
         macos_plan(
@@ -134,10 +137,9 @@ pub(crate) fn ensure_no_conflicting_install(paths: &Paths) -> Result<()> {
     };
     if other.try_exists()? {
         assert_owned(&other)?;
-        bail!(
-            "检测到另一安装范围的服务：{}；请使用该服务对应的范围和权限执行命令；如需切换安装范围，请先卸载该服务（凭据会保留）",
-            other.display()
-        );
+        bail!(Message::AServiceIsInstalledInAnotherScope {
+            value0: (other.display()).to_string()
+        });
     }
     Ok(())
 }
@@ -164,9 +166,9 @@ fn original_user_home() -> Result<Option<PathBuf>> {
             buffer.len(),
             &mut result,
         );
-        anyhow::ensure!(
+        crate::infra::error::ensure!(
             code == 0 && !result.is_null(),
-            "无法确认 sudo 原用户的已有安装"
+            Message::FailedToResolveTheOriginalSudoUser
         );
         use std::os::unix::ffi::OsStrExt;
         Ok(Some(
@@ -178,7 +180,9 @@ fn original_user_home() -> Result<Option<PathBuf>> {
 pub(super) fn assert_owned(path: &Path) -> Result<()> {
     match fs::read_to_string(path) {
         Ok(content) if !content.contains(LABEL) => {
-            bail!("拒绝覆盖或删除非本工具创建的服务文件：{}", path.display())
+            bail!(Message::RefusingToReplaceOrRemoveAService {
+                value0: (path.display()).to_string()
+            })
         }
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -222,7 +226,12 @@ fn is_file(path: &Path) -> Result<bool> {
     match fs::metadata(path) {
         Ok(metadata) => Ok(metadata.is_file()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error).with_context(|| format!("无法读取安装文件：{}", path.display())),
+        Err(error) => Err(error).with_context(|| {
+            (Message::FailedToInspectInstallationFile {
+                value0: (path.display()).to_string(),
+            })
+            .to_string()
+        }),
     }
 }
 

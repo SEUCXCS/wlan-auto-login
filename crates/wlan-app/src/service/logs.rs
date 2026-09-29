@@ -6,10 +6,11 @@ use super::{
     definition::{Artifacts, Plan, plan},
     manager::Manager,
 };
-use crate::infra::paths::Paths;
 #[cfg(any(target_os = "linux", test))]
-use anyhow::Context;
-use anyhow::{Result, ensure};
+use crate::infra::error::Context;
+use crate::infra::error::Message;
+use crate::infra::error::{Result, ensure};
+use crate::infra::paths::Paths;
 #[cfg(any(target_os = "linux", test))]
 use std::io::Write;
 use std::path::PathBuf;
@@ -28,9 +29,9 @@ fn source(paths: &Paths, plan: &Plan, options: LogOptions) -> Result<Source> {
     let files = Artifacts::read(plan)?;
     ensure!(
         files.definition || files.executable,
-        "后台服务尚未安装，请先执行 install"
+        Message::ServiceNotInstalled
     );
-    ensure!(files.complete(), "后台服务安装不完整，请重新执行 install");
+    ensure!(files.complete(), Message::InstallationIncomplete);
     // Reading diagnostics must also work when the service is stopped or its
     // registration is broken. No service manager query or mutation is needed.
     match &plan.manager {
@@ -113,7 +114,7 @@ async fn journal_snapshot(
     let result = runner.output(command).await?;
     result.check(command)?;
     if result.stdout.is_empty() {
-        tracing::info!("暂无可读取的服务日志");
+        tracing::info!("{}", Message::NoServiceLogEntriesAvailable);
     } else {
         output.write_all(result.stdout.as_bytes())?;
         output.flush()?;
@@ -134,7 +135,7 @@ async fn follow_journal(
         .stderr(Stdio::inherit())
         .kill_on_drop(true)
         .spawn()
-        .context("无法读取 journal 日志，请确认 journalctl 可用且当前用户有读取权限")?;
+        .context(Message::FailedToReadJournalCheckJournalctlAvailabilityAnd)?;
     tokio::select! {
         result = child.wait() => {
             let status = result?;
@@ -143,11 +144,11 @@ async fn follow_journal(
                 use std::os::unix::process::ExitStatusExt;
                 if matches!(status.signal(), Some(libc::SIGINT | libc::SIGPIPE)) { return Ok(()); }
             }
-            ensure!(status.success() || status.code() == Some(130), "journalctl 执行失败：{status}");
+            ensure!(status.success() || status.code() == Some(130), Message::JournalctlFailedStatus { status: (status).to_string() });
             Ok(())
         },
         signal = stop => {
-            signal.context("无法监听 Ctrl+C")?;
+            signal.context(Message::FailedToRegisterCtrlCListener)?;
             child.start_kill()?;
             child.wait().await?;
             Ok(())
@@ -183,7 +184,7 @@ mod tests {
             fs::write(&plan.definition, &plan.content)?;
             fs::write(&plan.executable, "mock, never run")?;
             let Source::File(path) = source(&paths, &plan, options)? else {
-                anyhow::bail!("new Linux service must use a removable application log")
+                crate::infra::error::bail!("new Linux service must use a removable application log")
             };
             assert_eq!(path, paths.config.join("daemon.log"));
             fs::write(
@@ -191,7 +192,7 @@ mod tests {
                 plan.content.replace("# ApplicationLog=daemon.log\n", ""),
             )?;
             let Source::Journal(command) = source(&paths, &plan, options)? else {
-                anyhow::bail!("journal expected")
+                crate::infra::error::bail!("journal expected")
             };
             let arguments: Vec<_> = command
                 .args
@@ -229,7 +230,7 @@ mod tests {
             ] {
                 plan.manager = manager;
                 let Source::File(path) = source(&paths, &plan, options)? else {
-                    anyhow::bail!("file expected")
+                    crate::infra::error::bail!("file expected")
                 };
                 assert_eq!(path, paths.config.join("daemon.log"));
             }
@@ -258,7 +259,7 @@ mod tests {
                 .err()
                 .context("expected installation error")?
                 .to_string()
-                .contains("尚未安装")
+                .contains("not installed")
         );
         fs::write(&plan.definition, &plan.content)?;
         assert!(
@@ -266,7 +267,7 @@ mod tests {
                 .err()
                 .context("expected installation error")?
                 .to_string()
-                .contains("不完整")
+                .contains("incomplete")
         );
         assert!(!paths.config.exists());
         assert!(!plan.executable.exists());

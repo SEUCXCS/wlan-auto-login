@@ -1,4 +1,5 @@
 //! Native SCM process entry. All used APIs are available on Windows 7.
+use crate::infra::error::Message;
 use std::{
     ptr,
     sync::{
@@ -31,8 +32,10 @@ pub fn dispatch() -> std::process::ExitCode {
     if unsafe { StartServiceCtrlDispatcherW(table.as_ptr()) } == 0 {
         let _ = crate::infra::logging::init(None);
         tracing::error!(
-            "无法连接 Windows 服务管理器：{}；直接运行请使用 daemon",
-            std::io::Error::last_os_error()
+            "{}",
+            Message::FailedToConnectToWindowsServiceControl {
+                value0: (std::io::Error::last_os_error()).to_string()
+            }
         );
         return std::process::ExitCode::FAILURE;
     }
@@ -55,7 +58,7 @@ unsafe extern "system" fn service_main(_: u32, _: *mut windows_sys::core::PWSTR)
         report(SERVICE_RUNNING, 0);
         let result = runtime.block_on(crate::app::run_service());
         runtime.shutdown_timeout(crate::infra::shutdown::RUNTIME_GRACE);
-        Ok::<_, anyhow::Error>(result)
+        Ok::<_, crate::infra::error::Error>(result)
     });
     let code = match result {
         Ok(Ok(code)) if code == std::process::ExitCode::SUCCESS => 0,

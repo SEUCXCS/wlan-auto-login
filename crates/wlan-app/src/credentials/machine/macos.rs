@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use core_foundation::{
     array::{CFArray, CFArrayRef},
     base::{CFType, TCFType},
@@ -28,23 +29,28 @@ unsafe extern "C" {
 }
 
 fn keychain() -> Result<SecKeychain> {
-    SecKeychain::open("/Library/Keychains/System.keychain").context("无法打开 System Keychain")
+    SecKeychain::open("/Library/Keychains/System.keychain")
+        .context(Message::FailedToOpenSystemKeychain)
 }
 
 pub fn delete() -> Result<()> {
     let (_, item) = match keychain()?.find_generic_password(SERVICE, ACCOUNT) {
         Ok(found) => found,
         Err(error) if error.code() == -25300 => return Ok(()),
-        Err(error) => return Err(error).context("无法查找待删除的 System Keychain 凭据"),
+        Err(error) => {
+            return Err(error).context(Message::FailedToFindSystemKeychainCredentialsForDeletion);
+        }
     };
     // SAFETY: item is a live, retained reference from the selected system keychain.
     // The high-level delete wrapper discards OSStatus, so check it explicitly.
     let code = unsafe {
         security_framework_sys::keychain_item::SecKeychainItemDelete(item.as_concrete_TypeRef())
     };
-    anyhow::ensure!(
+    crate::infra::error::ensure!(
         code == 0 || code == -25300,
-        "无法删除 System Keychain 凭据：{code}"
+        Message::FailedToDeleteSystemKeychainCredentialsCode {
+            code: (code).to_string()
+        }
     );
     Ok(())
 }
@@ -55,14 +61,16 @@ pub fn load() -> Result<Option<Credentials>> {
             super::super::decode(std::str::from_utf8(password.as_ref())?).map(Some)
         }
         Err(error) if error.code() == -25300 => Ok(None),
-        Err(error) => Err(error).context("无法读取 System Keychain 凭据，请检查服务程序访问权限"),
+        Err(error) => {
+            Err(error).context(Message::FailedToReadSystemKeychainCredentialsCheckService)
+        }
     }
 }
 
 pub fn save(text: &str) -> Result<()> {
     keychain()?
         .set_generic_password(SERVICE, ACCOUNT, text.as_bytes())
-        .context("无法保存 System Keychain 凭据")?;
+        .context(Message::FailedToSaveSystemKeychainCredentials)?;
     let current = std::env::current_exe()?;
     let installed =
         Path::new("/Library/Application Support/cxxy-wlanlogin/bin/cxxy-wlanlogin-daemon");
@@ -82,7 +90,12 @@ pub fn authorize_binary(binary: &Path) -> Result<()> {
         unsafe {
             let mut application = std::ptr::null_mut();
             let result = SecTrustedApplicationCreateFromPath(path.as_ptr(), &mut application);
-            anyhow::ensure!(result == 0, "无法授权服务程序读取系统凭据: {result}");
+            crate::infra::error::ensure!(
+                result == 0,
+                Message::FailedToAuthorizeTheServiceExecutableTo {
+                    result: (result).to_string()
+                }
+            );
             applications.push(CFType::wrap_under_create_rule(application));
         }
     }
@@ -96,11 +109,21 @@ pub fn authorize_binary(binary: &Path) -> Result<()> {
             applications.as_concrete_TypeRef(),
             &mut access,
         );
-        anyhow::ensure!(result == 0, "无法创建系统凭据访问控制: {result}");
+        crate::infra::error::ensure!(
+            result == 0,
+            Message::FailedToCreateSystemCredentialAccessControl {
+                result: (result).to_string()
+            }
+        );
         let owned = CFType::wrap_under_create_rule(access.cast());
         let result = SecKeychainItemSetAccess(item.as_concrete_TypeRef(), access);
         drop(owned);
-        anyhow::ensure!(result == 0, "无法设置系统凭据访问控制: {result}");
+        crate::infra::error::ensure!(
+            result == 0,
+            Message::FailedToApplySystemCredentialAccessControl {
+                result: (result).to_string()
+            }
+        );
     }
     Ok(())
 }

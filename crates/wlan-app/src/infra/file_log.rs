@@ -1,3 +1,4 @@
+use crate::infra::error::Message;
 /// Options shared by historical and streaming service-log readers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LogOptions {
@@ -5,7 +6,7 @@ pub(crate) struct LogOptions {
     pub follow: bool,
 }
 
-use anyhow::{Context, Result, ensure};
+use crate::infra::error::{Context, Result, ensure};
 use std::io::Write;
 use std::{
     fs::File,
@@ -28,26 +29,28 @@ impl Cursor {
         options: LogOptions,
         output: &mut impl Write,
     ) -> Result<Option<u64>> {
-        let mut file =
-            match File::open(path) {
-                Ok(file) => file,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    self.offset = Some(0);
-                    self.anchor.clear();
-                    return Ok(None);
-                }
-                Err(error) => return Err(error).with_context(|| {
-                    format!(
-                        "无法读取服务日志 {}；请确认当前用户有读取权限，系统日志可能需要管理员权限",
-                        path.display()
-                    )
-                }),
-            };
+        let mut file = match File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.offset = Some(0);
+                self.anchor.clear();
+                return Ok(None);
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    (Message::FailedToReadServiceLogCheckFile {
+                        value0: (path.display()).to_string(),
+                    })
+                    .to_string()
+                });
+            }
+        };
         let metadata = file.metadata()?;
         ensure!(
             metadata.is_file(),
-            "日志路径不是普通文件：{}",
-            path.display()
+            Message::LogPathIsNotARegularFile {
+                value0: (path.display()).to_string()
+            }
         );
         let end = metadata.len();
         let start = if let Some(offset) = self.offset {
@@ -117,14 +120,14 @@ pub(crate) async fn file_logs(path: &Path, options: LogOptions) -> Result<()> {
     let mut cursor = Cursor::default();
     let mut output = std::io::stdout();
     match cursor.read(path, options, &mut output)? {
-        None => tracing::info!("服务日志尚未生成"),
-        Some(0) if options.lines > 0 => tracing::info!("暂无可读取的服务日志"),
+        None => tracing::info!("{}", Message::ServiceLogHasNotBeenCreated),
+        Some(0) if options.lines > 0 => tracing::info!("{}", Message::NoServiceLogEntriesAvailable),
         _ => {}
     }
     if options.follow {
         loop {
             tokio::select! {
-                signal = tokio::signal::ctrl_c() => { signal.context("无法监听 Ctrl+C")?; break; },
+                signal = tokio::signal::ctrl_c() => { signal.context(Message::FailedToRegisterCtrlCListener)?; break; },
                 _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
                     cursor.read(path, options, &mut output)?;
                 }

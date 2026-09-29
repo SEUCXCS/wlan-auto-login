@@ -1,7 +1,8 @@
 use super::{decode, encode};
+use crate::infra::error::Message;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use anyhow::bail;
-use anyhow::{Context, Result};
+use crate::infra::error::bail;
+use crate::infra::error::{Context, Result};
 use cxxy_wlanlogin_lib::Credentials;
 use zeroize::Zeroizing;
 
@@ -23,32 +24,35 @@ pub async fn delete() -> Result<()> {
             // reading secrets or touching the collection or other applications.
             for item in items.unlocked.iter().chain(&items.locked) {
                 item.delete()
-                    .context("无法删除用户凭据，请解锁系统密钥管理器")?;
+                    .context(Message::FailedToDeleteUserCredentialsUnlockTheSystem)?;
             }
             Ok(())
         }
         #[cfg(not(target_os = "linux"))]
         match keyring::Entry::new(SERVICE, ENTRY)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(error).context("无法删除用户凭据"),
+            Err(error) => Err(error).context(Message::FailedToDeleteUserCredentials),
         }
     })
     .await
-    .context("凭据删除任务失败")?
+    .context(Message::CredentialDeletionTaskFailed)?
 }
 
 pub async fn load() -> Result<Option<Credentials>> {
     tokio::task::spawn_blocking(|| {
-        let entry = keyring::Entry::new(SERVICE, ENTRY).context("无法打开系统密钥管理器")?;
+        let entry =
+            keyring::Entry::new(SERVICE, ENTRY).context(Message::FailedToOpenSystemKeyring)?;
         let text = match entry.get_password() {
             Ok(value) => Zeroizing::new(value),
             Err(keyring::Error::NoEntry) => return Ok(None),
-            Err(e) => return Err(e).context("无法读取凭据，请解锁系统密钥管理器"),
+            Err(e) => {
+                return Err(e).context(Message::FailedToReadCredentialsUnlockTheSystemKeyring);
+            }
         };
         decode(&text).map(Some)
     })
     .await
-    .context("密钥读取任务失败")?
+    .context(Message::CredentialReadTaskFailed)?
 }
 
 /// Background reads never ask the user to unlock the keychain.
@@ -64,21 +68,24 @@ pub async fn load_for_daemon() -> Result<Option<Credentials>> {
                 ("target", "default"),
             ]))?;
             if !items.locked.is_empty() {
-                bail!("密钥库尚未解锁，稍后重试");
+                bail!(Message::KeyringIsLockedRetryAfterUnlocking);
             }
             if items.unlocked.len() > 1 {
-                bail!("找到多份已保存凭据，请在系统密钥管理器中清理重复项");
+                bail!(Message::DuplicateSavedCredentialsFoundRemoveDuplicateEntriesFrom);
             }
             match items.unlocked.first() {
                 Some(item) => {
                     let bytes = Zeroizing::new(item.get_secret()?);
-                    decode(std::str::from_utf8(&bytes).context("保存的凭据不是 UTF-8")?).map(Some)
+                    decode(
+                        std::str::from_utf8(&bytes).context(Message::SavedCredentialsAreNotUTF8)?,
+                    )
+                    .map(Some)
                 }
                 None => Ok(None),
             }
         })
         .await
-        .context("后台密钥读取任务失败")?
+        .context(Message::BackgroundCredentialReadTaskFailed)?
     }
     #[cfg(not(target_os = "linux"))]
     load().await
@@ -92,7 +99,9 @@ pub fn prepare_daemon() -> Result<()> {
         let status =
             unsafe { security_framework_sys::keychain::SecKeychainSetUserInteractionAllowed(0) };
         if status != 0 {
-            bail!("无法禁用后台密钥弹窗: {status}");
+            bail!(Message::FailedToDisableBackgroundKeychainPromptsStatus {
+                status: (status).to_string()
+            });
         }
     }
     Ok(())
@@ -102,11 +111,11 @@ pub async fn save(credentials: Credentials) -> Result<()> {
     tokio::task::spawn_blocking(move || {
         let text = encode(&credentials)?;
         keyring::Entry::new(SERVICE, ENTRY)
-            .context("无法打开系统密钥管理器")?
+            .context(Message::FailedToOpenSystemKeyring)?
             .set_password(&text)
-            .context("无法保存凭据，请解锁系统密钥管理器")?;
+            .context(Message::FailedToSaveCredentialsUnlockTheSystemKeyring)?;
         Ok(())
     })
     .await
-    .context("密钥保存任务失败")?
+    .context(Message::CredentialSaveTaskFailed)?
 }

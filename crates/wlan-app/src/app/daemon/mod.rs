@@ -1,7 +1,9 @@
 //! Run the automatic-login loop and coordinate its event sources.
+use crate::infra::error::Message;
 mod policy;
 use policy::Policy;
 
+use crate::infra::error::{Context, Result, bail};
 use crate::{
     credentials,
     infra::control,
@@ -9,7 +11,6 @@ use crate::{
     infra::{config::Preferences, paths::Paths},
     wifi::{Monitor, WifiConnection},
 };
-use anyhow::{Context, Result, bail};
 use cxxy_wlanlogin_lib::{AuthState, Client, Credentials, LoginOutcome};
 use std::{future::Future, time::Duration};
 use tokio::time::Instant;
@@ -66,7 +67,7 @@ async fn control_stop(
             control::Signal::Wake => wake.notify_one(),
         }
     }
-    bail!("本地控制通道已关闭")
+    bail!(Message::LocalControlChannelClosed)
 }
 
 async fn run_loop(client: &Client, paths: &Paths, wake: &tokio::sync::Notify) -> Result<()> {
@@ -75,13 +76,20 @@ async fn run_loop(client: &Client, paths: &Paths, wake: &tokio::sync::Notify) ->
     // NoEntry is different from a locked/unavailable keyring: the latter may
     // become available after the desktop session finishes unlocking.
     match store.load().await {
-        Ok(None) => bail!("请先执行 login --remember-me 保存账号和密码，再启动 daemon"),
+        Ok(None) => {
+            bail!(Message::DaemonCredentialsMissing)
+        }
         Ok(Some(_)) => {}
-        Err(e) => tracing::warn!("暂时无法读取密钥，等待解锁：{e:#}"),
+        Err(e) => tracing::warn!(error = %e, "{}", Message::CredentialsUnavailable),
     }
     let mut monitor = None;
     let mut scheduled = true;
-    tracing::info!("daemon 已启动，仅在 Student_CX 上检查校园网状态");
+    tracing::info!(
+        scope = paths.scope.label(),
+        ssid = "Student_CX",
+        "{}",
+        Message::DaemonStarted
+    );
     loop {
         ensure_scope(paths)?;
         if monitor.is_none() {
@@ -90,7 +98,9 @@ async fn run_loop(client: &Client, paths: &Paths, wake: &tokio::sync::Notify) ->
                     monitor = Some(value);
                     policy.monitor_restarted();
                 }
-                Err(e) => tracing::warn!("网络监听暂不可用，30 秒后重试：{e:#}"),
+                Err(e) => {
+                    tracing::warn!(error = %e, retry_after_secs = 30, "{}", Message::MonitorUnavailable)
+                }
             }
         }
         if let Some(monitor) = &monitor
@@ -99,20 +109,20 @@ async fn run_loop(client: &Client, paths: &Paths, wake: &tokio::sync::Notify) ->
                 tick(client, paths, monitor, store.load(), &mut policy, scheduled),
             )
             .await
-            .context("本轮网络检查超时")
+            .context(Message::NetworkCheckTimedOut)
             .and_then(|result| result)
         {
             let transient_status = e
                 .downcast_ref::<cxxy_wlanlogin_lib::Error>()
                 .is_some_and(|error| error.is_transient_status_failure());
             let delay = policy.failure(Instant::now(), transient_status);
-            tracing::warn!("本次检查未完成，{} 秒后重试：{e:#}", delay.as_secs());
+            tracing::warn!(error = %e, retry_after_secs = delay.as_secs(), "{}", Message::CheckFailed);
         }
         tokio::select! {
             _ = next_scheduled_check(&mut policy) => { scheduled = true; },
             _ = wake.notified() => { scheduled = true; },
             event = async { match &mut monitor { Some(m) => m.changed().await, None => std::future::pending().await } } => {
-                if let Err(e) = event { tracing::warn!("网络事件订阅断开：{e:#}"); monitor = None; }
+                if let Err(e) = event { tracing::warn!(error = %e, "{}", Message::MonitorDisconnected); monitor = None; }
                 scheduled = false;
                 // Merge bursts of state/DHCP notifications.
                 tokio::time::sleep(Duration::from_millis(400)).await;
@@ -156,12 +166,12 @@ async fn tick(
         return Ok(());
     }
     if !policy.should_login(status.auth) {
-        tracing::debug!("门户未提供可识别的认证状态，本轮不提交登录");
+        tracing::debug!("{}", Message::PortalStateUnknown);
         return Ok(());
     }
     let saved = read_credentials
         .await?
-        .ok_or_else(|| anyhow::anyhow!("保存的凭据已不存在，请重新执行 login --remember-me"))?;
+        .ok_or_else(|| crate::infra::error::error!(Message::SavedCredentialsMissing))?;
     // Recheck the Wi-Fi immediately before sending credentials after an await.
     if monitor.target_session().await?.as_deref() != policy.session() {
         return Ok(());
@@ -170,14 +180,12 @@ async fn tick(
     match client.login(&saved, line).await {
         Ok(LoginOutcome::Authenticated) => {
             policy.success();
-            tracing::info!("校园网登录成功");
+            tracing::info!(line = %line, "{}", Message::Authenticated);
         }
         Ok(LoginOutcome::AlreadyOnline) => policy.online(),
         Err(error) if error.is_credential_rejected() => {
             policy.reject_credentials();
-            tracing::error!(
-                "账号或密码被拒绝；暂停自动重试，请执行 login --interactive --remember-me 更新凭据"
-            );
+            tracing::error!("{}", Message::CredentialsRejected);
         }
         Err(e) => return Err(e.into()),
     }
@@ -241,7 +249,10 @@ mod tests {
                     let mut request = Vec::new();
                     while !request.ends_with(b"\r\n\r\n") {
                         request.push(stream.read_u8().await?);
-                        anyhow::ensure!(request.len() < 16_384, "oversized mock request");
+                        crate::infra::error::ensure!(
+                            request.len() < 16_384,
+                            "oversized mock request"
+                        );
                     }
                     requests.push(String::from_utf8(request)?);
                     stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
@@ -251,7 +262,7 @@ mod tests {
                         .await
                         .is_err()
                 );
-                Ok::<_, anyhow::Error>(requests)
+                Ok::<_, crate::infra::error::Error>(requests)
             });
             let dir = tempfile::tempdir()?;
             let paths = Paths::test(dir.path());

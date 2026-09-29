@@ -1,5 +1,6 @@
 use super::{TARGET_SSID, worker::Worker};
-use anyhow::{Result, bail};
+use crate::infra::error::Message;
+use crate::infra::error::{Result, bail};
 use std::{
     ffi::c_void,
     ptr,
@@ -63,7 +64,9 @@ impl NativeMonitor {
         // SAFETY: the API initializes the output handle/version; pointers live for the call.
         let result = unsafe { WlanOpenHandle(2, ptr::null(), &mut version, &mut handle) };
         if result != 0 {
-            bail!("WlanOpenHandle 失败: {result}");
+            bail!(Message::WlanOpenHandleFailedResult {
+                result: (result).to_string()
+            });
         }
         let monitor = Self { handle, events };
         // SAFETY: the Arc allocation remains alive until WlanCloseHandle has drained callbacks.
@@ -79,7 +82,9 @@ impl NativeMonitor {
             )
         };
         if result != 0 {
-            bail!("无法监听 WLAN 事件: {result}");
+            bail!(Message::FailedToSubscribeToWLANEventsResult {
+                result: (result).to_string()
+            });
         }
         Ok(monitor)
     }
@@ -91,7 +96,9 @@ impl NativeMonitor {
             let mut list = ptr::null_mut();
             let code = WlanEnumInterfaces(self.handle, ptr::null(), &mut list);
             if code != 0 {
-                bail!("无法枚举 Wi-Fi 接口: {code}");
+                bail!(Message::FailedToEnumerateWiFiInterfacesCode {
+                    code: (code).to_string()
+                });
             }
             let allocation = WlanMemory(list.cast());
             let interfaces = std::slice::from_raw_parts(
@@ -114,11 +121,13 @@ impl NativeMonitor {
                     ptr::null_mut(),
                 );
                 if code != 0 {
-                    bail!("无法读取 Wi-Fi SSID（请检查位置权限）: {code}");
+                    bail!(Message::FailedToReadWiFiSSIDCheck {
+                        code: (code).to_string()
+                    });
                 }
                 let _data = WlanMemory(data);
                 if (size as usize) < std::mem::size_of::<WLAN_CONNECTION_ATTRIBUTES>() {
-                    bail!("WLAN 响应长度无效");
+                    bail!(Message::InvalidWLANResponseLength);
                 }
                 let attributes = &*data.cast::<WLAN_CONNECTION_ATTRIBUTES>();
                 let ssid = &attributes.wlanAssociationAttributes.dot11Ssid;

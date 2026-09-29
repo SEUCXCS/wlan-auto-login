@@ -3,6 +3,7 @@ pub(crate) mod cleanup;
 pub(crate) mod command;
 pub(crate) mod config;
 pub(crate) mod control;
+pub(crate) mod error;
 pub(crate) mod file_log;
 pub(crate) mod filesystem;
 pub(crate) mod logging;

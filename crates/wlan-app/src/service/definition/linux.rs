@@ -1,5 +1,6 @@
 use super::{Invocation, LABEL, Manager, Plan};
-use anyhow::{Context, Result, bail};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
 pub(in crate::service) fn linux_system_plan(
@@ -72,9 +73,9 @@ pub(in crate::service) fn linux_plan(executable: PathBuf, definition: PathBuf) -
     })
 }
 pub(super) fn systemd_quote(path: &Path) -> Result<String> {
-    let text = path.to_str().context("systemd 路径必须是 UTF-8")?;
+    let text = path.to_str().context(Message::SystemdPathMustBeUTF8)?;
     if text.chars().any(char::is_control) {
-        bail!("安装路径包含控制字符");
+        bail!(Message::InstallationPathContainsControlCharacters);
     }
     Ok(format!(
         "\"{}\"",

@@ -1,5 +1,6 @@
 use super::{filesystem::write_private, paths::Paths};
-use anyhow::{Context, Result};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use cxxy_wlanlogin_lib::Line;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -12,9 +13,11 @@ pub struct Preferences {
 impl Preferences {
     pub fn load(paths: &Paths) -> Result<Self> {
         match fs::read(paths.config.join("preferences.json")) {
-            Ok(bytes) => serde_json::from_slice(&bytes).context("线路配置损坏"),
+            Ok(bytes) => {
+                serde_json::from_slice(&bytes).context(Message::InvalidConnectionPreferences)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e).context("无法读取线路配置"),
+            Err(e) => Err(e).context(Message::FailedToReadConnectionPreferences),
         }
     }
 

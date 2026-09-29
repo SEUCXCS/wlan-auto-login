@@ -2,11 +2,12 @@
 use super::definition::{Plan, assert_owned, ensure_no_conflicting_install, plan};
 #[cfg(windows)]
 use super::{command::SystemRunner, lifecycle};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use crate::{
     infra::control,
     infra::{filesystem::private_dir, paths::Paths},
 };
-use anyhow::{Context, Result};
 use std::{fs, path::Path};
 
 pub async fn install(paths: &Paths) -> Result<()> {
@@ -27,11 +28,17 @@ pub async fn install(paths: &Paths) -> Result<()> {
 }
 
 async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
-    anyhow::ensure!(plan.scope == paths.scope, "服务计划与安装范围不一致");
+    crate::infra::error::ensure!(
+        plan.scope == paths.scope,
+        Message::ServicePlanDoesNotMatchTheSelected
+    );
     let _service_lock = control::service_lock(paths)?;
     assert_owned(&plan.definition)?;
     let source = source.canonicalize()?;
-    let binary_dir = plan.executable.parent().context("安装路径无父目录")?;
+    let binary_dir = plan
+        .executable
+        .parent()
+        .context(Message::InstallationPathHasNoParentDirectory)?;
     private_dir(binary_dir)?;
     #[cfg(windows)]
     if paths.scope == crate::infra::scope::Scope::System {
@@ -119,20 +126,25 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
             }
         }
         if !rollback_errors.is_empty() {
-            return Err(error).context(format!(
-                "安装失败，回滚仍有错误：{}",
-                rollback_errors.join("；")
-            ));
+            return Err(error).context(
+                (Message::InstallationFailedAndRollbackWasIncomplete {
+                    value0: (rollback_errors.join("；")).to_string(),
+                })
+                .to_string(),
+            );
         }
-        return Err(error).context("安装失败，已回滚安装文件");
+        return Err(error).context(Message::InstallationFailedInstallationFilesRestored);
     }
     tracing::info!(
-        "{}服务已安装并启动，{}。",
-        paths.scope.label(),
-        if paths.scope == crate::infra::scope::Scope::System {
-            "今后随开机自动运行"
-        } else {
-            "今后用户登录系统后自动运行"
+        "{}",
+        Message::ServiceInstalledAndStartedForScope {
+            value0: (paths.scope.label()).to_string(),
+            value1: (if paths.scope == crate::infra::scope::Scope::System {
+                "autostart enabled at boot"
+            } else {
+                "autostart enabled at user login"
+            })
+            .to_string()
         }
     );
     Ok(())
@@ -159,7 +171,10 @@ fn remove_if_present(path: &Path) -> Result<()> {
 // Service directories may already contain other applications' files; do not chmod them.
 fn write_definition(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let mut file = tempfile::NamedTempFile::new_in(path.parent().context("服务文件无父目录")?)?;
+    let mut file = tempfile::NamedTempFile::new_in(
+        path.parent()
+            .context(Message::ServiceDefinitionHasNoParentDirectory)?,
+    )?;
     file.write_all(bytes)?;
     file.as_file().sync_all()?;
     file.persist(path).map_err(|e| e.error)?;
@@ -175,8 +190,10 @@ impl Backup {
     fn capture(path: &Path) -> Result<Self> {
         match fs::metadata(path) {
             Ok(_) => {
-                let backup =
-                    tempfile::NamedTempFile::new_in(path.parent().context("备份路径无父目录")?)?;
+                let backup = tempfile::NamedTempFile::new_in(
+                    path.parent()
+                        .context(Message::BackupPathHasNoParentDirectory)?,
+                )?;
                 fs::copy(path, backup.path())?;
                 Ok(Self(Some(backup)))
             }

@@ -1,5 +1,6 @@
 //! Remove only known application files; never recursively delete shared directories.
-use anyhow::{Context, Result, ensure};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result, ensure};
 use std::{fs, io::ErrorKind, path::Path};
 
 fn app_root(path: &Path) -> Option<&Path> {
@@ -16,22 +17,29 @@ pub fn validate_directory(path: &Path) -> Result<()> {
             Ok(metadata) => {
                 ensure!(
                     metadata.is_dir() && !metadata.file_type().is_symlink(),
-                    "拒绝通过非目录或符号链接清理应用数据：{}",
-                    part.display()
+                    Message::RefusingToCleanDataThroughANon {
+                        value0: (part.display()).to_string()
+                    }
                 );
                 #[cfg(windows)]
                 {
                     use std::os::windows::fs::MetadataExt;
                     ensure!(
                         metadata.file_attributes() & 0x400 == 0,
-                        "拒绝通过重解析点清理应用数据：{}",
-                        part.display()
+                        Message::RefusingToCleanDataThroughAReparse {
+                            value0: (part.display()).to_string()
+                        }
                     );
                 }
             }
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(error).with_context(|| format!("无法检查目录：{}", part.display()));
+                return Err(error).with_context(|| {
+                    (Message::FailedToInspectDirectory {
+                        value0: (part.display()).to_string(),
+                    })
+                    .to_string()
+                });
             }
         }
         if part == root {
@@ -42,12 +50,20 @@ pub fn validate_directory(path: &Path) -> Result<()> {
 }
 
 pub fn remove_file(path: &Path) -> Result<()> {
-    validate_directory(path.parent().context("清理路径没有父目录")?)?;
+    validate_directory(
+        path.parent()
+            .context(Message::CleanupPathHasNoParentDirectory)?,
+    )?;
     // remove_file unlinks a leaf symlink instead of following its target.
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("无法删除文件：{}", path.display())),
+        Err(error) => Err(error).with_context(|| {
+            (Message::FailedToRemoveFile {
+                value0: (path.display()).to_string(),
+            })
+            .to_string()
+        }),
     }
 }
 
@@ -60,7 +76,12 @@ pub fn prune_empty_directories(path: &Path) -> Result<()> {
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => break,
             Err(error) => {
-                return Err(error).with_context(|| format!("无法移除空目录：{}", part.display()));
+                return Err(error).with_context(|| {
+                    (Message::FailedToRemoveEmptyDirectory {
+                        value0: (part.display()).to_string(),
+                    })
+                    .to_string()
+                });
             }
         }
         if part == root {

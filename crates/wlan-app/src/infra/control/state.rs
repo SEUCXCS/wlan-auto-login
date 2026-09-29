@@ -1,5 +1,6 @@
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use crate::infra::{filesystem::write_private, paths::Paths};
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -13,7 +14,7 @@ pub struct State {
 impl State {
     pub fn load(paths: &Paths) -> Result<Self> {
         match fs::read(paths.config.join("control.json")) {
-            Ok(bytes) => serde_json::from_slice(&bytes).context("后台控制状态损坏"),
+            Ok(bytes) => serde_json::from_slice(&bytes).context(Message::InvalidDaemonControlState),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e.into()),
         }

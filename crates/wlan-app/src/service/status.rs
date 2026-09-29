@@ -3,8 +3,9 @@ use super::{
     command::{Invocation, Runner, SystemRunner},
     definition::{Artifacts, Plan, plan},
 };
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use crate::infra::paths::Paths;
-use anyhow::{Context, Result};
 
 pub async fn status(paths: &Paths, discover: bool) -> Result<()> {
     let mut plans = vec![plan(paths)?];
@@ -31,15 +32,19 @@ pub async fn status(paths: &Paths, discover: bool) -> Result<()> {
             reports.join("\n\n")
         }
     );
-    anyhow::ensure!(
+    crate::infra::error::ensure!(
         errors.is_empty(),
-        "无法确认系统服务状态：{}",
-        errors.join("；")
+        Message::FailedToDetermineServiceStatus {
+            value0: (errors.join("；")).to_string()
+        }
     );
     Ok(())
 }
 
-async fn report(plan: &Plan, runner: &impl Runner) -> Result<(String, Option<anyhow::Error>)> {
+async fn report(
+    plan: &Plan,
+    runner: &impl Runner,
+) -> Result<(String, Option<crate::infra::error::Error>)> {
     let files = Artifacts::read(plan)?;
     if !files.any() {
         return Ok(("🔴 安装状态：未安装".into(), None));
@@ -133,7 +138,7 @@ async fn installed_version(plan: &Plan, runner: &impl Runner) -> Result<String> 
                     .chars()
                     .all(|ch| ch.is_ascii_alphanumeric() || ".-+".contains(ch))
         })
-        .context("安装副本未返回可识别的版本")?;
+        .context(Message::InstalledExecutableReturnedAnUnrecognizedVersion)?;
     Ok(version.into())
 }
 
@@ -156,7 +161,9 @@ mod tests {
         fs::write(&plan.definition, &plan.content)?;
         let runner = FakeRunner::new([(true, RUNNING)]);
         let (text, _) = report(&plan, &runner).await?;
-        assert!(text.starts_with("🔴 安装状态：安装不完整，请重新执行 install\n安装范围：系统\n"));
+        assert!(
+            text.starts_with("🔴 安装状态：安装不完整，请重新执行 install\n安装范围：system\n")
+        );
         assert!(!text.contains("安装位置："));
         assert!(!text.contains("已安装版本："));
         fs::write(&plan.executable, "mock executable, never run")?;
@@ -165,7 +172,7 @@ mod tests {
             report(&plan, &runner)
                 .await?
                 .0
-                .starts_with("🟢 安装状态：已安装\n安装范围：系统\n")
+                .starts_with("🟢 安装状态：已安装\n安装范围：system\n")
         );
         let runner = FakeRunner::new([
             (false, "LoadState=not-found"),
@@ -209,7 +216,7 @@ mod tests {
         let (text, error) = report(&plan, &runner).await?;
         assert!(error.is_none());
         assert!(text.contains("安装状态：已安装"));
-        assert!(text.starts_with("🟢 安装状态：已安装\n安装范围：用户\n"));
+        assert!(text.starts_with("🟢 安装状态：已安装\n安装范围：user\n"));
         assert!(text.contains("运行状态：运行中"));
         assert!(text.contains("已安装版本：0.0.9"));
         assert!(text.contains(&format!("当前 CLI 版本：{}", env!("CARGO_PKG_VERSION"))));

@@ -1,4 +1,5 @@
 //! Choose the credential backend for the selected scope.
+use crate::infra::error::Message;
 mod background;
 mod machine;
 pub use machine::CredentialMode;
@@ -13,14 +14,14 @@ pub(crate) use background::BackgroundReader;
 pub(crate) use user::prepare_daemon;
 
 /// Delete without loading or decoding secrets, including damaged or duplicate files.
-pub async fn delete(paths: &crate::infra::paths::Paths) -> anyhow::Result<()> {
+pub async fn delete(paths: &crate::infra::paths::Paths) -> crate::infra::error::Result<()> {
     match paths.scope {
         crate::infra::scope::Scope::System => machine::delete(paths).await,
         crate::infra::scope::Scope::User => user::delete().await,
     }
 }
 
-use anyhow::{Context, Result, bail};
+use crate::infra::error::{Context, Result, bail};
 use cxxy_wlanlogin_lib::Credentials;
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -41,7 +42,10 @@ impl ScopedStore {
                 machine: Some(machine::MachineStore::new(paths.clone(), mode)?),
             })
         } else {
-            anyhow::ensure!(mode.is_none(), "--credential-store 只适用于系统凭据");
+            crate::infra::error::ensure!(
+                mode.is_none(),
+                Message::CredentialStoreIsOnlySupportedForSystem
+            );
             Ok(Self { machine: None })
         }
     }
@@ -78,9 +82,9 @@ struct Secret {
 }
 
 fn encode(credentials: &Credentials) -> Result<Zeroizing<String>> {
-    anyhow::ensure!(
+    crate::infra::error::ensure!(
         !credentials.username.trim().is_empty() && !credentials.password.is_empty(),
-        "账号和密码不能为空"
+        Message::UsernameAndPasswordMustNotBeEmpty
     );
     Ok(Zeroizing::new(serde_json::to_string(&Secret {
         version: 1,
@@ -90,9 +94,10 @@ fn encode(credentials: &Credentials) -> Result<Zeroizing<String>> {
 }
 
 fn decode(text: &str) -> Result<Credentials> {
-    let secret: Secret = serde_json::from_str(text).context("保存的凭据格式无效")?;
+    let secret: Secret =
+        serde_json::from_str(text).context(Message::InvalidSavedCredentialFormat)?;
     if secret.version != 1 || secret.username.trim().is_empty() || secret.password.is_empty() {
-        bail!("保存的凭据不完整，请重新执行 login --remember-me");
+        bail!(Message::SavedCredentialsAreIncompleteRunLoginRememberMe);
     }
     Ok(Credentials {
         username: secret.username.clone(),

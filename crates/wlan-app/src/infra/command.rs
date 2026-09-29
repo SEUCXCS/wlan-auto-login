@@ -1,5 +1,6 @@
 //! Execute bounded service-manager commands and expose a testable runner.
-use anyhow::{Context, Result, bail};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result, bail};
 use std::{
     ffi::{OsStr, OsString},
     time::Duration,
@@ -40,7 +41,7 @@ impl Invocation {
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW, available on Win7.
         let result = tokio::time::timeout(Duration::from_secs(30), command.output())
             .await
-            .context("服务管理命令超时")??;
+            .context(Message::ServiceManagerCommandTimedOut)??;
         Ok(CommandOutput {
             success: result.status.success(),
             stdout: String::from_utf8_lossy(&result.stdout).into_owned(),
@@ -57,16 +58,16 @@ pub(crate) struct CommandOutput {
 impl CommandOutput {
     pub(crate) fn check(&self, command: &Invocation) -> Result<()> {
         if !self.success {
-            bail!(
-                "{} {:?} 执行失败：{}",
-                command.program.to_string_lossy(),
-                command.args,
-                if self.stderr.trim().is_empty() {
+            bail!(Message::CommandFailed {
+                value0: (command.program.to_string_lossy()).to_string(),
+                value1: format!("{:?}", command.args),
+                value2: (if self.stderr.trim().is_empty() {
                     self.stdout.trim()
                 } else {
                     self.stderr.trim()
-                }
-            );
+                })
+                .to_string()
+            });
         }
         Ok(())
     }

@@ -1,5 +1,6 @@
 use super::{TARGET_SSID, worker::Worker};
-use anyhow::{Context, Result, bail};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result, bail};
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2_core_foundation::{CFArray, CFRetained, CFString};
 use objc2_core_wlan::{CWInterfaceMode, CWWiFiClient};
@@ -74,7 +75,7 @@ impl NativeMonitor {
                 &mut context,
             )
         }
-        .context("无法创建系统网络监听")?;
+        .context(Message::FailedToCreateSystemNetworkMonitor)?;
         let patterns = CFArray::from_retained_objects(&[
             CFString::from_str("State:/Network/Interface/.*/AirPort"),
             CFString::from_str("State:/Network/Interface/.*/Link"),
@@ -85,7 +86,7 @@ impl NativeMonitor {
             if !store.set_notification_keys(None, Some(patterns.as_opaque()))
                 || !store.set_dispatch_queue(Some(&queue))
             {
-                bail!("无法订阅系统网络事件");
+                bail!(Message::FailedToSubscribeToSystemNetworkEvents);
             }
         }
         Ok(Self {
@@ -126,11 +127,11 @@ fn current_interface() -> Result<Option<String>> {
                     if ssid.to_string().as_bytes() == TARGET_SSID {
                         let name = interface
                             .interfaceName()
-                            .context("无法读取 Wi-Fi 接口名称")?;
+                            .context(Message::FailedToReadWiFiInterfaceName)?;
                         return Ok(Some(name.to_string()));
                     }
                 } else if interface.interfaceMode() == CWInterfaceMode::Station {
-                    bail!("无法读取 Wi-Fi SSID；请在系统设置中授予位置权限后重试");
+                    bail!(Message::FailedToReadWiFiSSIDGrantLocation);
                 }
             }
             Ok(None)

@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use std::{future::Future, time::Duration};
 
 // Native keychain calls on Tokio's blocking pool cannot be forcibly cancelled.
@@ -28,8 +29,10 @@ impl Shutdown {
         {
             use tokio::signal::unix::{SignalKind, signal};
             Ok(Self {
-                terminate: signal(SignalKind::terminate()).context("无法监听 SIGTERM")?,
-                interrupt: signal(SignalKind::interrupt()).context("无法监听 SIGINT")?,
+                terminate: signal(SignalKind::terminate())
+                    .context(Message::FailedToRegisterSIGTERMListener)?,
+                interrupt: signal(SignalKind::interrupt())
+                    .context(Message::FailedToRegisterSIGINTListener)?,
             })
         }
         #[cfg(windows)]
@@ -42,9 +45,11 @@ impl Shutdown {
                 unsafe { !windows_sys::Win32::System::Console::GetConsoleWindow().is_null() };
             let console = if attached {
                 Some(ConsoleSignals {
-                    interrupt: windows::ctrl_c().context("无法监听 Ctrl+C")?,
-                    close: windows::ctrl_close().context("无法监听控制台关闭")?,
-                    ctrl_break: windows::ctrl_break().context("无法监听 Ctrl+Break")?,
+                    interrupt: windows::ctrl_c().context(Message::FailedToRegisterCtrlCListener)?,
+                    close: windows::ctrl_close()
+                        .context(Message::FailedToRegisterConsoleCloseListener)?,
+                    ctrl_break: windows::ctrl_break()
+                        .context(Message::FailedToRegisterCtrlBreakListener)?,
                 })
             } else {
                 None
@@ -73,7 +78,7 @@ impl Shutdown {
                 }
             } => value,
         };
-        received.context("系统停止信号通道已关闭")
+        received.context(Message::ProcessShutdownSignalChannelClosed)
     }
 }
 
@@ -85,7 +90,7 @@ pub async fn until_stopped(
         biased;
         result = stop => {
             result?;
-            tracing::info!("daemon 已停止");
+            tracing::info!("{}", Message::DaemonStopped);
             Ok(())
         },
         result = work => result,
@@ -129,33 +134,36 @@ mod tests {
             );
             let deadline = Instant::now() + Duration::from_secs(8);
             while !dir.path().join("ready").exists() {
-                anyhow::ensure!(
+                crate::infra::error::ensure!(
                     child.0.try_wait()?.is_none(),
                     "signal test child exited before ready"
                 );
-                anyhow::ensure!(
+                crate::infra::error::ensure!(
                     Instant::now() < deadline,
                     "signal test child did not become ready"
                 );
                 std::thread::sleep(Duration::from_millis(10));
             }
             // SAFETY: this is the PID of our live child; it has installed handlers.
-            anyhow::ensure!(
+            crate::infra::error::ensure!(
                 unsafe { libc::kill(child.0.id() as i32, signal) } == 0,
                 "cannot signal test child"
             );
             loop {
                 if let Some(status) = child.0.try_wait()? {
-                    anyhow::ensure!(status.success(), "signal test child failed: {status}");
+                    crate::infra::error::ensure!(
+                        status.success(),
+                        "signal test child failed: {status}"
+                    );
                     break;
                 }
-                anyhow::ensure!(
+                crate::infra::error::ensure!(
                     Instant::now() < deadline,
                     "daemon shutdown did not interrupt busy work"
                 );
                 std::thread::sleep(Duration::from_millis(10));
             }
-            anyhow::ensure!(
+            crate::infra::error::ensure!(
                 dir.path().join("stopped").exists(),
                 "child skipped graceful shutdown"
             );
@@ -202,7 +210,7 @@ mod tests {
                 crate::infra::control::operation_lock(&paths),
             )
             .await??;
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, crate::infra::error::Error>(())
         })?;
         runtime.shutdown_timeout(RUNTIME_GRACE);
         std::fs::write(directory.join("stopped"), [])?;

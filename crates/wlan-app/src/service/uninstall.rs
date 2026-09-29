@@ -4,8 +4,9 @@ use super::{
     definition::{Plan, assert_owned, plan},
     manager::Manager,
 };
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result, ensure};
 use crate::{credentials, infra::cleanup, infra::control, infra::paths::Paths};
-use anyhow::{Context, Result, ensure};
 use std::{future::Future, time::Duration};
 
 pub async fn uninstall(paths: &Paths, purge: bool) -> Result<()> {
@@ -19,12 +20,14 @@ pub async fn uninstall(paths: &Paths, purge: bool) -> Result<()> {
     .await?;
     if purge {
         tracing::info!(
-            "{}服务及其应用日志、配置、运行文件和凭据已清理。",
-            paths.scope.label()
+            "{}",
+            Message::ServiceAndApplicationDataRemovedForScope {
+                value0: (paths.scope.label()).to_string()
+            }
         );
-        tracing::info!("操作系统共享日志和服务审计记录由系统管理，不属于本程序可单独删除的文件。");
+        tracing::info!("{}", Message::SharedSystemLogsAndServiceAuditRecords);
     } else {
-        tracing::info!("后台服务已卸载；已保存的账号和密码仍保留。");
+        tracing::info!("{}", Message::ServiceUninstalledSavedCredentialsRetained);
     }
     Ok(())
 }
@@ -36,7 +39,10 @@ async fn uninstall_plan(
     runner: &impl Runner,
     delete_credentials: impl Future<Output = Result<()>>,
 ) -> Result<()> {
-    ensure!(plan.scope == paths.scope, "服务计划与安装范围不一致");
+    ensure!(
+        plan.scope == paths.scope,
+        Message::ServicePlanDoesNotMatchTheSelected
+    );
     for directory in [&paths.config, &paths.runtime, &paths.secrets] {
         cleanup::validate_directory(directory)?;
     }
@@ -69,10 +75,10 @@ async fn uninstall_plan(
     if purge {
         delete_credentials
             .await
-            .context("服务已卸载，但凭据删除未完成；可再次执行 uninstall --purge")?;
+            .context(Message::ServiceUninstalledButCredentialDeletionFailedRetryUninstall)?;
     }
     cleanup::remove_file(&plan.executable)
-        .context("服务已卸载，但安装副本仍在使用或无法删除；请关闭该副本后重试")?;
+        .context(Message::ServiceUninstalledButInstalledExecutableCouldNotBe)?;
     if purge {
         for name in ["preferences.json", "control.json", "daemon.log"] {
             cleanup::remove_file(&paths.config.join(name))?;
@@ -91,7 +97,11 @@ async fn uninstall_plan(
         for directory in [&paths.runtime, &paths.secrets, &paths.config] {
             cleanup::prune_empty_directories(directory)?;
         }
-        cleanup::prune_empty_directories(plan.executable.parent().context("安装路径没有父目录")?)?;
+        cleanup::prune_empty_directories(
+            plan.executable
+                .parent()
+                .context(Message::InstallationPathHasNoParentDirectory)?,
+        )?;
     }
     Ok(())
 }
@@ -100,8 +110,14 @@ fn remove_enable_link(plan: &Plan) -> Result<()> {
     #[cfg(any(target_os = "linux", test))]
     match &plan.manager {
         Manager::Systemd { system } => {
-            let parent = plan.definition.parent().context("服务文件没有父目录")?;
-            let name = plan.definition.file_name().context("服务文件没有名称")?;
+            let parent = plan
+                .definition
+                .parent()
+                .context(Message::ServiceDefinitionHasNoParentDirectory)?;
+            let name = plan
+                .definition
+                .file_name()
+                .context(Message::ServiceDefinitionHasNoFileName)?;
             let path = parent
                 .join(if *system {
                     "multi-user.target.wants"
@@ -109,19 +125,25 @@ fn remove_enable_link(plan: &Plan) -> Result<()> {
                     "default.target.wants"
                 })
                 .join(name);
-            cleanup::validate_directory(path.parent().context("服务链接没有父目录")?)?;
+            cleanup::validate_directory(
+                path.parent()
+                    .context(Message::ServiceLinkHasNoParentDirectory)?,
+            )?;
             match std::fs::read_link(&path) {
                 Ok(target) => {
                     ensure!(
                         target == plan.definition
                             || target == std::path::Path::new("..").join(name),
-                        "拒绝删除指向其他服务的自动启动链接：{}",
-                        path.display()
+                        Message::RefusingToRemoveAnAutostartLinkOwned {
+                            value0: (path.display()).to_string()
+                        }
                     );
                     cleanup::remove_file(&path)?;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error).context("无法清理服务自动启动链接"),
+                Err(error) => {
+                    return Err(error).context(Message::FailedToRemoveServiceAutostartLink);
+                }
             }
         }
         #[cfg(test)]
@@ -152,9 +174,9 @@ async fn wait_for_manager(manager: &Manager, runner: &impl Runner, removed: bool
     })
     .await
     .context(if removed {
-        "等待服务注销超时，尚未清理应用数据"
+        "Timed out waiting for service removal; application data retained"
     } else {
-        "等待服务停止超时，尚未删除安装文件"
+        "Timed out waiting for service stop; installation files retained"
     })?
 }
 
@@ -356,7 +378,7 @@ mod tests {
         .await;
         assert!(
             format!("{:#}", result.err().context("expected stop timeout")?)
-                .contains("等待服务停止超时")
+                .contains("Timed out waiting for service stop")
         );
         assert!(plan.definition.exists() && plan.executable.exists());
         assert!(paths.secrets.join("login.cred").exists());
@@ -377,7 +399,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let (paths, plan) = fixture(dir.path(), 0)?;
         let result = uninstall_plan(&paths, &plan, true, &removal_runner(0), async {
-            anyhow::bail!("keyring unavailable")
+            crate::infra::error::bail!("keyring unavailable")
         })
         .await;
         assert!(

@@ -1,5 +1,6 @@
 use super::TARGET_SSID;
-use anyhow::{Context, Result};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use zbus::{
@@ -20,7 +21,9 @@ pub struct Monitor {
 
 impl Monitor {
     pub async fn new() -> Result<Self> {
-        let connection = Connection::system().await.context("无法连接系统 D-Bus")?;
+        let connection = Connection::system()
+            .await
+            .context(Message::FailedToConnectToTheSystemDBus)?;
         let rule = MatchRule::builder()
             .msg_type(Type::Signal)
             .sender(NM)?
@@ -50,7 +53,7 @@ impl Monitor {
         let devices: Vec<OwnedObjectPath> = manager
             .call("GetDevices", &())
             .await
-            .context("需要运行 NetworkManager")?;
+            .context(Message::NetworkManagerMustBeRunning)?;
         for path in devices {
             let device = self
                 .proxy(path.as_str(), "org.freedesktop.NetworkManager.Device")
@@ -112,7 +115,7 @@ impl Events {
                     }
                 }
             }
-            let _ = sender.send_replace(Err("NetworkManager 事件连接已关闭".into()));
+            let _ = sender.send_replace(Err("NetworkManager event connection closed".into()));
         });
         Self { updates, task }
     }
@@ -121,11 +124,11 @@ impl Events {
         self.updates
             .changed()
             .await
-            .context("NetworkManager 事件监听已退出")?;
+            .context(Message::NetworkManagerEventListenerStopped)?;
         self.updates
             .borrow_and_update()
             .clone()
-            .map_err(anyhow::Error::msg)
+            .map_err(crate::infra::error::Error::message)
     }
 }
 
@@ -210,7 +213,7 @@ mod tests {
             // consumes the last queued signals. Observe their changes until
             // disconnect, without assuming a particular Tokio task ordering.
             while monitor.changed().await.is_ok() {}
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, crate::infra::error::Error>(())
         })
         .await?
     }

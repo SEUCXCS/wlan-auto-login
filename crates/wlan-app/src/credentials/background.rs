@@ -1,5 +1,6 @@
 use super::ScopedStore;
-use anyhow::{Context, Result};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use cxxy_wlanlogin_lib::Credentials;
 use std::{future::Future, sync::Arc, time::Duration};
 
@@ -34,9 +35,9 @@ impl BackgroundReader {
         let task = self.pending.get_or_insert_with(|| tokio::spawn(read));
         let result = tokio::time::timeout(timeout, task)
             .await
-            .context("后台凭据读取超时，等待当前读取完成后重试")?;
+            .context(Message::BackgroundCredentialReadTimedOutWaitingForThe)?;
         self.pending = None;
-        result.context("后台凭据读取任务失败")?
+        result.context(Message::BackgroundCredentialReadTaskFailed)?
     }
 }
 

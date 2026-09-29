@@ -1,4 +1,5 @@
-use anyhow::Result;
+use crate::infra::error::Message;
+use crate::infra::error::Result;
 use windows_sys::Win32::{Foundation::LocalFree, Security::Cryptography::*};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -10,7 +11,10 @@ pub fn decrypt(bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
 }
 
 fn transform(bytes: &[u8], encrypt: bool) -> Result<Zeroizing<Vec<u8>>> {
-    anyhow::ensure!(bytes.len() <= 64 * 1024, "凭据数据过大");
+    crate::infra::error::ensure!(
+        bytes.len() <= 64 * 1024,
+        Message::CredentialPayloadExceedsTheSizeLimit
+    );
     let input = CRYPT_INTEGER_BLOB {
         cbData: bytes.len() as u32,
         pbData: bytes.as_ptr().cast_mut(),
@@ -44,7 +48,7 @@ fn transform(bytes: &[u8], encrypt: bool) -> Result<Zeroizing<Vec<u8>>> {
         }
         if output.cbData == 0 || output.pbData.is_null() {
             LocalFree(output.pbData.cast());
-            anyhow::bail!("DPAPI 返回空凭据数据");
+            crate::infra::error::bail!(Message::DPAPIReturnedAnEmptyCredentialPayload);
         }
         let buffer = std::slice::from_raw_parts_mut(output.pbData, output.cbData as usize);
         let bytes = Zeroizing::new(buffer.to_vec());

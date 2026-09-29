@@ -1,9 +1,10 @@
 use super::transport;
+use crate::infra::error::Message;
+use crate::infra::error::Result;
 use crate::infra::{
     filesystem::{private_dir, write_private},
     paths::Paths,
 };
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::{fs, time::Duration};
 use tokio::{
@@ -40,7 +41,9 @@ pub enum Signal {
 
 pub async fn serve(paths: &Paths) -> Result<(Server, mpsc::Receiver<Signal>)> {
     let mut random = [0u8; 32];
-    getrandom::fill(&mut random).map_err(|e| anyhow::anyhow!("无法生成控制令牌: {e}"))?;
+    getrandom::fill(&mut random).map_err(|e| {
+        crate::infra::error::error!(Message::FailedToGenerateControlTokenE { e: (e).to_string() })
+    })?;
     let token: String = random.iter().map(|v| format!("{v:02x}")).collect();
     private_dir(&paths.runtime)?;
     let (mut listener, address) = transport::Listener::bind(paths, &token)?;
@@ -103,7 +106,7 @@ async fn send(paths: &Paths, command: u8) {
         let mut socket = transport::connect(&endpoint.address).await?;
         socket.write_all(endpoint.token.as_bytes()).await?;
         socket.write_all(&[command]).await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), crate::infra::error::Error>(())
     })
     .await;
 }

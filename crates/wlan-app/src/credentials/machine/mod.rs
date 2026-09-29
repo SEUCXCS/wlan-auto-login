@@ -1,3 +1,4 @@
+use crate::infra::error::Message;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
@@ -9,11 +10,11 @@ pub use linux::linux_credential_directive;
 use super::decode;
 use super::encode;
 #[cfg(not(target_os = "macos"))]
+use crate::infra::error::Context;
+use crate::infra::error::Result;
+#[cfg(not(target_os = "macos"))]
 use crate::infra::filesystem::{private_dir, write_private};
 use crate::infra::paths::Paths;
-#[cfg(not(target_os = "macos"))]
-use anyhow::Context;
-use anyhow::Result;
 use cxxy_wlanlogin_lib::Credentials;
 #[cfg(not(target_os = "macos"))]
 use std::{fs, path::Path, sync::Mutex, time::SystemTime};
@@ -59,10 +60,11 @@ pub async fn delete(paths: &Paths) -> Result<()> {
                 errors.push(format!("{error:#}"));
             }
         }
-        anyhow::ensure!(
+        crate::infra::error::ensure!(
             errors.is_empty(),
-            "系统凭据删除未完成：{}",
-            errors.join("；")
+            Message::SystemCredentialDeletionFailed {
+                value0: (errors.join("；")).to_string()
+            }
         );
         Ok(())
     }
@@ -74,23 +76,23 @@ impl MachineStore {
         {
             let encrypted = paths.secrets.join("login.cred").try_exists()?;
             let plain = paths.secrets.join("login.json").try_exists()?;
-            anyhow::ensure!(
+            crate::infra::error::ensure!(
                 !(encrypted && plain),
-                "存在两份不同存储方式的系统凭据，请先清理旧凭据"
+                Message::ConflictingSystemCredentialStoresFoundRemoveObsolete
             );
-            anyhow::ensure!(
+            crate::infra::error::ensure!(
                 !matches!(mode, Some(CredentialMode::ProtectedFile)) || !encrypted,
-                "已有系统凭据使用加密存储，请继续使用 native；不会自动降级为明文"
+                Message::ExistingCredentialsAreEncryptedKeepNativeMode
             );
-            anyhow::ensure!(
+            crate::infra::error::ensure!(
                 !matches!(mode, Some(CredentialMode::Native)) || !plain,
-                "已有系统凭据使用 protected-file；切换前请备份并移除旧系统凭据，然后重新 install"
+                Message::ExistingCredentialsUseProtectedFileBackUp
             );
         }
         #[cfg(not(target_os = "linux"))]
-        anyhow::ensure!(
+        crate::infra::error::ensure!(
             !matches!(mode, Some(CredentialMode::ProtectedFile)),
-            "protected-file 仅适用于 Linux；当前平台使用原生机器凭据存储"
+            Message::ProtectedFileIsOnlyAvailableOnLinux
         );
         #[cfg(target_os = "macos")]
         let _ = paths.secrets;
@@ -134,10 +136,9 @@ impl MachineStore {
             validate_private(&path)?;
             let modified = metadata.modified()?;
             if background
-                && let Some((old, length, credentials)) = &*self
-                    .cache
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("凭据缓存损坏"))?
+                && let Some((old, length, credentials)) = &*self.cache.lock().map_err(|_| {
+                    crate::infra::error::error!(Message::CredentialCacheLockPoisoned)
+                })?
                 && *old == modified
                 && *length == metadata.len()
             {
@@ -150,7 +151,7 @@ impl MachineStore {
                 let first_load = self
                     .cache
                     .lock()
-                    .map_err(|_| anyhow::anyhow!("凭据缓存损坏"))?
+                    .map_err(|_| crate::infra::error::error!(Message::CredentialCacheLockPoisoned))?
                     .is_none();
                 let supplied = if background && first_load {
                     std::env::var_os("CREDENTIALS_DIRECTORY")
@@ -170,14 +171,18 @@ impl MachineStore {
             #[cfg(windows)]
             let bytes = {
                 let _ = background;
-                anyhow::ensure!(path == self.native_file(), "Windows 不支持明文机器凭据");
+                crate::infra::error::ensure!(
+                    path == self.native_file(),
+                    Message::PlaintextMachineCredentialsAreNotSupportedOn
+                );
                 windows::decrypt(&fs::read(&path)?)?
             };
-            let credentials = decode(std::str::from_utf8(&bytes).context("系统凭据不是 UTF-8")?)?;
+            let credentials =
+                decode(std::str::from_utf8(&bytes).context(Message::SystemCredentialsAreNotUTF8)?)?;
             *self
                 .cache
                 .lock()
-                .map_err(|_| anyhow::anyhow!("凭据缓存损坏"))? =
+                .map_err(|_| crate::infra::error::error!(Message::CredentialCacheLockPoisoned))? =
                 Some((modified, metadata.len(), credentials.clone()));
             Ok(Some(credentials))
         }
@@ -204,7 +209,7 @@ impl MachineStore {
                 false
             };
             let (path, bytes) = if plain {
-                tracing::warn!("系统凭据将以受文件权限保护的明文保存，仅允许管理员读取。");
+                tracing::warn!("{}", Message::SystemCredentialsWillBeStoredAsPlaintext);
                 (self.plain_file(), Zeroizing::new(text.as_bytes().to_vec()))
             } else {
                 #[cfg(target_os = "linux")]
@@ -225,7 +230,8 @@ impl MachineStore {
             *self
                 .cache
                 .lock()
-                .map_err(|_| anyhow::anyhow!("凭据缓存损坏"))? = None;
+                .map_err(|_| crate::infra::error::error!(Message::CredentialCacheLockPoisoned))? =
+                None;
             Ok(())
         }
     }
@@ -234,16 +240,16 @@ impl MachineStore {
 #[cfg(not(target_os = "macos"))]
 fn validate_private(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path)?;
-    anyhow::ensure!(
+    crate::infra::error::ensure!(
         metadata.is_file() && !metadata.file_type().is_symlink(),
-        "凭据路径必须是普通文件"
+        Message::CredentialPathMustBeARegularFile
     );
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        anyhow::ensure!(
+        crate::infra::error::ensure!(
             metadata.uid() == 0 && metadata.mode() & 0o077 == 0,
-            "系统凭据必须由 root 所有且权限为 0600"
+            Message::SystemCredentialsMustBeOwnedByRoot
         );
     }
     Ok(())

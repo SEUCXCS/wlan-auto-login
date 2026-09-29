@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use tokio::sync::{mpsc, oneshot};
 
 /// Own native handles on one thread. Blocking OS calls and handle cleanup must
@@ -26,7 +27,7 @@ impl<T: Send + 'static> Worker<T> {
                     }
                 }
             })
-            .context("无法启动 Wi-Fi 查询线程")?;
+            .context(Message::FailedToStartWiFiWorkerThread)?;
         Ok(Self { requests })
     }
 
@@ -35,8 +36,8 @@ impl<T: Send + 'static> Worker<T> {
         self.requests
             .send(sender)
             .await
-            .context("Wi-Fi 查询线程已关闭")?;
-        receiver.await.context("Wi-Fi 查询线程已退出")?
+            .context(Message::WiFiWorkerChannelClosed)?;
+        receiver.await.context(Message::WiFiWorkerThreadStopped)?
     }
 }
 

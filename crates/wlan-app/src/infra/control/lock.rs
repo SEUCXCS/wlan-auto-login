@@ -1,5 +1,6 @@
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result, bail};
 use crate::infra::{filesystem::private_dir, paths::Paths};
-use anyhow::{Context, Result, bail};
 use std::{
     fs::{File, OpenOptions},
     path::Path,
@@ -22,13 +23,14 @@ fn open_lock(path: &Path) -> Result<File> {
 
 pub fn singleton(paths: &Paths) -> Result<File> {
     let file = open_lock(&paths.runtime.join("daemon.lock"))?;
-    fs2::FileExt::try_lock_exclusive(&file).context("daemon 已在运行")?;
+    fs2::FileExt::try_lock_exclusive(&file).context(Message::DaemonIsAlreadyRunning)?;
     Ok(file)
 }
 
 pub fn service_lock(paths: &Paths) -> Result<File> {
     let file = open_lock(&paths.config.join("service.lock"))?;
-    fs2::FileExt::try_lock_exclusive(&file).context("另一项服务管理操作正在运行")?;
+    fs2::FileExt::try_lock_exclusive(&file)
+        .context(Message::AnotherServiceManagementOperationIsInProgress)?;
     Ok(file)
 }
 
@@ -43,7 +45,7 @@ pub async fn operation_lock(paths: &Paths) -> Result<File> {
             Err(e) => return Err(e.into()),
         }
     }
-    bail!("另一项登录或注销操作尚未结束，请稍后重试")
+    bail!(Message::AnotherAuthenticationOperationIsInProgressRetryLater)
 }
 
 pub async fn wait_stopped(paths: &Paths) -> Result<()> {
@@ -53,7 +55,7 @@ pub async fn wait_stopped(paths: &Paths) -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    bail!("daemon 尚未退出，请停止正在运行的 daemon 后重试")
+    bail!(Message::DaemonHasNotExitedStopTheRunningDaemon)
 }
 
 #[cfg(test)]

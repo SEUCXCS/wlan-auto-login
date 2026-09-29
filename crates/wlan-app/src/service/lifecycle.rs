@@ -5,8 +5,9 @@ use super::{
     definition::{Artifacts, Plan, plan},
     manager::Manager,
 };
+use crate::infra::error::Message;
+use crate::infra::error::{Result, bail};
 use crate::{infra::control, infra::paths::Paths};
-use anyhow::{Result, bail};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Action {
@@ -23,9 +24,9 @@ pub async fn manage(paths: &Paths, action: Action) -> Result<()> {
     tracing::info!(
         "{}",
         match action {
-            Action::Start => "已向系统服务管理器提交启动请求。",
-            Action::Stop => "系统服务已停止。",
-            Action::Restart => "已向系统服务管理器提交重启请求。",
+            Action::Start => "Service start requested",
+            Action::Stop => "Service stopped",
+            Action::Restart => "Service restart requested",
         }
     );
     Ok(())
@@ -40,14 +41,14 @@ async fn manage_plan(
     let _service_lock = control::service_lock(paths)?;
     let files = Artifacts::read(plan)?;
     if !files.definition && !files.executable {
-        bail!("后台服务尚未安装，请先执行 install");
+        bail!(Message::ServiceNotInstalled);
     }
     if !files.complete() {
-        bail!("后台服务安装不完整，请重新执行 install");
+        bail!(Message::InstallationIncomplete);
     }
     let state = plan.manager.query(runner).await?;
     if !plan.manager.installed(&state) {
-        bail!("后台服务未在系统中注册，请先执行 install");
+        bail!(Message::ServiceNotRegistered);
     }
     // Do not send IPC Stop or use the daemon singleton lock: these commands
     // control only the registered service, never a manually launched process.
@@ -113,7 +114,7 @@ async fn manage_plan(
             if matches!(action, Action::Start | Action::Restart) && !state.running && !state.pending
             {
                 if !state.registered {
-                    bail!("系统服务注册已被移除，请重新执行 install");
+                    bail!(Message::ServiceRegistrationRemoved);
                 }
                 execute(runner, Invocation::new("schtasks", ["/Run", "/TN", name])).await?;
             }
@@ -133,7 +134,7 @@ async fn manage_plan(
             }
             if matches!(action, Action::Start | Action::Restart) && !state.running && !state.pending
             {
-                anyhow::ensure!(state.registered, "系统服务注册已被移除，请重新执行 install");
+                crate::infra::error::ensure!(state.registered, Message::ServiceRegistrationRemoved);
                 execute(
                     runner,
                     Invocation::new("sc.exe", ["start", "cxxy-wlanlogin"]),
@@ -154,7 +155,7 @@ pub(super) async fn wait_task_stopped(
     manager: &Manager,
     runner: &impl Runner,
 ) -> Result<ServiceState> {
-    use anyhow::Context;
+    use crate::infra::error::Context;
     use std::time::Duration;
     tokio::time::timeout(Duration::from_secs(25), async {
         loop {
@@ -166,7 +167,7 @@ pub(super) async fn wait_task_stopped(
         }
     })
     .await
-    .context("等待系统服务停止超时；未提交新的启动请求")?
+    .context(Message::TimedOutWaitingForServiceStopNoNew)?
 }
 
 #[cfg(test)]
@@ -283,8 +284,8 @@ mod tests {
             let error = manage_plan(&paths, &plan, action, &runner)
                 .await
                 .err()
-                .ok_or_else(|| anyhow::anyhow!("missing installation accepted"))?;
-            assert!(error.to_string().contains("尚未安装"));
+                .ok_or_else(|| crate::infra::error::error!("missing installation accepted"))?;
+            assert!(error.to_string().contains("not installed"));
             assert!(runner.calls.borrow().is_empty());
             fs::write(&plan.definition, &plan.content)?;
             assert!(manage_plan(&paths, &plan, action, &runner).await.is_err());

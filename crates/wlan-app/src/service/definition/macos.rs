@@ -1,5 +1,6 @@
 use super::{Invocation, LABEL, Manager, Plan, xml};
-use anyhow::{Context, Result};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use std::{ffi::OsStr, path::PathBuf};
 
 pub(in crate::service) fn macos_system_plan(
@@ -40,8 +41,10 @@ pub(in crate::service) fn macos_plan(
     log: PathBuf,
     uid: u32,
 ) -> Result<Plan> {
-    let exe = xml(executable.to_str().context("安装路径必须是 UTF-8")?);
-    let log = xml(log.to_str().context("日志路径必须是 UTF-8")?);
+    let exe = xml(executable
+        .to_str()
+        .context(Message::InstallationPathMustBeUTF8)?);
+    let log = xml(log.to_str().context(Message::LogPathMustBeUTF8)?);
     let domain = format!("gui/{uid}");
     let target = format!("{domain}/{LABEL}");
     let content = format!(

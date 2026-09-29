@@ -1,6 +1,8 @@
 //! Local IPC restricted to the selected user or system scope. No TCP port is opened.
+#[cfg(unix)]
+use crate::infra::error::Message;
+use crate::infra::error::Result;
 use crate::infra::paths::Paths;
-use anyhow::Result;
 
 #[cfg(unix)]
 pub type Stream = tokio::net::UnixStream;
@@ -15,7 +17,7 @@ impl Listener {
         let path = paths.runtime.join("daemon.sock");
         match std::fs::symlink_metadata(&path) {
             Ok(meta) if meta.file_type().is_socket() => std::fs::remove_file(&path)?,
-            Ok(_) => anyhow::bail!("控制 socket 路径被其他文件占用"),
+            Ok(_) => crate::infra::error::bail!(Message::ControlSocketPathIsOccupiedByAnotherFile),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
         }

@@ -1,4 +1,5 @@
 //! Initialize the application and route commands to their workflows.
+use crate::infra::error::Message;
 mod cli;
 mod daemon;
 mod install;
@@ -7,8 +8,8 @@ mod logout;
 
 pub(crate) use login::Form;
 
+use crate::infra::error::Result;
 use crate::{infra::logging, infra::paths as config, infra::scope, infra::shutdown, service};
-use anyhow::Result;
 use clap::Parser;
 use cxxy_wlanlogin_lib::{Client, PortalConfig};
 
@@ -33,7 +34,7 @@ pub(crate) fn run() -> std::process::ExitCode {
         }
         Err(error) => {
             let _ = logging::init(None);
-            tracing::error!("无法创建运行时：{error}");
+            tracing::error!(error = %error, "{}", Message::RuntimeCreationFailed);
             std::process::ExitCode::FAILURE
         }
     }
@@ -53,7 +54,7 @@ async fn entry(args: cli::Cli) -> std::process::ExitCode {
     ) {
         paths
             .as_ref()
-            .map_err(|error| anyhow::anyhow!("{error:#}"))
+            .map_err(|error| crate::infra::error::error!("{error:#}"))
             .and_then(logging::background_log)
             .map(Some)
     } else {
@@ -73,7 +74,7 @@ async fn entry(args: cli::Cli) -> std::process::ExitCode {
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            tracing::error!("{error:#}");
+            tracing::error!(error = %error, "{}", Message::OperationFailed);
             std::process::ExitCode::FAILURE
         }
     }
@@ -116,7 +117,7 @@ async fn dispatch(args: cli::Cli, paths: config::Paths) -> Result<()> {
             service,
         } => {
             #[cfg(not(windows))]
-            anyhow::ensure!(!service, "--service 仅用于 Windows Service Control Manager");
+            crate::infra::error::ensure!(!service, Message::ServiceIsOnlySupportedByWindowsService);
             #[cfg(windows)]
             let _ = service;
             if background {

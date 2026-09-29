@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use directories::ProjectDirs;
 use std::path::PathBuf;
 
@@ -41,7 +42,7 @@ impl Paths {
             }
         }
         let dirs = ProjectDirs::from("org", "seucxcs", "cxxy-wlanlogin")
-            .context("无法确定用户配置目录")?;
+            .context(Message::FailedToDetermineUserConfigurationDirectory)?;
         Ok(Self {
             scope,
             config: dirs.config_dir().into(),
@@ -74,7 +75,12 @@ pub fn known_folder(id: &windows_sys::core::GUID) -> Result<PathBuf> {
             std::ptr::null_mut(),
             &mut value,
         );
-        anyhow::ensure!(result >= 0, "无法读取系统目录: {result:#x}");
+        crate::infra::error::ensure!(
+            result >= 0,
+            Message::FailedToResolveSystemDirectoryResultX {
+                result: format!("{:#x}", result)
+            }
+        );
         let mut length = 0;
         while *value.add(length) != 0 {
             length += 1;

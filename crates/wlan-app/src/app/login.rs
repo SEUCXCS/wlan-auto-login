@@ -1,10 +1,11 @@
 use super::cli::LoginArgs;
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result, bail};
 use crate::{
     credentials,
     infra::{config::Preferences, paths::Paths},
     tui, wifi,
 };
-use anyhow::{Context, Result, bail};
 use cxxy_wlanlogin_lib::{Client, Credentials, Line, LoginOutcome};
 use std::io::{self, IsTerminal};
 
@@ -76,7 +77,7 @@ async fn run_with_store(
         let mut password = String::new();
         io::stdin()
             .read_line(&mut password)
-            .context("无法读取密码")?;
+            .context(Message::FailedToReadPasswordFromStdin)?;
         if password.ends_with('\n') {
             password.pop();
             if password.ends_with('\r') {
@@ -108,10 +109,9 @@ async fn run_with_store(
     if interactive
         && (args.non_interactive || !io::stdin().is_terminal() || !io::stdout().is_terminal())
     {
-        bail!(
-            "缺少账号或密码；请通过参数、CXXY_WLAN_USERNAME/CXXY_WLAN_PASSWORD 或交互终端提供凭据{}",
-            warning.map(|s| format!("；{s}")).unwrap_or_default()
-        );
+        bail!(Message::CredentialsAreMissingProvideArgumentsCXXYWLAN {
+            value0: (warning.map(|s| format!("；{s}")).unwrap_or_default()).to_string()
+        });
     }
     loop {
         if interactive {
@@ -137,9 +137,9 @@ async fn run_with_store(
                         .save(form.credentials.clone())
                         .await
                         .context(if authenticated {
-                            "已登录，但保存凭据失败；后台服务尚不能安装"
+                            "Authenticated but failed to save credentials; service installation cannot continue"
                         } else {
-                            "离线保存凭据失败；后台服务尚不能安装"
+                            "Failed to save offline credentials; service installation cannot continue"
                         })?;
                 }
                 Preferences { line: form.line }.save(paths)?;
@@ -148,26 +148,11 @@ async fn run_with_store(
                 state.save(paths)?;
                 crate::infra::control::wake(paths).await;
                 if outcome == Some(LoginOutcome::AlreadyOnline) {
-                    tracing::info!(
-                        "当前设备已在线，未重复提交登录；本次提供的凭据和线路尚未在线验证{}",
-                        if remember {
-                            "，账号和密码已保存"
-                        } else {
-                            ""
-                        }
-                    );
+                    tracing::info!(credentials_saved = remember, "{}", Message::AlreadyOnline);
                 } else if authenticated {
-                    tracing::info!(
-                        "登录成功（{}）{}",
-                        form.line.label(),
-                        if remember {
-                            "，账号和密码已保存"
-                        } else {
-                            ""
-                        }
-                    );
+                    tracing::info!(line = %form.line, credentials_saved = remember, "{}", Message::Authenticated);
                 } else {
-                    tracing::info!("账号和密码已保存；未执行校园网认证，凭据尚未在线验证。");
+                    tracing::info!("{}", Message::CredentialsSavedOffline);
                 }
                 return Ok(());
             }
@@ -227,7 +212,7 @@ mod tests {
             self.0
                 .borrow_mut()
                 .pop_front()
-                .ok_or_else(|| anyhow::anyhow!("unexpected Wi-Fi check"))?
+                .ok_or_else(|| crate::infra::error::error!("unexpected Wi-Fi check"))?
         }
     }
 
@@ -296,7 +281,7 @@ mod tests {
             let saved = store.saved.borrow();
             let saved = saved
                 .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("credentials not saved"))?;
+                .ok_or_else(|| crate::infra::error::error!("credentials not saved"))?;
             assert_eq!(saved.username, "student");
             assert_eq!(saved.password, "test-secret");
         }
@@ -330,8 +315,8 @@ mod tests {
     async fn unavailable_wifi_identification_saves_locally_without_portal_requests() -> Result<()> {
         for install in [false, true] {
             let wifi = TestWifi::new([
-                Err(anyhow::anyhow!("mock SSID permission denied")),
-                Err(anyhow::anyhow!("mock SSID permission denied")),
+                Err(crate::infra::error::error!("mock SSID permission denied")),
+                Err(crate::infra::error::error!("mock SSID permission denied")),
             ]);
             assert_local_save(wifi, install, false).await?;
         }
@@ -378,7 +363,7 @@ mod tests {
         timeout(Duration::from_secs(2), async {
             while !request.ends_with(b"\r\n\r\n") {
                 request.push(stream.read_u8().await?);
-                anyhow::ensure!(request.len() < 16_384, "oversized mock request");
+                crate::infra::error::ensure!(request.len() < 16_384, "oversized mock request");
             }
             stream
                 .write_all(
@@ -389,7 +374,7 @@ mod tests {
                     .as_bytes(),
                 )
                 .await?;
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, crate::infra::error::Error>(())
         })
         .await??;
         Ok(String::from_utf8(request)?)
@@ -416,7 +401,7 @@ mod tests {
                 assert!(status.starts_with("GET /status?"));
                 assert!(login.starts_with("GET /action?"));
                 assert!(login.contains("&a=login&"));
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, crate::infra::error::Error>(())
             };
             let (result, served) = tokio::join!(
                 run_with_store(&client, &paths, args, install, &wifi, &store),

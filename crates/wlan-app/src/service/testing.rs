@@ -1,6 +1,7 @@
 //! In-memory service-manager responses shared by unit tests.
 use super::command::{CommandOutput, Invocation, Runner};
-use anyhow::{Context, Result};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use std::{cell::RefCell, collections::VecDeque};
 
 #[derive(Default)]
@@ -31,7 +32,7 @@ impl Runner for FakeRunner {
         self.outputs
             .borrow_mut()
             .pop_front()
-            .context("unexpected service command")
+            .context(Message::UnexpectedServiceCommand)
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::infra::error::Message;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
@@ -22,33 +23,35 @@ const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 pub struct Monitor(NativeMonitor);
 
 impl Monitor {
-    pub async fn new() -> anyhow::Result<Self> {
-        use anyhow::Context;
+    pub async fn new() -> crate::infra::error::Result<Self> {
+        use crate::infra::error::Context;
         tokio::time::timeout(QUERY_TIMEOUT, NativeMonitor::new())
             .await
-            .context("初始化 Wi-Fi 监听超时")?
+            .context(Message::WiFiMonitorInitializationTimedOut)?
             .map(Self)
     }
 
-    pub async fn snapshot(&self) -> anyhow::Result<Option<String>> {
-        use anyhow::Context;
+    pub async fn snapshot(&self) -> crate::infra::error::Result<Option<String>> {
+        use crate::infra::error::Context;
         tokio::time::timeout(QUERY_TIMEOUT, self.0.snapshot())
             .await
-            .context("读取 Wi-Fi 状态超时")?
+            .context(Message::WiFiStatusQueryTimedOut)?
     }
 
-    pub async fn changed(&mut self) -> anyhow::Result<()> {
+    pub async fn changed(&mut self) -> crate::infra::error::Result<()> {
         self.0.changed().await
     }
 }
 
 /// Only an explicitly identified Student_CX connection returns a session.
 pub trait WifiConnection {
-    fn target_session(&self) -> impl std::future::Future<Output = anyhow::Result<Option<String>>>;
+    fn target_session(
+        &self,
+    ) -> impl std::future::Future<Output = crate::infra::error::Result<Option<String>>>;
 }
 
 impl WifiConnection for Monitor {
-    async fn target_session(&self) -> anyhow::Result<Option<String>> {
+    async fn target_session(&self) -> crate::infra::error::Result<Option<String>> {
         self.snapshot().await
     }
 }
@@ -62,10 +65,10 @@ impl WifiProbe {
 }
 
 impl WifiConnection for WifiProbe {
-    async fn target_session(&self) -> anyhow::Result<Option<String>> {
+    async fn target_session(&self) -> crate::infra::error::Result<Option<String>> {
         match &self.0 {
             Ok(monitor) => monitor.snapshot().await,
-            Err(message) => anyhow::bail!("{message}"),
+            Err(message) => crate::infra::error::bail!("{message}"),
         }
     }
 }
@@ -84,10 +87,16 @@ impl WifiState {
     pub fn notice(&self) -> Option<String> {
         match self {
             Self::Target => None,
-            Self::Other => Some("当前未连接 Student_CX，仅保存凭据，不执行校园网认证。".into()),
-            Self::Unavailable(reason) => Some(format!(
-                "无法确认当前 Wi-Fi（{reason}）；仅保存凭据，不执行校园网认证。"
-            )),
+            Self::Other => Some(
+                "Not connected to Student_CX; credentials will be saved without authentication"
+                    .into(),
+            ),
+            Self::Unavailable(reason) => Some(
+                (Message::WiFiIdentificationUnavailableReasonCredentialsWill {
+                    reason: (reason).to_string(),
+                })
+                .to_string(),
+            ),
         }
     }
 }

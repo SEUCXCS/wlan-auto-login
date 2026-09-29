@@ -1,21 +1,24 @@
-use anyhow::{Context, Result};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use std::{fs, path::Path};
 
 pub fn private_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path)?;
     let metadata = fs::symlink_metadata(path)?;
-    anyhow::ensure!(
+    crate::infra::error::ensure!(
         metadata.is_dir() && !metadata.file_type().is_symlink(),
-        "配置目录不能是符号链接：{}",
-        path.display()
+        Message::ConfigurationDirectoryMustNotBeASymbolic {
+            value0: (path.display()).to_string()
+        }
     );
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        anyhow::ensure!(
+        crate::infra::error::ensure!(
             metadata.uid() == unsafe { libc::geteuid() },
-            "配置目录不属于当前运行身份：{}",
-            path.display()
+            Message::ConfigurationDirectoryIsNotOwnedByThe {
+                value0: (path.display()).to_string()
+            }
         );
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
@@ -73,7 +76,7 @@ pub fn restrict_windows(path: &Path, public: bool) -> Result<()> {
 
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let parent = path.parent().context("文件没有父目录")?;
+    let parent = path.parent().context(Message::FileHasNoParentDirectory)?;
     private_dir(parent)?;
     let mut temp = tempfile::NamedTempFile::new_in(parent)?;
     temp.write_all(bytes)?;

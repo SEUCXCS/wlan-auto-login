@@ -1,8 +1,9 @@
 //! Query native service managers and normalize their state.
 use super::command::{Invocation, Runner};
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
-use anyhow::Context;
-use anyhow::Result;
+use crate::infra::error::Context;
+use crate::infra::error::Message;
+use crate::infra::error::Result;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
@@ -35,7 +36,7 @@ impl ServiceState {
             running: false,
             pending: false,
             enabled: None,
-            state: "未注册/未加载".into(),
+            state: "unregistered/unloaded".into(),
             pid: None,
             detail: None,
         }
@@ -161,16 +162,16 @@ fn parse_systemd(text: &str) -> Result<ServiceState> {
     let values = fields(text);
     let load = values
         .get("LoadState")
-        .context("systemd 响应缺少 LoadState")?;
+        .context(Message::SystemdResponseIsMissingLoadState)?;
     if *load == "not-found" {
         return Ok(ServiceState::absent());
     }
     let active = values
         .get("ActiveState")
-        .context("systemd 响应缺少 ActiveState")?;
+        .context(Message::SystemdResponseIsMissingActiveState)?;
     let sub = values
         .get("SubState")
-        .context("systemd 响应缺少 SubState")?;
+        .context(Message::SystemdResponseIsMissingSubState)?;
     let pid = values
         .get("MainPID")
         .and_then(|value| value.parse::<u32>().ok())
@@ -187,7 +188,12 @@ fn parse_systemd(text: &str) -> Result<ServiceState> {
         detail: values
             .get("Result")
             .filter(|value| !value.is_empty())
-            .map(|value| format!("最近运行结果：{value}")),
+            .map(|value| {
+                (Message::LastResultValue {
+                    value: (value).to_string(),
+                })
+                .to_string()
+            }),
     })
 }
 
@@ -208,7 +214,9 @@ fn parse_launchd(text: &str) -> Result<ServiceState> {
         }
     }
     let values = fields(&properties);
-    let state = values.get("state").context("launchd 响应缺少 state")?;
+    let state = values
+        .get("state")
+        .context(Message::LaunchdResponseIsMissingState)?;
     let pid = values
         .get("pid")
         .and_then(|value| value.parse::<u32>().ok())
@@ -220,9 +228,12 @@ fn parse_launchd(text: &str) -> Result<ServiceState> {
         enabled: None,
         state: (*state).into(),
         pid,
-        detail: values
-            .get("last exit code")
-            .map(|value| format!("最近退出代码：{value}")),
+        detail: values.get("last exit code").map(|value| {
+            (Message::LastExitCodeValue {
+                value: (value).to_string(),
+            })
+            .to_string()
+        }),
     })
 }
 
@@ -281,15 +292,17 @@ fn parse_windows(text: &str) -> Result<ServiceState> {
     match values.get("Installed") {
         Some(&"0") => return Ok(ServiceState::absent()),
         Some(&"1") => {}
-        _ => anyhow::bail!("计划任务响应缺少有效的 Installed 字段"),
+        _ => crate::infra::error::bail!(Message::TaskSchedulerResponseHasAnInvalidInstalledField),
     }
     let state = match values.get("State") {
-        Some(&"0") => anyhow::bail!("计划任务状态未知"),
+        Some(&"0") => {
+            crate::infra::error::bail!(Message::UnknownTaskSchedulerState)
+        }
         Some(&"1") => "已禁用",
         Some(&"2") => "等待调度",
         Some(&"3") => "就绪",
         Some(&"4") => "运行中",
-        _ => anyhow::bail!("计划任务响应缺少有效的 State 字段"),
+        _ => crate::infra::error::bail!(Message::TaskSchedulerResponseHasAnInvalidStateField),
     };
     Ok(ServiceState {
         registered: true,
@@ -302,9 +315,12 @@ fn parse_windows(text: &str) -> Result<ServiceState> {
         },
         state: state.into(),
         pid: None,
-        detail: values
-            .get("LastTaskResult")
-            .map(|value| format!("最近任务结果：{value}")),
+        detail: values.get("LastTaskResult").map(|value| {
+            (Message::LastTaskResultValue {
+                value: (value).to_string(),
+            })
+            .to_string()
+        }),
     })
 }
 
@@ -339,7 +355,9 @@ fn parse_windows_service(text: &str) -> Result<ServiceState> {
     match values.get("Installed") {
         Some(&"0") => return Ok(ServiceState::absent()),
         Some(&"1") => {}
-        _ => anyhow::bail!("系统服务响应缺少 Installed"),
+        _ => {
+            crate::infra::error::bail!(Message::SCMResponseIsMissingInstalled)
+        }
     }
     let (label, running, pending) = match values.get("State") {
         Some(&"1") => ("已停止", false, false),
@@ -348,7 +366,7 @@ fn parse_windows_service(text: &str) -> Result<ServiceState> {
         Some(&"4") => ("运行中", true, false),
         Some(&"5") | Some(&"6") => ("切换状态中", false, true),
         Some(&"7") => ("已暂停", false, false),
-        _ => anyhow::bail!("未知的系统服务运行状态"),
+        _ => crate::infra::error::bail!(Message::UnknownSCMServiceState),
     };
     Ok(ServiceState {
         registered: true,

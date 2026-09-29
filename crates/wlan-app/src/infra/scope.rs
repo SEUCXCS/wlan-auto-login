@@ -1,4 +1,5 @@
-use anyhow::Result;
+use crate::infra::error::Message;
+use crate::infra::error::Result;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Scope {
@@ -18,18 +19,18 @@ impl Scope {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::User => "用户",
-            Self::System => "系统",
+            Self::User => "user",
+            Self::System => "system",
         }
     }
 
     pub fn require_access(self) -> Result<()> {
         let elevated = elevated()?;
         if self == Self::System && !elevated {
-            anyhow::bail!("管理系统安装和凭据需要管理员权限，请使用 sudo 或管理员终端");
+            crate::infra::error::bail!(Message::ElevationRequired);
         }
         if self == Self::User && elevated {
-            anyhow::bail!("请使用普通用户终端运行 --user 命令，以访问该用户的服务和密钥库");
+            crate::infra::error::bail!(Message::UserSessionRequired);
         }
         Ok(())
     }

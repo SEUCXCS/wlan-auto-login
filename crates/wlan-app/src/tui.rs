@@ -1,5 +1,6 @@
 use crate::app::Form;
-use anyhow::{Result, bail};
+use crate::infra::error::Message;
+use crate::infra::error::{Result, bail};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
@@ -62,9 +63,9 @@ pub fn prompt(
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 let was_submit = key.code == KeyCode::Enter && focus == 4;
                 match key.code {
-                    KeyCode::Esc => bail!("已取消登录"),
+                    KeyCode::Esc => bail!(Message::LoginCancelled),
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        bail!("已取消登录")
+                        bail!(Message::LoginCancelled)
                     }
                     KeyCode::Tab | KeyCode::Down => focus = (focus + 1) % 5,
                     KeyCode::BackTab | KeyCode::Up => focus = (focus + 4) % 5,
@@ -238,7 +239,7 @@ mod tests {
         ] {
             for width in [44, 76, 120] {
                 let backend = ratatui::backend::TestBackend::new(width, 22);
-                let mut terminal = Terminal::new(backend)?;
+                let mut terminal = Terminal::new(backend).unwrap_or_else(|never| match never {});
                 let form = Form {
                     credentials: cxxy_wlanlogin_lib::Credentials {
                         username: "student".into(),
@@ -247,16 +248,18 @@ mod tests {
                     line: Default::default(),
                     remember: true,
                 };
-                terminal.draw(|frame| {
-                    render(
-                        frame,
-                        &form,
-                        Some(reason),
-                        None,
-                        2,
-                        &mut [Rect::default(); 5],
-                    )
-                })?;
+                terminal
+                    .draw(|frame| {
+                        render(
+                            frame,
+                            &form,
+                            Some(reason),
+                            None,
+                            2,
+                            &mut [Rect::default(); 5],
+                        )
+                    })
+                    .unwrap_or_else(|never| match never {});
                 let cells = &terminal.backend().buffer().content;
                 let visible = cells
                     .iter()

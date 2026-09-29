@@ -1,5 +1,6 @@
 use super::{Invocation, LABEL, Manager, Plan, xml};
-use anyhow::{Context, Result};
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use std::{ffi::OsStr, path::PathBuf};
 
 pub(in crate::service) fn windows_system_plan(
@@ -8,7 +9,9 @@ pub(in crate::service) fn windows_system_plan(
 ) -> Result<Plan> {
     let binary = format!(
         "\"{}\" --system daemon --service",
-        executable.to_str().context("安装路径必须是 UTF-8")?
+        executable
+            .to_str()
+            .context(Message::InstallationPathMustBeUTF8)?
     );
     let stop = || Invocation::new("sc.exe", ["stop", "cxxy-wlanlogin"]).optional();
     Ok(Plan {
@@ -75,7 +78,9 @@ pub(in crate::service) fn windows_plan(
     definition: PathBuf,
     sid: &str,
 ) -> Result<Plan> {
-    let exe = xml(executable.to_str().context("安装路径必须是 UTF-8")?);
+    let exe = xml(executable
+        .to_str()
+        .context(Message::InstallationPathMustBeUTF8)?);
     let name = format!("cxxy-wlanlogin-{sid}");
     let sid = xml(sid);
     let content = format!(

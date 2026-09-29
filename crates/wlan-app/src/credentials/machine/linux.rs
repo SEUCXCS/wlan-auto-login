@@ -1,5 +1,6 @@
+use crate::infra::error::Message;
+use crate::infra::error::{Context, Result};
 use crate::infra::paths::Paths;
-use anyhow::{Context, Result};
 use zeroize::Zeroizing;
 
 pub(super) async fn crypt(operation: &str, input: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
@@ -20,18 +21,25 @@ async fn crypt_with(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    let mut child = command.spawn().context("无法运行 systemd-creds；需要支持加密凭据的 systemd，旧系统可显式选择 --credential-store protected-file")?;
-    let mut stdin = child.stdin.take().context("无法打开凭据输入通道")?;
+    let mut child = command
+        .spawn()
+        .context(Message::FailedToRunSystemdCredsEncryptedCredentialsRequire)?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .context(Message::FailedToOpenCredentialInputPipe)?;
     let output = tokio::time::timeout(Duration::from_secs(30), async {
         stdin.write_all(input).await?;
         drop(stdin);
         child.wait_with_output().await
     })
     .await
-    .context("系统凭据加解密超时")??;
-    anyhow::ensure!(
+    .context(Message::SystemCredentialEncryptionOrDecryptionTimedOut)??;
+    crate::infra::error::ensure!(
         output.status.success(),
-        "系统凭据{operation}失败；未降级存储方式"
+        Message::SystemCredentialOperationFailedStorageModeWas {
+            operation: (operation).to_string()
+        }
     );
     Ok(Zeroizing::new(output.stdout))
 }
@@ -47,7 +55,7 @@ pub fn linux_credential_directive(paths: &Paths) -> Result<String> {
         // predating LoadCredential; the root service reads its private file.
         Ok(String::new())
     } else {
-        anyhow::bail!("缺少系统凭据，请先执行 sudo login --remember-me")
+        crate::infra::error::bail!(Message::SystemCredentialsAreMissingRunLoginSystemRemember)
     }
 }
 
