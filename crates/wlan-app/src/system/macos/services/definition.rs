@@ -22,10 +22,6 @@ pub(crate) fn macos_system_plan(
         domain: "system".into(),
         target: format!("system/{LABEL}"),
     };
-    plan.content = plan.content.replace(
-        "<string>daemon</string>",
-        "<string>--system</string><string>daemon</string>",
-    );
     for invocation in plan
         .stop
         .iter_mut()
@@ -52,6 +48,23 @@ pub(crate) fn macos_plan(
     let exe = xml(executable
         .to_str()
         .context(Message::InstallationPathMustBeUTF8)?);
+    let arguments = if uid == 0 {
+        format!(
+            "<string>{exe}</string><string>--system</string><string>daemon</string><string>--background</string>"
+        )
+    } else {
+        // Launch Services supplies the bundle identity used by TCC. -W keeps
+        // launchd's wrapper alive until the independently launched app exits.
+        let app = executable
+            .parent()
+            .and_then(std::path::Path::parent)
+            .and_then(std::path::Path::parent)
+            .context(Message::MacosBundleRequired)?;
+        let app = xml(app.to_str().context(Message::InstallationPathMustBeUTF8)?);
+        format!(
+            "<string>/usr/bin/open</string><string>-W</string><string>-n</string><string>-g</string><string>-a</string><string>{app}</string><string>--env</string><string>WLANLOGIN_MANAGED=1</string><string>--args</string><string>--user</string><string>daemon</string><string>--background</string>"
+        )
+    };
     let log = xml(log.to_str().context(Message::LogPathMustBeUTF8)?);
     let domain = format!("gui/{uid}");
     let target = format!("{domain}/{LABEL}");
@@ -60,7 +73,8 @@ pub(crate) fn macos_plan(
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>{LABEL}</string>
-<key>ProgramArguments</key><array><string>{exe}</string><string>daemon</string></array>
+<key>ProgramArguments</key><array>{arguments}</array>
+<key>EnvironmentVariables</key><dict><key>WLANLOGIN_MANAGED</key><string>1</string></dict>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 <key>ThrottleInterval</key><integer>30</integer>
@@ -144,4 +158,30 @@ pub(crate) fn conflicting_definition(paths: &Paths) -> Result<Option<PathBuf>> {
         }
     };
     Ok(Some(other))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn user_service_uses_launch_services_and_root_service_runs_directly() -> Result<()> {
+        let exe = PathBuf::from("/Applications/Test & Tool.app/Contents/MacOS/wlanlogin");
+        let user = macos_plan(exe.clone(), "/tmp/job".into(), "/tmp/log".into(), 501)?;
+        assert!(
+            user.content
+                .contains("<string>/usr/bin/open</string><string>-W</string>")
+        );
+        assert!(user.content.contains("Test &amp; Tool.app</string>"));
+        assert!(user.content.contains(
+            "<string>--user</string><string>daemon</string><string>--background</string>"
+        ));
+        assert!(user.content.contains("WLANLOGIN_MANAGED=1"));
+        let root = macos_system_plan(exe, "/tmp/job".into(), "/tmp/log".into())?;
+        assert!(!root.content.contains("/usr/bin/open"));
+        assert!(root.content.contains(
+            "<string>--system</string><string>daemon</string><string>--background</string>"
+        ));
+        assert!(root.content.contains("<key>WLANLOGIN_MANAGED</key>"));
+        Ok(())
+    }
 }

@@ -1,18 +1,21 @@
 //! Install or remove service artifacts, restoring previous files on failure.
-use super::artifacts::{Plan, assert_owned, ensure_no_conflicting_install, plan};
+#[cfg(any(not(target_os = "macos"), test))]
+use super::artifacts::{Plan, assert_owned};
+use super::artifacts::{ensure_no_conflicting_install, plan};
 #[cfg(windows)]
 use super::lifecycle;
 #[cfg(windows)]
 use crate::infra::command::SystemRunner;
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
+#[cfg(any(not(target_os = "macos"), test))]
 use crate::{
     infra::control,
     infra::{filesystem::private_dir, paths::Paths},
 };
 use std::{fs, path::Path};
 
-pub async fn install(paths: &Paths) -> Result<()> {
+pub async fn install(paths: &crate::infra::paths::Paths) -> Result<()> {
     ensure_no_conflicting_install(paths)?;
     let plan = plan(paths)?;
     #[cfg(target_os = "linux")]
@@ -26,9 +29,13 @@ pub async fn install(paths: &Paths) -> Result<()> {
         }
         plan
     };
+    #[cfg(target_os = "macos")]
+    return crate::system::macos::services::install::install(paths, plan).await;
+    #[cfg(not(target_os = "macos"))]
     install_plan(paths, plan, &std::env::current_exe()?).await
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
     crate::infra::error::ensure!(
         plan.scope == paths.scope,
@@ -80,10 +87,7 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
         if source != plan.executable.canonicalize().unwrap_or_default() {
             staged.persist(&plan.executable).map_err(|e| e.error)?;
         }
-        #[cfg(target_os = "macos")]
-        if paths.scope == crate::infra::scope::Scope::System {
-            crate::system::credentials::authorize_binary(&plan.executable)?;
-        }
+
         write_definition(&plan.definition, plan.content.as_bytes())?;
         for command in &plan.start {
             command.run().await?;
@@ -109,13 +113,6 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
             if let Err(e) = result {
                 rollback_errors.push(e.to_string());
             }
-        }
-        #[cfg(target_os = "macos")]
-        if paths.scope == crate::infra::scope::Scope::System
-            && old_executable.existed()
-            && let Err(e) = crate::system::credentials::authorize_binary(&plan.executable)
-        {
-            rollback_errors.push(e.to_string());
         }
         let commands = if old_definition.existed() {
             &plan.start
@@ -152,6 +149,7 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 async fn stop_before_replacing(paths: &Paths, plan: &Plan) -> Result<()> {
     for command in &plan.stop {
         command.run().await?;
@@ -163,6 +161,7 @@ async fn stop_before_replacing(paths: &Paths, plan: &Plan) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 fn remove_if_present(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -171,7 +170,7 @@ fn remove_if_present(path: &Path) -> Result<()> {
     }
 }
 // Service directories may already contain other applications' files; do not chmod them.
-fn write_definition(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_definition(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let mut file = tempfile::NamedTempFile::new_in(
         path.parent()
@@ -187,7 +186,9 @@ fn write_definition(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(any(not(target_os = "macos"), test))]
 struct Backup(Option<tempfile::NamedTempFile>);
+#[cfg(any(not(target_os = "macos"), test))]
 impl Backup {
     fn capture(path: &Path) -> Result<Self> {
         match fs::metadata(path) {

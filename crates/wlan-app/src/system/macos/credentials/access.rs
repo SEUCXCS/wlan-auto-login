@@ -31,6 +31,9 @@ static OPERATIONS: Mutex<()> = Mutex::new(());
 pub fn configure_interaction(allowed: bool) {
     INTERACTIVE.store(allowed, Ordering::Release);
 }
+pub fn interaction_allowed() -> bool {
+    INTERACTIVE.load(Ordering::Acquire)
+}
 fn interactive(background: bool) -> bool {
     !background && INTERACTIVE.load(Ordering::Acquire)
 }

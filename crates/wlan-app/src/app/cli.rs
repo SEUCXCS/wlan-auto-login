@@ -163,7 +163,18 @@ pub(super) async fn dispatch(
             crate::infra::shutdown::until_stopped(host.wait(), shutdown.wait()).await
         }
         Command::Login(args) => login::run(context, args, false).await,
-        Command::Logout { forget } => controller::logout::run(&context.client, paths, forget).await,
+        Command::Logout { forget } => {
+            #[cfg(target_os = "macos")]
+            {
+                use std::io::IsTerminal;
+                if let Err(error) =
+                    crate::system::macos::host::prepare(std::io::stderr().is_terminal()).await
+                {
+                    tracing::warn!(%error, "Wi-Fi authorization unavailable during logout");
+                }
+            }
+            controller::logout::run(&context.client, paths, forget).await
+        }
         Command::Install(args) => login::run(context, args, true).await,
         Command::Uninstall { purge } => controller::uninstall::run(paths, purge).await,
         Command::Daemon {

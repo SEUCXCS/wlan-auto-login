@@ -1,8 +1,6 @@
 //! Scoped credential selection and shared encoding; native APIs live under each platform.
 use crate::infra::error::Message;
 pub(crate) use crate::system::define::credentials::{CredentialMode, Store};
-#[cfg(target_os = "macos")]
-pub(crate) use crate::system::native::credentials::machine::authorize_binary;
 #[cfg(target_os = "linux")]
 pub(crate) use crate::system::native::credentials::machine::linux_credential_directive;
 pub(crate) use crate::system::native::credentials::user::prepare_daemon;

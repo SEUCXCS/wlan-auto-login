@@ -21,7 +21,7 @@
 
 Linux 构建需要 C 工具链、`pkg-config` 和 D-Bus 开发库；例如 Debian / Ubuntu 的 `build-essential pkg-config libdbus-1-dev`。运行需要 NetworkManager；用户凭据保存需要 Secret Service 实现（如 GNOME Keyring），系统范围默认需要支持 `systemd-creds` 的 systemd。macOS 构建需要 Xcode Command Line Tools；Windows 构建需要与所选 Rust target 匹配的工具链。
 
-macOS 的 SSID 读取和 Keychain 访问受系统权限限制。交互式登录或安装会按需启动签名 `.app` 中的 Wi-Fi 宿主，并在位置权限尚未决定时自动显示系统授权弹窗，无需单独执行权限命令。拒绝后需在系统设置的“隐私与安全性 → 定位服务”中修改。后台及 `--non-interactive` 不主动请求授权；无法识别 SSID 时保留离线配置能力，不提交门户认证。内部 permission 接口保留可扩展的 Location 与 Keychain 描述，Keychain 按本程序的凭据条目授权，没有全局“钥匙串权限”；交互式前台操作允许系统请求解锁或确认访问，后台静默读取。诊断区分无凭据、需要交互、拒绝和不可用；读取失败不会删除原条目。Linux、Windows 的权限描述列表为空，不代表绕过已有的系统访问控制。
+macOS 的 SSID 读取和 Keychain 访问受系统权限限制。交互式登录、注销或安装会按需启动签名 `.app` 中的 Wi-Fi 宿主，并在位置权限尚未决定时自动显示系统授权弹窗，无需单独执行权限命令。拒绝后需在系统设置的“隐私与安全性 → 定位服务”中修改。后台及 `--non-interactive` 不主动请求授权；无法识别 SSID 时保留离线配置能力，不提交门户认证。内部 permission 接口保留可扩展的 Location 与 Keychain 描述，Keychain 按本程序的凭据条目授权，没有全局“钥匙串权限”；交互式前台操作允许系统请求解锁或确认访问，后台静默读取。诊断区分无凭据、需要交互、拒绝和不可用；读取失败不会删除原条目。Linux、Windows 的权限描述列表为空，不代表绕过已有的系统访问控制。
 
 ## 构建
 
@@ -47,6 +47,13 @@ cargo xtask bundle macos --profile dev --target aarch64-apple-darwin
 `bundle macos` 自动编译 `wlanlogin-cli` 的 `wlanlogin` 程序，默认 release，产物在相应构建目录的 `bundle/wlanlogin.app`。支持 `--profile`、`--target`、`--target-dir` 和 `CARGO_TARGET_DIR`；普通编译继续使用 `cargo build`，没有 `xtask build` 命令。
 
 签名身份优先使用 `--codesign-identity`，其次为 `CODESIGN_IDENTITY`，默认 `-`（ad-hoc）。显式使用 `--codesign-identity=-` 可覆盖环境变量。ad-hoc 签名随构建变化，位置和钥匙串授权可能需要重新确认。可先在“钥匙串访问”的证书助理中创建用途为 Code Signing 的固定开发证书，例如 `wlanlogin-dev`；发布使用 Developer ID Application 证书。使用证书时开启 hardened runtime 和时间戳。打包会检查 plist 和签名，签名失败不会降级为 ad-hoc；新产物验证成功后才替换旧 bundle。打包不包含公证或安装操作。
+
+打包后可运行 `target/release/bundle/wlanlogin.app/Contents/MacOS/wlanlogin install`（系统范围加 `sudo`）；相邻的 `target/release/wlanlogin install` 也会查找 `bundle/wlanlogin.app`。`cargo build` 只编译可执行文件，不能替代位置权限所需的签名应用包。`install` 本身包含原有的凭据保存和按需校园网登录流程。
+
+安装会校验包标识与签名、暂存整个包，停止旧实例后替换，再为所选范围的凭据条目授权并让安装后的程序进行一次静默读取检查。用户 LaunchAgent 通过 Launch Services 启动应用，系统 LaunchDaemon 直接运行包内程序；确认托管实例就绪后才报告成功。失败会尝试恢复旧包、服务定义和凭据访问；回滚失败保留恢复目录并报告位置。升级时重新运行新版本的 `install`。固定证书有助于保持权限身份；ad-hoc 更新可能再次请求授权。
+
+系统 daemon 的 root 身份不能绕过位置权限。它从活动控制台用户的签名 Wi-Fi 宿主获取网络状态，并验证 UID 和进程签名；宿主不接触校园网凭据。开机尚无 GUI 用户、用户切换、定位未授权时，系统服务等待有效网络状态，不使用旧 SSID 自动认证。无 GUI 会话时可以非交互安装系统服务，但仍须以后在登录用户会话中通过交互式 `sudo wlanlogin --system login` 按需授权。后台不会弹窗；手动前台 daemon 也不会申请位置权限。
+
 
 ### 从旧名称升级
 
@@ -142,7 +149,7 @@ Linux 旧系统可显式使用 `--credential-store protected-file`，例如 `sud
 | macOS | `~/Library/Application Support/cxcs-tools/wlanlogin/` | `/Library/Application Support/cxcs-tools/wlanlogin/state/`、`/var/run/cxcs-tools/wlanlogin/`；凭据在 System Keychain |
 | Windows | `%APPDATA%\cxcs-tools\wlanlogin\config\` | `%ProgramData%\cxcs-tools\wlanlogin\` 下的 `state`、`run`、`secrets` |
 
-用户后台程序副本位于 Linux 的 `~/.local/share/cxcs-tools/wlanlogin/bin/`、macOS 的用户应用目录下 `bin/`、Windows 的 `%LOCALAPPDATA%\cxcs-tools\wlanlogin\data\bin\`。系统后台程序副本位于 Linux 的 `/usr/local/libexec/cxcs-tools/wlanlogin/`、macOS 的 `/Library/Application Support/cxcs-tools/wlanlogin/bin/`、Windows 的 `%ProgramFiles%\cxcs-tools\wlanlogin\`。文件名为 `wlanlogin-daemon`，Windows 加 `.exe`。
+用户后台程序副本位于 Linux 的 `~/.local/share/cxcs-tools/wlanlogin/bin/`、Windows 的 `%LOCALAPPDATA%\cxcs-tools\wlanlogin\data\bin\`。系统副本位于 Linux 的 `/usr/local/libexec/cxcs-tools/wlanlogin/`、Windows 的 `%ProgramFiles%\cxcs-tools\wlanlogin\`。文件名为 `wlanlogin-daemon`，Windows 加 `.exe`。macOS 安装完整的 `wlanlogin.app`，用户范围位于 `~/Library/Application Support/cxcs-tools/wlanlogin/`，系统范围位于 `/Library/Application Support/cxcs-tools/wlanlogin/`；实际程序为包内的 `Contents/MacOS/wlanlogin`。
 
 ## 日志与排障
 
@@ -186,6 +193,8 @@ sudo wlanlogin --system uninstall --purge  # Linux / macOS 系统范围
 ```
 
 Windows 系统范围在管理员终端运行 `wlanlogin --system uninstall --purge`。
+
+macOS 的停止、重启和卸载会先注销当前 launchd 作业，再等待托管应用退出；单独手动运行的前台 daemon 不受 `daemon stop` 影响。卸载同时移除完整应用包，清理前会停止临时 Wi-Fi 宿主。包内存在未知文件或符号链接时，操作会报错并保留它们。
 
 `--purge` 清理本程序管理的文件，保留原始 CLI 文件、目录中的其他文件、共享的 `cxcs-tools` 父目录及其中的其他工具。旧 Linux 共享 journal 中的历史日志，以及 Windows/macOS/Linux 的系统服务审计记录，无法作为应用文件单独删除，仍由操作系统的日志保留策略管理；本工具不会清空全系统日志。
 

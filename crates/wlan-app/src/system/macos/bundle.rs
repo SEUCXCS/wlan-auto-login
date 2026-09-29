@@ -32,6 +32,11 @@ pub fn resolve(scope: Scope) -> Result<PathBuf> {
     if executable(&installed).is_file() {
         return Ok(installed);
     }
+    source()
+}
+
+/// Prefer the invoking build when upgrading; never silently reinstall the old app.
+pub fn source() -> Result<PathBuf> {
     if let Ok(current) = current() {
         return Ok(current);
     }

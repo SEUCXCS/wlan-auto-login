@@ -51,7 +51,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 | `system/{linux,macos,windows}/services/` | 原生服务定义、管理器状态解析、日志来源；Windows 另含 SCM 进程适配 |
 | `system/{linux,macos,windows}/credentials/` | 用户与系统凭据后端 |
 | `system/{linux,macos,windows}/wifi/` | 平台 SSID 查询、连接标识、网络事件订阅 |
-| `system/{linux,macos,windows}/permission.rs` | 平台权限声明与未来授权适配入口 |
+| `system/{linux,macos,windows}/permission.rs` | 平台权限声明、按需授权与状态诊断 |
 
 依赖方向是 `app → system → infra`，`app` 也可直接使用 `infra`。`system` 和 `infra` 不得反向依赖 `app`；`infra` 不依赖 `system`。Clap、终端输入和展示属于应用前端，不能进入系统契约。原生 SDK 调用放在平台适配器内；通用的文件权限、进程身份和信号机制可在 `infra` 使用必要的条件编译。
 
@@ -71,7 +71,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 新增平台后更新 `system.rs`、目标依赖、构建检查和 README。将运行验证与交叉编译结果分开记录。
 
-应用 ID 固定为 `dev.cxcs.tools.wlanlogin`，目录采用 `cxcs-tools/wlanlogin` 两级结构；名称常量集中在 `infra/identity.rs`，路径通过 `infra/paths.rs` 构造。不要使用 `ProjectDirs::from` 推导这个布局：Linux 会忽略组织参数，macOS 会拼成点分名称；用户目录使用 `ProjectDirs::from_path`。macOS 系统 Keychain 授权和服务安装必须共用后台程序路径。Windows 服务的创建、查询、启停和 SCM 回调注册使用同一个 ID，用户计划任务追加 SID。
+应用 ID 固定为 `dev.cxcs.tools.wlanlogin`，目录采用 `cxcs-tools/wlanlogin` 两级结构；名称常量集中在 `infra/identity.rs`，路径通过 `infra/paths.rs` 构造。不要使用 `ProjectDirs::from` 推导这个布局：Linux 会忽略组织参数，macOS 会拼成点分名称；用户目录使用 `ProjectDirs::from_path`。macOS 的 Keychain 授权和服务安装必须共用包内程序路径。完整包的事务安装位于 `system/macos/services/`；严格限制可清理的包成员，新增打包资源时同步更新成员列表。用户服务用 `open -W` 和 Launch Services；系统服务直接运行包内程序。服务控制先 bootout，再通过带令牌的托管模式 IPC 停止实际应用，并等待托管锁释放。手动前台 daemon 不接受托管停止指令；托管启动持锁后再次检查 launchd 注册。Windows 服务的创建、查询、启停和 SCM 回调注册使用同一个 ID，用户计划任务追加 SID。
 
 改名不自动迁移旧安装，升级步骤见 README。清理只能删除应用自己的文件和清空后的 `wlanlogin` 目录，必须保留 `cxcs-tools` 父目录和同级工具；验证组织目录与应用目录的符号链接／reparse point 边界。Cargo 包为 `wlanlogin-cli` / `wlanlogin-lib`，可执行文件通过 `[[bin]]` 命名为 `wlanlogin`，日志 target 前缀也为 `wlanlogin`。
 
@@ -81,7 +81,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 Linux / Windows 返回空列表。macOS 的 `macos.location` 对接签名 Wi-Fi 宿主中的 Core Location；`macos.keychain` 查询本范围的自有条目；查询禁用 UI，申请仅在前台允许 UI。用户与系统 Keychain 共用串行访问器，避免进程级交互开关竞态。诊断区分 Missing / NeedsInteraction / Denied / Unavailable；失败不得删除原条目。未知标识返回错误，保留“不支持 / 未实现”和“已授权”的区别。权限在前台操作需要时自动申请，不增加权限子命令。后台不触发授权弹窗。
 
-macOS Wi-Fi 宿主使用有长度限制的 IPC 帧、协议版本和请求 ID；客户端通过 socket 内核审计令牌验证对端签名与 UID，系统范围还检查活动控制台用户。宿主只提供网络状态，不接收校园网凭据。每次重新启动产生新的会话标识，原生查询有超时；Core Location 对象和 delegate 始终位于同一 RunLoop 线程。
+macOS Wi-Fi 宿主使用有长度限制的 IPC 帧、协议版本和请求 ID；客户端通过 socket 内核审计令牌验证对端签名与 UID，系统范围还检查活动控制台用户。宿主只提供网络状态，不接收校园网凭据。系统宿主在控制台用户改变后退出；启动、请求、空闲存活时间都有界限。安装后的凭据检查由实际目标程序执行，禁用交互且不输出秘密；失败后恢复旧身份 ACL，再恢复服务。每次重新启动产生新的会话标识，原生查询有超时；Core Location 对象和 delegate 始终位于同一 RunLoop 线程。
 
 ### 错误与日志
 

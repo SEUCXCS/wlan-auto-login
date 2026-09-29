@@ -19,7 +19,7 @@ fn ensure_scope(paths: &Paths) -> Result<()> {
     }
     Ok(())
 }
-pub async fn run(client: &Client, paths: &Paths) -> Result<()> {
+pub async fn run(client: &Client, paths: &Paths, managed: bool) -> Result<()> {
     let mut shutdown = Shutdown::new()?;
     let stop = async {
         #[cfg(windows)]
@@ -34,15 +34,15 @@ pub async fn run(client: &Client, paths: &Paths) -> Result<()> {
             shutdown.wait().await
         }
     };
-    until_stopped(run_inner(client, paths), stop).await?;
+    until_stopped(run_inner(client, paths, managed), stop).await?;
     tracing::info!("{}", Message::DaemonStopped);
     Ok(())
 }
-async fn run_inner(client: &Client, paths: &Paths) -> Result<()> {
+async fn run_inner(client: &Client, paths: &Paths, managed: bool) -> Result<()> {
     ensure_scope(paths)?;
     stores::prepare_daemon()?;
     let _singleton = control::singleton(paths)?;
-    let (_server, mut commands) = control::serve(paths).await?;
+    let (_server, mut commands) = control::serve_with_mode(paths, managed).await?;
     let wake = tokio::sync::Notify::new();
     until_stopped(
         runtime::run_loop(client, paths, &wake),

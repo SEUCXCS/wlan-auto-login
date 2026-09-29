@@ -163,6 +163,7 @@ async fn serve(
     let stop = Arc::new(tokio::sync::Notify::new());
     let mut requests = tokio::task::JoinSet::new();
     let mut last_request = Instant::now();
+    let mut expiry = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -187,7 +188,9 @@ async fn serve(
                             Operation::Snapshot => {
                                 let result = async {
                                     response.location.check()?;
-                                    tokio::time::timeout(Duration::from_secs(4), wifi.snapshot()).await.context("Native Wi-Fi query timed out")?
+                                    let snapshot = tokio::time::timeout(Duration::from_secs(4), wifi.snapshot()).await.context("Native Wi-Fi query timed out")??;
+                                    location.status().check()?;
+                                    Ok::<_, crate::infra::error::Error>(snapshot)
                                 }.await;
                                 match result {
                                     Ok(session) => response.session = session.map(|session| format!("{instance}:{session}")),
@@ -206,7 +209,8 @@ async fn serve(
                 });
             },
             _ = stop.notified() => break,
-            _ = tokio::time::sleep(Duration::from_secs(10)) => {
+            _ = expiry.tick() => {
+                if role == Role::System && fs::metadata("/dev/console").map(|m| m.uid()).ok() != Some(unsafe { libc::geteuid() }) { break; }
                 if role != Role::Service && requests.is_empty() && last_request.elapsed() > Duration::from_secs(120) { break; }
             },
             _ = requests.join_next(), if !requests.is_empty() => {},
@@ -253,7 +257,9 @@ async fn call(operation: Operation, launch: bool) -> Result<Response> {
     let mut stream = match connect(&session, selected, &app).await? {
         Some(stream) => stream,
         None if launch => {
-            let _startup = STARTUP.lock().await;
+            let _startup = tokio::time::timeout(Duration::from_secs(45), STARTUP.lock())
+                .await
+                .context(Message::MacosHostUnavailable)?;
             if let Some(stream) = connect(&session, selected, &app).await? {
                 stream
             } else {
@@ -308,6 +314,70 @@ async fn call(operation: Operation, launch: bool) -> Result<Response> {
         return Err(crate::infra::error::Error::message(error.clone()));
     }
     Ok(response)
+}
+
+/// Stop transient hosts before changing their code identity. Managed hosts are
+/// stopped by daemon control; no helper is launched during cleanup.
+pub async fn stop_helpers(selected: Scope, app: &Path) -> Result<()> {
+    let session = match session(selected) {
+        Ok(session) => session,
+        Err(_) if selected == Scope::System && fs::metadata("/dev/console")?.uid() == 0 => {
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+    let role = if selected == Scope::System {
+        Role::System
+    } else {
+        Role::Foreground
+    };
+    let path = socket(&session.runtime, role);
+    let mut stream = match UnixStream::connect(&path).await {
+        Ok(stream) => stream,
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
+    bundle::verify_peer(&stream, session.uid, app)?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let id = REQUEST.fetch_add(1, Ordering::Relaxed);
+        write_frame(
+            &mut stream,
+            &Request {
+                version: VERSION,
+                id,
+                operation: Operation::Stop,
+            },
+        )
+        .await?;
+        let response: Response = read_frame(&mut stream).await?;
+        ensure!(
+            response.version == VERSION && response.id == id && response.error.is_none(),
+            Message::MacosHostProtocol
+        );
+        loop {
+            match UnixStream::connect(&path).await {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                    ) =>
+                {
+                    return Ok::<_, crate::infra::error::Error>(());
+                }
+                Err(e) => return Err(e.into()),
+                Ok(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+    })
+    .await
+    .context("Wi-Fi helper did not stop; bundle retained")?
 }
 
 async fn connect(session: &Session, scope: Scope, app: &Path) -> Result<Option<UnixStream>> {

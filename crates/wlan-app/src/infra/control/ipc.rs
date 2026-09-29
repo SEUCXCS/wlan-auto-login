@@ -16,6 +16,8 @@ use tokio::{
 struct Endpoint {
     address: String,
     token: String,
+    #[serde(default)]
+    pid: u32,
 }
 
 pub struct Server {
@@ -39,7 +41,15 @@ pub enum Signal {
     Stop,
 }
 
+#[cfg(test)]
 pub async fn serve(paths: &Paths) -> Result<(Server, mpsc::Receiver<Signal>)> {
+    serve_with_mode(paths, false).await
+}
+
+pub async fn serve_with_mode(
+    paths: &Paths,
+    managed: bool,
+) -> Result<(Server, mpsc::Receiver<Signal>)> {
     let mut random = [0u8; 32];
     getrandom::fill(&mut random).map_err(|e| {
         crate::infra::error::error!(Message::FailedToGenerateControlTokenE { e: (e).to_string() })
@@ -50,6 +60,7 @@ pub async fn serve(paths: &Paths) -> Result<(Server, mpsc::Receiver<Signal>)> {
     let endpoint = Endpoint {
         address,
         token: token.clone(),
+        pid: std::process::id(),
     };
     let path = paths.runtime.join("daemon-endpoint.json");
     write_private(&path, &serde_json::to_vec(&endpoint)?)?;
@@ -71,6 +82,10 @@ pub async fn serve(paths: &Paths) -> Result<(Server, mpsc::Receiver<Signal>)> {
                     match command[0] {
                         b'w' => {
                             let _ = sender.try_send(Signal::Wake);
+                        }
+                        b'p' if managed => {}
+                        b'm' if managed => {
+                            let _ = sender.send(Signal::Stop).await;
                         }
                         b's' => {
                             let _ = sender.send(Signal::Stop).await;
@@ -111,9 +126,71 @@ async fn send(paths: &Paths, command: u8) {
     .await;
 }
 
+/// The server checks its own launch mode, so stale metadata can never stop a
+/// replacement foreground daemon. No PID-based signalling is used.
+#[cfg(target_os = "macos")]
+async fn managed_command(paths: &Paths, command: u8) -> bool {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        let endpoint: Endpoint =
+            serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json"))?)?;
+        let mut socket = transport::connect(&endpoint.address).await?;
+        socket.write_all(endpoint.token.as_bytes()).await?;
+        socket.write_all(&[command]).await?;
+        let mut ack = [0; 2];
+        socket.read_exact(&mut ack).await?;
+        Ok::<_, crate::infra::error::Error>(ack == *b"ok")
+    })
+    .await
+    .is_ok_and(|result| result.unwrap_or(false))
+}
+#[cfg(target_os = "macos")]
+pub async fn managed_running(paths: &Paths) -> bool {
+    managed_command(paths, b'p').await
+}
+#[cfg(target_os = "macos")]
+pub async fn managed_pid(paths: &Paths) -> Option<u32> {
+    let endpoint: Endpoint =
+        serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json")).ok()?).ok()?;
+    if endpoint.pid > 0 && managed_running(paths).await {
+        Some(endpoint.pid)
+    } else {
+        None
+    }
+}
+#[cfg(target_os = "macos")]
+pub async fn stop_managed(paths: &Paths) -> Result<()> {
+    for _ in 0..250 {
+        managed_command(paths, b'm').await;
+        if super::lock::managed_lock(paths).is_ok() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    crate::infra::error::bail!(Message::DaemonHasNotExitedStopTheRunningDaemon)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn managed_stop_does_not_stop_a_foreground_replacement() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::test(dir.path());
+        let (server, mut receiver) = serve_with_mode(&paths, true).await?;
+        assert!(managed_running(&paths).await);
+        assert!(managed_command(&paths, b'm').await);
+        assert_eq!(receiver.recv().await, Some(Signal::Stop));
+        drop(server);
+        let (_manual, mut receiver) = serve_with_mode(&paths, false).await?;
+        assert!(!managed_running(&paths).await);
+        stop_managed(&paths).await?;
+        assert!(receiver.try_recv().is_err());
+        wake(&paths).await;
+        assert_eq!(receiver.recv().await, Some(Signal::Wake));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn local_ipc_requires_token_and_wakes_daemon() -> Result<()> {
         let dir = tempfile::tempdir()?;

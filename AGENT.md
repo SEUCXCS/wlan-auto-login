@@ -86,7 +86,7 @@ Preserve these behavioral boundaries:
 - Keep shutdown listeners alive and continuously drain NetworkManager D-Bus events.
 - Bound native calls and credential reads; keep at most one background credential read in flight.
 - Keep user and system scope separate, including credential cleanup and daemon wake/reset.
-- Retain operation locks, service transaction rollback, and stop-before-cleanup ordering.
+- Retain operation locks, service transaction rollback, and stop-before-cleanup ordering. macOS installs whole signed bundles, validates installed credential access in the installed process, and retains recovery directories after incomplete rollback. Keep launchd wrapper and application lifetimes distinct: bootout before authenticated managed-stop IPC; never signal an unverified PID. Bundle cleanup accepts only the exact xtask member inventory and rejects symlinks or unknown files.
 
 ## Delivery
 

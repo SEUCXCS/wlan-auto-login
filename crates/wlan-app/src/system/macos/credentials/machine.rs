@@ -25,6 +25,3 @@ impl MachineStore {
 pub async fn delete(_paths: &Paths) -> Result<()> {
     access::delete(Scope::System).await
 }
-pub fn authorize_binary(binary: &std::path::Path) -> Result<()> {
-    access::authorize_binary(Scope::System, binary)
-}

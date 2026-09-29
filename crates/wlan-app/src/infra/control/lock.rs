@@ -27,6 +27,13 @@ pub fn singleton(paths: &Paths) -> Result<File> {
     Ok(file)
 }
 
+#[cfg(target_os = "macos")]
+pub fn managed_lock(paths: &Paths) -> Result<File> {
+    let file = open_lock(&paths.runtime.join("managed.lock"))?;
+    fs2::FileExt::try_lock_exclusive(&file).context(Message::DaemonIsAlreadyRunning)?;
+    Ok(file)
+}
+
 pub fn service_lock(paths: &Paths) -> Result<File> {
     let file = open_lock(&paths.config.join("service.lock"))?;
     fs2::FileExt::try_lock_exclusive(&file)
