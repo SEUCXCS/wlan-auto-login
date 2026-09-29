@@ -1,30 +1,20 @@
 #[cfg(target_os = "linux")]
 use super::command::SystemRunner;
-#[cfg(any(target_os = "linux", test))]
-use super::command::{Invocation, Runner};
+
 use super::{
     definition::{Artifacts, Plan, plan},
     manager::Manager,
 };
-#[cfg(any(target_os = "linux", test))]
-use crate::infra::error::Context;
+
 use crate::infra::error::Message;
 use crate::infra::error::{Result, ensure};
-use crate::infra::paths::Paths;
-#[cfg(any(target_os = "linux", test))]
-use std::io::Write;
-use std::path::PathBuf;
-
 pub(crate) use crate::infra::file_log::LogOptions;
 use crate::infra::file_log::file_logs;
+use crate::infra::paths::Paths;
+#[cfg(any(target_os = "linux", test))]
+use crate::system::linux::services::logs::{follow_journal, journal_snapshot};
 
-#[derive(Debug)]
-enum Source {
-    #[cfg(any(target_os = "linux", test))]
-    Journal(Invocation),
-    File(PathBuf),
-}
-
+use crate::system::define::services::LogSource as Source;
 fn source(paths: &Paths, plan: &Plan, options: LogOptions) -> Result<Source> {
     let files = Artifacts::read(plan)?;
     ensure!(
@@ -36,42 +26,16 @@ fn source(paths: &Paths, plan: &Plan, options: LogOptions) -> Result<Source> {
     // registration is broken. No service manager query or mutation is needed.
     match &plan.manager {
         #[cfg(any(target_os = "linux", test))]
-        Manager::Systemd { system } => {
-            // Inspect the installed definition, not the newly generated plan:
-            // older installations still send their application output to journal.
-            if std::fs::read_to_string(&plan.definition)?
-                .lines()
-                .any(|line| line.trim() == "# ApplicationLog=daemon.log")
-            {
-                return Ok(Source::File(paths.config.join("daemon.log")));
-            }
-            let mut command = Invocation::new(
-                "journalctl",
-                [
-                    if *system { "--system" } else { "--user" },
-                    "--unit",
-                    plan.manager.name(),
-                    "--no-pager",
-                    "--output=cat",
-                    "--quiet",
-                    "--lines",
-                    &options.lines.to_string(),
-                ],
-            );
-            if options.follow {
-                command.args.push("--follow".into());
-            }
-            Ok(Source::Journal(command))
+        Manager::Systemd { .. } => {
+            crate::system::linux::services::logs::source(paths, plan, options)
         }
         #[cfg(any(target_os = "macos", test))]
         Manager::Launchd { .. } => {
-            let _ = options;
-            Ok(Source::File(paths.config.join("daemon.log")))
+            crate::system::macos::services::logs::source(paths, plan, options)
         }
-        #[cfg(any(windows, test))]
+        #[cfg(any(target_os = "windows", test))]
         Manager::TaskScheduler { .. } | Manager::WindowsService => {
-            let _ = options;
-            Ok(Source::File(paths.config.join("daemon.log")))
+            crate::system::windows::services::logs::source(paths, plan, options)
         }
     }
 }
@@ -105,62 +69,12 @@ pub async fn logs(paths: &Paths, options: LogOptions) -> Result<()> {
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
-async fn journal_snapshot(
-    command: &Invocation,
-    runner: &impl Runner,
-    output: &mut impl Write,
-) -> Result<()> {
-    let result = runner.output(command).await?;
-    result.check(command)?;
-    if result.stdout.is_empty() {
-        tracing::info!("{}", Message::NoServiceLogEntriesAvailable);
-    } else {
-        output.write_all(result.stdout.as_bytes())?;
-        output.flush()?;
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-async fn follow_journal(
-    command: &Invocation,
-    stop: impl std::future::Future<Output = std::io::Result<()>>,
-) -> Result<()> {
-    use std::process::Stdio;
-    let mut child = tokio::process::Command::new(&command.program)
-        .args(&command.args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .spawn()
-        .context(Message::FailedToReadJournalCheckJournalctlAvailabilityAnd)?;
-    tokio::select! {
-        result = child.wait() => {
-            let status = result?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::ExitStatusExt;
-                if matches!(status.signal(), Some(libc::SIGINT | libc::SIGPIPE)) { return Ok(()); }
-            }
-            ensure!(status.success() || status.code() == Some(130), Message::JournalctlFailedStatus { status: (status).to_string() });
-            Ok(())
-        },
-        signal = stop => {
-            signal.context(Message::FailedToRegisterCtrlCListener)?;
-            child.start_kill()?;
-            child.wait().await?;
-            Ok(())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::command::tests::FakeRunner;
     use crate::infra::scope::Scope;
-    use crate::service::testing::FakeRunner;
+    use crate::infra::{command::Invocation, error::Context};
     use std::fs;
 
     #[test]
@@ -173,7 +87,7 @@ mod tests {
         for scope in [Scope::User, Scope::System] {
             let mut paths = Paths::test(dir.path().join(scope.label()));
             paths.scope = scope;
-            let mut plan = crate::service::definition::linux_plan(
+            let mut plan = crate::system::shared::services::artifacts::linux_plan(
                 dir.path().join("daemon"),
                 dir.path().join("service"),
             )?;
@@ -246,7 +160,7 @@ mod tests {
     fn missing_or_partial_installation_is_rejected_without_creating_files() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let paths = Paths::test(dir.path().join("config"));
-        let plan = crate::service::definition::linux_plan(
+        let plan = crate::system::shared::services::artifacts::linux_plan(
             dir.path().join("daemon"),
             dir.path().join("service"),
         )?;

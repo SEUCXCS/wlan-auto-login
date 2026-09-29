@@ -24,7 +24,7 @@ pub(crate) fn run() -> std::process::ExitCode {
             ..
         }
     ) {
-        return service::windows::dispatch();
+        return service::windows::dispatch(|| Box::pin(run_service()));
     }
     match tokio::runtime::Runtime::new() {
         Ok(runtime) => {

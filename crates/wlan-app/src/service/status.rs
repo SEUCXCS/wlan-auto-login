@@ -6,6 +6,7 @@ use super::{
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
 use crate::infra::paths::Paths;
+use crate::system::define::services::ServiceManager;
 
 pub async fn status(paths: &Paths, discover: bool) -> Result<()> {
     let mut plans = vec![plan(paths)?];
@@ -145,13 +146,13 @@ async fn installed_version(plan: &Plan, runner: &impl Runner) -> Result<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::testing::{FakeRunner, RUNNING};
+    use crate::infra::command::tests::{FakeRunner, RUNNING};
     use std::fs;
 
     #[tokio::test]
     async fn system_reports_only_actual_artifacts_and_confirmed_registration() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let plan = crate::service::definition::linux_system_plan(
+        let plan = crate::system::shared::services::artifacts::linux_system_plan(
             dir.path().join("daemon"),
             dir.path().join("service"),
         )?;
@@ -190,7 +191,7 @@ mod tests {
     #[tokio::test]
     async fn missing_installation_status_runs_no_external_command() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let plan = crate::service::definition::linux_plan(
+        let plan = crate::system::shared::services::artifacts::linux_plan(
             dir.path().join("daemon"),
             dir.path().join("service"),
         )?;
@@ -206,7 +207,7 @@ mod tests {
     #[tokio::test]
     async fn status_uses_installed_binary_version_and_system_manager_state() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let plan = crate::service::definition::linux_plan(
+        let plan = crate::system::shared::services::artifacts::linux_plan(
             dir.path().join("daemon"),
             dir.path().join("service"),
         )?;
@@ -230,7 +231,7 @@ mod tests {
     #[tokio::test]
     async fn unavailable_manager_is_unknown_instead_of_stopped() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let plan = crate::service::definition::linux_plan(
+        let plan = crate::system::shared::services::artifacts::linux_plan(
             dir.path().join("daemon"),
             dir.path().join("service"),
         )?;

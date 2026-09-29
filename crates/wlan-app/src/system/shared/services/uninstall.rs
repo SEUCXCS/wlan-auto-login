@@ -1,11 +1,12 @@
 //! Unregister services and optionally remove all data owned by the selected scope.
 use super::{
-    command::{Invocation, Runner, SystemRunner},
-    definition::{Plan, assert_owned, plan},
-    manager::Manager,
+    Manager,
+    artifacts::{Plan, assert_owned, plan},
 };
+use crate::infra::command::{Invocation, Runner, SystemRunner};
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result, ensure};
+use crate::system::define::services::ServiceManager;
 use crate::{infra::cleanup, infra::control, infra::paths::Paths, system::credentials};
 use std::{future::Future, time::Duration};
 
@@ -183,10 +184,8 @@ async fn wait_for_manager(manager: &Manager, runner: &impl Runner, removed: bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::{
-        definition,
-        testing::{FakeRunner, RUNNING, STOPPED},
-    };
+    use crate::infra::command::tests::{FakeRunner, RUNNING, STOPPED};
+    use crate::system::shared::services::artifacts as definition;
     use std::{cell::Cell, fs, path::Path};
 
     fn fixture(root: &Path, kind: usize) -> Result<(Paths, Plan)> {

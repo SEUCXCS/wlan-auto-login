@@ -1,20 +1,16 @@
 //! Install and manage operating-system services; command workflows live in app.
 use crate::infra::command;
-mod definition;
-mod install;
-mod lifecycle;
 mod logs;
-mod manager;
+use crate::system::define::services as manager;
+use crate::system::shared::services::artifacts as definition;
 mod status;
-#[cfg(test)]
-mod testing;
-mod uninstall;
-#[cfg(windows)]
-pub(crate) mod windows;
 
-pub(crate) use definition::ensure_no_conflicting_install;
-pub(crate) use install::install;
-pub(crate) use lifecycle::{Action, manage};
+#[cfg(windows)]
+pub(crate) use crate::system::windows::services::runtime as windows;
+
+pub(crate) use crate::system::shared::services::ensure_no_conflicting_install;
+pub(crate) use crate::system::shared::services::install;
+pub(crate) use crate::system::shared::services::uninstall;
+pub(crate) use crate::system::shared::services::{Action, manage};
 pub(crate) use logs::{LogOptions, logs};
 pub(crate) use status::status;
-pub(crate) use uninstall::uninstall;

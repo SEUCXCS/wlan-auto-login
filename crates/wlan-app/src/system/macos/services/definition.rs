@@ -1,9 +1,15 @@
-use super::{Invocation, LABEL, Manager, Plan, xml};
+use crate::infra::command::Invocation;
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
+#[cfg(target_os = "macos")]
+use crate::infra::paths::Paths;
+use crate::system::define::services::{LABEL, Manager, Plan};
+#[cfg(target_os = "macos")]
+use crate::system::shared::services::artifacts::original_user_home;
+use crate::system::shared::services::artifacts::xml;
 use std::{ffi::OsStr, path::PathBuf};
 
-pub(in crate::service) fn macos_system_plan(
+pub(crate) fn macos_system_plan(
     executable: PathBuf,
     definition: PathBuf,
     log: PathBuf,
@@ -35,7 +41,7 @@ pub(in crate::service) fn macos_system_plan(
     Ok(plan)
 }
 
-pub(in crate::service) fn macos_plan(
+pub(crate) fn macos_plan(
     executable: PathBuf,
     definition: PathBuf,
     log: PathBuf,
@@ -88,4 +94,58 @@ pub(in crate::service) fn macos_plan(
         ],
         definition,
     })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn plan(paths: &Paths) -> Result<Plan> {
+    if paths.scope == crate::infra::scope::Scope::System {
+        return system_plan(paths);
+    }
+    let dirs = directories::ProjectDirs::from("org", "seucxcs", "cxxy-wlanlogin")
+        .context(Message::FailedToDetermineInstallationDirectory)?;
+    let executable = dirs.data_local_dir().join("bin").join(if cfg!(windows) {
+        "cxxy-wlanlogin-daemon.exe"
+    } else {
+        "cxxy-wlanlogin-daemon"
+    });
+
+    {
+        let base =
+            directories::BaseDirs::new().context(Message::FailedToDetermineUserServiceDirectory)?;
+        let uid = unsafe { libc::geteuid() };
+        let log = paths.config.join("daemon.log");
+        macos_plan(
+            executable,
+            base.home_dir()
+                .join("Library/LaunchAgents")
+                .join(format!("{LABEL}.plist")),
+            log,
+            uid,
+        )
+    }
+}
+#[cfg(target_os = "macos")]
+fn system_plan(paths: &Paths) -> Result<Plan> {
+    {
+        macos_system_plan(
+            "/Library/Application Support/cxxy-wlanlogin/bin/cxxy-wlanlogin-daemon".into(),
+            "/Library/LaunchDaemons/org.seucxcs.cxxy-wlanlogin.plist".into(),
+            paths.config.join("daemon.log"),
+        )
+    }
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn conflicting_definition(paths: &Paths) -> Result<Option<PathBuf>> {
+    use crate::infra::scope::Scope;
+    let other = match paths.scope {
+        Scope::User => system_plan(&Paths::new(Scope::System)?)?.definition,
+        Scope::System => {
+            if let Some(home) = original_user_home()? {
+                home.join("Library/LaunchAgents/org.seucxcs.cxxy-wlanlogin.plist")
+            } else {
+                return Ok(None);
+            }
+        }
+    };
+    Ok(Some(other))
 }

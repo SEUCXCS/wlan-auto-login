@@ -1,7 +1,9 @@
 //! Install or remove service artifacts, restoring previous files on failure.
-use super::definition::{Plan, assert_owned, ensure_no_conflicting_install, plan};
+use super::artifacts::{Plan, assert_owned, ensure_no_conflicting_install, plan};
 #[cfg(windows)]
-use super::{command::SystemRunner, lifecycle};
+use super::lifecycle;
+#[cfg(windows)]
+use crate::infra::command::SystemRunner;
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
 use crate::{
@@ -218,8 +220,9 @@ impl Backup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::command::Invocation;
     #[cfg(unix)]
-    use crate::service::{command::Invocation, definition::LABEL, manager::Manager};
+    use crate::system::define::services::{LABEL, Manager};
 
     #[cfg(unix)]
     #[tokio::test]

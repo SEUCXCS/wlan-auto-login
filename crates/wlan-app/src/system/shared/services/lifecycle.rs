@@ -1,20 +1,14 @@
 #[cfg(any(target_os = "windows", test))]
-use super::manager::ServiceState;
-use super::{
-    command::{Invocation, Runner, SystemRunner},
-    definition::{Artifacts, Plan, plan},
-    manager::Manager,
-};
+use super::Manager;
+#[cfg(any(target_os = "windows", test))]
+use super::ServiceState;
+use super::artifacts::{Artifacts, Plan, plan};
+use crate::infra::command::{Invocation, Runner, SystemRunner};
 use crate::infra::error::Message;
 use crate::infra::error::{Result, bail};
+pub(crate) use crate::system::define::services::Action;
+use crate::system::define::services::ServiceManager;
 use crate::{infra::control, infra::paths::Paths};
-
-#[derive(Clone, Copy, Debug)]
-pub enum Action {
-    Start,
-    Stop,
-    Restart,
-}
 
 pub async fn manage(paths: &Paths, action: Action) -> Result<()> {
     if matches!(action, Action::Start | Action::Restart) {
@@ -52,106 +46,15 @@ async fn manage_plan(
     }
     // Do not send IPC Stop or use the daemon singleton lock: these commands
     // control only the registered service, never a manually launched process.
-    match &plan.manager {
-        #[cfg(any(target_os = "linux", test))]
-        Manager::Systemd { system } => {
-            let verb = match action {
-                Action::Start => "start",
-                Action::Stop => "stop",
-                Action::Restart => "restart",
-            };
-            execute(
-                runner,
-                Invocation::new(
-                    "systemctl",
-                    [
-                        if *system { "--system" } else { "--user" },
-                        verb,
-                        plan.manager.name(),
-                    ],
-                ),
-            )
-            .await
-        }
-        #[cfg(any(target_os = "macos", test))]
-        Manager::Launchd { domain, target } => {
-            use std::ffi::OsStr;
-            match action {
-                Action::Stop | Action::Restart if state.registered => {
-                    execute(runner, Invocation::new("launchctl", ["bootout", target])).await?;
-                }
-                _ => {}
-            }
-            match action {
-                Action::Start if state.registered => {
-                    execute(runner, Invocation::new("launchctl", ["kickstart", target])).await
-                }
-                Action::Start | Action::Restart => {
-                    execute(
-                        runner,
-                        Invocation::new(
-                            "launchctl",
-                            [
-                                OsStr::new("bootstrap"),
-                                OsStr::new(domain),
-                                plan.definition.as_os_str(),
-                            ],
-                        ),
-                    )
-                    .await
-                }
-                Action::Stop => Ok(()),
-            }
-        }
-        #[cfg(any(target_os = "windows", test))]
-        Manager::TaskScheduler { name } => {
-            let mut state = state;
-            if matches!(action, Action::Stop | Action::Restart) && (state.running || state.pending)
-            {
-                execute(runner, Invocation::new("schtasks", ["/End", "/TN", name])).await?;
-                state = wait_task_stopped(&plan.manager, runner).await?;
-            }
-            if matches!(action, Action::Start | Action::Restart) && !state.running && !state.pending
-            {
-                if !state.registered {
-                    bail!(Message::ServiceRegistrationRemoved);
-                }
-                execute(runner, Invocation::new("schtasks", ["/Run", "/TN", name])).await?;
-            }
-            Ok(())
-        }
-        #[cfg(any(windows, test))]
-        Manager::WindowsService => {
-            let mut state = state;
-            if matches!(action, Action::Stop | Action::Restart) && (state.running || state.pending)
-            {
-                execute(
-                    runner,
-                    Invocation::new("sc.exe", ["stop", "cxxy-wlanlogin"]),
-                )
-                .await?;
-                state = wait_task_stopped(&plan.manager, runner).await?;
-            }
-            if matches!(action, Action::Start | Action::Restart) && !state.running && !state.pending
-            {
-                crate::infra::error::ensure!(state.registered, Message::ServiceRegistrationRemoved);
-                execute(
-                    runner,
-                    Invocation::new("sc.exe", ["start", "cxxy-wlanlogin"]),
-                )
-                .await?;
-            }
-            Ok(())
-        }
-    }
+    plan.manager.manage(plan, action, state, runner).await
 }
 
-async fn execute(runner: &impl Runner, command: Invocation) -> Result<()> {
+pub(crate) async fn execute(runner: &impl Runner, command: Invocation) -> Result<()> {
     runner.output(&command).await?.check(&command)
 }
 
 #[cfg(any(target_os = "windows", test))]
-pub(super) async fn wait_task_stopped(
+pub(crate) async fn wait_task_stopped(
     manager: &Manager,
     runner: &impl Runner,
 ) -> Result<ServiceState> {
@@ -173,13 +76,13 @@ pub(super) async fn wait_task_stopped(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::testing::{FakeRunner, RUNNING, STOPPED};
+    use crate::infra::command::tests::{FakeRunner, RUNNING, STOPPED};
     use std::fs;
 
     fn fixture() -> Result<(tempfile::TempDir, Paths, Plan)> {
         let dir = tempfile::tempdir()?;
         let paths = Paths::test(dir.path().join("config"));
-        let plan = crate::service::definition::linux_plan(
+        let plan = crate::system::shared::services::artifacts::linux_plan(
             dir.path().join("daemon"),
             dir.path().join("service"),
         )?;
@@ -215,7 +118,7 @@ mod tests {
         ] {
             let (dir, mut paths, _) = fixture()?;
             paths.scope = crate::infra::scope::Scope::System;
-            let plan = crate::service::definition::linux_system_plan(
+            let plan = crate::system::shared::services::artifacts::linux_system_plan(
                 dir.path().join("daemon"),
                 dir.path().join("service"),
             )?;
@@ -227,7 +130,7 @@ mod tests {
                 ["systemctl", "--system", verb, "cxxy-wlanlogin.service"]
             );
 
-            let plan = crate::service::definition::windows_system_plan(
+            let plan = crate::system::shared::services::artifacts::windows_system_plan(
                 dir.path().join("daemon.exe"),
                 dir.path().join("service.json"),
             )?;
@@ -247,7 +150,7 @@ mod tests {
     async fn scm_restart_waits_for_stop_and_aborts_on_stop_failure() -> Result<()> {
         let (dir, mut paths, _) = fixture()?;
         paths.scope = crate::infra::scope::Scope::System;
-        let plan = crate::service::definition::windows_system_plan(
+        let plan = crate::system::shared::services::artifacts::windows_system_plan(
             dir.path().join("daemon.exe"),
             dir.path().join("service.json"),
         )?;
@@ -366,7 +269,7 @@ mod tests {
     async fn macos_stop_and_restart_keep_the_installed_plist() -> Result<()> {
         for action in [Action::Stop, Action::Restart] {
             let (dir, paths, _) = fixture()?;
-            let plan = crate::service::definition::macos_plan(
+            let plan = crate::system::shared::services::artifacts::macos_plan(
                 dir.path().join("daemon"),
                 dir.path().join("service.plist"),
                 dir.path().join("log"),
@@ -402,7 +305,7 @@ mod tests {
     async fn macos_start_or_restart_after_stop_bootstraps_the_existing_plist() -> Result<()> {
         for action in [Action::Start, Action::Restart, Action::Stop] {
             let (dir, paths, _) = fixture()?;
-            let plan = crate::service::definition::macos_plan(
+            let plan = crate::system::shared::services::artifacts::macos_plan(
                 dir.path().join("daemon"),
                 dir.path().join("service.plist"),
                 dir.path().join("log"),
@@ -436,7 +339,7 @@ mod tests {
     #[tokio::test]
     async fn windows_restart_waits_until_old_task_exits_before_run() -> Result<()> {
         let (dir, paths, _) = fixture()?;
-        let plan = crate::service::definition::windows_plan(
+        let plan = crate::system::shared::services::artifacts::windows_plan(
             dir.path().join("daemon.exe"),
             dir.path().join("task.xml"),
             "S-1-5-21-123",
@@ -469,7 +372,7 @@ mod tests {
     async fn windows_stopped_task_can_start_or_restart_and_stop_is_idempotent() -> Result<()> {
         for action in [Action::Start, Action::Restart, Action::Stop] {
             let (dir, paths, _) = fixture()?;
-            let plan = crate::service::definition::windows_plan(
+            let plan = crate::system::shared::services::artifacts::windows_plan(
                 dir.path().join("daemon.exe"),
                 dir.path().join("task.xml"),
                 "S-1-5-21-123",
@@ -493,7 +396,7 @@ mod tests {
     #[tokio::test]
     async fn windows_failed_stop_never_submits_restart() -> Result<()> {
         let (dir, paths, _) = fixture()?;
-        let plan = crate::service::definition::windows_plan(
+        let plan = crate::system::shared::services::artifacts::windows_plan(
             dir.path().join("daemon.exe"),
             dir.path().join("task.xml"),
             "S-1-5-21-123",

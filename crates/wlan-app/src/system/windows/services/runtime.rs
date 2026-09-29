@@ -16,7 +16,13 @@ pub async fn stop_signal() {
     STOP.get_or_init(Default::default).notified().await;
 }
 
-pub fn dispatch() -> std::process::ExitCode {
+type Entry =
+    fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = std::process::ExitCode> + Send>>;
+static ENTRY: OnceLock<Entry> = OnceLock::new();
+pub fn dispatch(entry: Entry) -> std::process::ExitCode {
+    if ENTRY.set(entry).is_err() {
+        return std::process::ExitCode::FAILURE;
+    }
     let mut name: Vec<u16> = "cxxy-wlanlogin".encode_utf16().chain(Some(0)).collect();
     let table = [
         SERVICE_TABLE_ENTRYW {
@@ -56,7 +62,10 @@ unsafe extern "system" fn service_main(_: u32, _: *mut windows_sys::core::PWSTR)
     let result = std::panic::catch_unwind(|| {
         let runtime = tokio::runtime::Runtime::new()?;
         report(SERVICE_RUNNING, 0);
-        let result = runtime.block_on(crate::app::run_service());
+        let result = runtime
+            .block_on(ENTRY.get().ok_or_else(|| {
+                crate::infra::error::error!("Service entry is not initialized")
+            })?());
         runtime.shutdown_timeout(crate::infra::shutdown::RUNTIME_GRACE);
         Ok::<_, crate::infra::error::Error>(result)
     });
