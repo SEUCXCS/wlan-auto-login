@@ -94,7 +94,9 @@ pub(crate) fn decode(text: &str) -> Result<Credentials> {
     })
 }
 
+#[cfg(not(target_os = "macos"))]
 use crate::infra::identity::{APP_ID as USER_SERVICE, CREDENTIAL_ENTRY as USER_ENTRY};
+#[cfg(not(target_os = "macos"))]
 pub async fn load_user() -> Result<Option<Credentials>> {
     tokio::task::spawn_blocking(|| {
         let entry = keyring::Entry::new(USER_SERVICE, USER_ENTRY)
@@ -111,6 +113,7 @@ pub async fn load_user() -> Result<Option<Credentials>> {
     .await
     .context(Message::CredentialReadTaskFailed)?
 }
+#[cfg(not(target_os = "macos"))]
 pub async fn save_user(credentials: Credentials) -> Result<()> {
     tokio::task::spawn_blocking(move || {
         let text = encode(&credentials)?;

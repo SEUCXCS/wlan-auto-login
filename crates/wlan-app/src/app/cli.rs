@@ -34,6 +34,9 @@ pub struct Cli {
 pub enum Command {
     #[cfg(target_os = "macos")]
     #[command(hide = true)]
+    MacosCredentialCheck,
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
     MacosHost {
         #[arg(long)]
         system_helper: bool,
@@ -137,6 +140,16 @@ pub(super) async fn dispatch(
         paths.scope.require_access()?;
     }
     match args.command {
+        #[cfg(target_os = "macos")]
+        Command::MacosCredentialCheck => {
+            let status =
+                crate::system::macos::credentials::access::status(paths.scope, false).await?;
+            crate::infra::error::ensure!(
+                status == crate::system::define::permission::PermissionStatus::Granted,
+                "Installed application cannot read credentials without interaction: {status:?}"
+            );
+            Ok(())
+        }
         #[cfg(target_os = "macos")]
         Command::MacosHost { system_helper } => {
             use crate::system::macos::host::{Host, Role};

@@ -80,7 +80,7 @@ struct Response {
 pub fn configure(scope: Scope) {
     SYSTEM.store(scope == Scope::System, Ordering::Release);
 }
-fn scope() -> Scope {
+pub(super) fn scope() -> Scope {
     if SYSTEM.load(Ordering::Acquire) {
         Scope::System
     } else {

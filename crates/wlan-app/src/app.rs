@@ -51,6 +51,13 @@ async fn entry(args: cli::Cli) -> std::process::ExitCode {
     #[cfg(target_os = "macos")]
     if let Ok(paths) = &paths {
         crate::system::macos::host::configure(paths.scope);
+        use std::io::IsTerminal;
+        let interactive = match &args.command {
+            cli::Command::Login(args) | cli::Command::Install(args) => !args.non_interactive,
+            cli::Command::Logout { .. } | cli::Command::Uninstall { .. } => true,
+            _ => false,
+        } && std::io::stderr().is_terminal();
+        crate::system::macos::credentials::access::configure_interaction(interactive);
     }
     let log = if matches!(
         args.command,

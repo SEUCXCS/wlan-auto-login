@@ -21,7 +21,7 @@ impl PermissionProvider for Permissions {
                 .await
                 .map(location_status);
         }
-        Ok(crate::system::define::permission::PermissionStatus::NotImplemented)
+        super::credentials::access::status(super::host::scope(), false).await
     }
 
     #[cfg(target_os = "macos")]
@@ -38,7 +38,9 @@ impl PermissionProvider for Permissions {
                 .map(location_status)
                 .map(PermissionRequestOutcome::Completed);
         }
-        Ok(PermissionRequestOutcome::NotImplemented)
+        super::credentials::access::status(super::host::scope(), true)
+            .await
+            .map(PermissionRequestOutcome::Completed)
     }
 }
 
