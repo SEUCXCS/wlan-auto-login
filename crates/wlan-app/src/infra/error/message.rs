@@ -392,6 +392,8 @@ pub enum Message {
     OperationFailed,
     #[error("Failed to create async runtime")]
     RuntimeCreationFailed,
+    #[error("Unknown permission: {id}")]
+    UnknownPermission { id: String },
     #[error("{0}")]
     Detail(String),
 }

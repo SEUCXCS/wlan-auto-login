@@ -2,6 +2,7 @@ mod app;
 mod credentials;
 mod infra;
 mod service;
+mod system;
 mod tui;
 mod wifi;
 
