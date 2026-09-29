@@ -4,14 +4,14 @@ use crate::infra::error::{Context, Result};
 use crate::{
     infra::control,
     infra::paths::Paths,
-    service,
     system::credentials,
+    system::shared::services as service,
     system::wifi::{WifiConnection, WifiProbe},
 };
 use cxxy_wlanlogin_lib::Client;
 use std::future::Future;
 
-pub(super) async fn run(client: &Client, paths: &Paths, forget: bool) -> Result<()> {
+pub(crate) async fn run(client: &Client, paths: &Paths, forget: bool) -> Result<()> {
     if !forget {
         service::ensure_no_conflicting_install(paths)?;
     }
@@ -93,7 +93,7 @@ async fn run_with(
         crate::infra::error::ensure!(
             errors.is_empty(),
             Message::FullLogoutIncompleteAutomaticLoginRemainsPaused {
-                value0: (errors.join("；")).to_string()
+                value0: errors.join("; ")
             }
         );
         tracing::info!(

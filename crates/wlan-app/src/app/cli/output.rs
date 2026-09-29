@@ -1,91 +1,67 @@
-//! Report installation, running state and installed binary version.
-use super::{
-    command::{Invocation, Runner, SystemRunner},
-    definition::{Artifacts, Plan, plan},
-};
+//! Terminal rendering for controller results.
+use crate::app::controller::login::LoginResult;
 use crate::infra::error::Message;
-use crate::infra::error::{Context, Result};
-use crate::infra::paths::Paths;
-use crate::system::define::services::ServiceManager;
-
-pub async fn status(paths: &Paths, discover: bool) -> Result<()> {
-    let mut plans = vec![plan(paths)?];
-    if discover && paths.scope == crate::infra::scope::Scope::User {
-        plans.push(plan(&Paths::new(crate::infra::scope::Scope::System)?)?);
+use cxxy_wlanlogin_lib::LoginOutcome;
+pub fn login(result: &LoginResult) {
+    if let Some(warning) = &result.warning {
+        tracing::warn!("{warning}");
     }
-    let mut reports = Vec::new();
-    let mut errors = Vec::new();
-    for plan in plans {
-        if !Artifacts::read(&plan)?.any() {
-            continue;
+    match result.outcome {
+        Some(LoginOutcome::AlreadyOnline) => tracing::info!(
+            credentials_saved = result.credentials_saved,
+            "{}",
+            Message::AlreadyOnline
+        ),
+        Some(LoginOutcome::Authenticated) => {
+            tracing::info!(line = %result.line, credentials_saved = result.credentials_saved, "{}", Message::Authenticated)
         }
-        let (report, error) = report(&plan, &SystemRunner).await?;
-        reports.push(report);
-        if let Some(error) = error {
-            errors.push(format!("{error:#}"));
-        }
+        None => tracing::info!("{}", Message::CredentialsSavedOffline),
     }
-    println!(
-        "{}",
-        if reports.is_empty() {
-            "🔴 安装状态：未安装".into()
-        } else {
-            reports.join("\n\n")
-        }
-    );
-    crate::infra::error::ensure!(
-        errors.is_empty(),
-        Message::FailedToDetermineServiceStatus {
-            value0: (errors.join("；")).to_string()
-        }
-    );
-    Ok(())
 }
 
-async fn report(
-    plan: &Plan,
-    runner: &impl Runner,
-) -> Result<(String, Option<crate::infra::error::Error>)> {
-    let files = Artifacts::read(plan)?;
-    if !files.any() {
-        return Ok(("🔴 安装状态：未安装".into(), None));
-    }
-    // A fresh checkout is not an installation and needs no running service manager.
-    let state = if files.any() {
-        Some(plan.manager.query(runner).await)
+use crate::app::controller::daemon::status::InstallationReport;
+pub fn status(reports: &[InstallationReport]) -> String {
+    if reports.is_empty() {
+        "🔴 安装状态：未安装".into()
     } else {
-        None
-    };
-    let registration_missing = matches!(&state, Some(Ok(state)) if !plan.manager.installed(state));
-    let installed = if !files.complete() || registration_missing {
+        reports
+            .iter()
+            .map(format_report)
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+}
+fn format_report(report: &InstallationReport) -> String {
+    if !report.files.any() {
+        return "🔴 安装状态：未安装".into();
+    }
+    let installed = if !report.files.complete() || report.registration_missing {
         "🔴 安装状态：安装不完整，请重新执行 install"
-    } else if matches!(&state, Some(Err(_))) {
+    } else if matches!(&report.state, Some(Err(_))) {
         "🔴 安装状态：无法确认"
     } else {
         "🟢 安装状态：已安装"
     };
     let mut lines = vec![
         installed.into(),
-        format!("安装范围：{}", plan.scope.label()),
-        format!("服务管理器：{}", plan.manager.label()),
-        format!("服务名称：{}", plan.manager.name()),
+        format!("安装范围：{}", report.scope.label()),
+        format!("服务管理器：{}", report.manager_label),
+        format!("服务名称：{}", report.service_name),
         format!("当前 CLI 版本：{}", env!("CARGO_PKG_VERSION")),
     ];
-    if files.executable {
-        lines.push(format!("安装位置：{}", plan.executable.display()));
+    if report.files.executable {
+        lines.push(format!("安装位置：{}", report.executable.display()));
     }
-    if files.definition {
-        lines.push(format!("服务文件：{}", plan.definition.display()));
+    if report.files.definition {
+        lines.push(format!("服务文件：{}", report.definition.display()));
     }
-    if files.complete() {
-        let version = installed_version(plan, runner).await;
+    if let Some(version) = &report.version {
         lines.push(match version {
             Ok(version) => format!("已安装版本：{version}"),
             Err(error) => format!("已安装版本：未知（{error:#}）"),
         });
     }
-    let mut query_error = None;
-    match state {
+    match &report.state {
         Some(Ok(state)) => {
             lines.push(format!(
                 "系统注册/当前会话加载：{}",
@@ -111,41 +87,31 @@ async fn report(
                     if enabled { "已启用" } else { "未启用" }
                 ));
             }
-            if let Some(detail) = state.detail {
-                lines.push(detail);
+            if let Some(detail) = &state.detail {
+                lines.push(detail.clone());
             }
         }
         Some(Err(error)) => {
             lines.push(format!("运行状态：未知（{error:#}）"));
-            query_error = Some(error);
         }
         None => lines.push("运行状态：未安装，未查询系统服务".into()),
     }
-    Ok((lines.join("\n"), query_error))
+    lines.join("\n")
 }
-
-async fn installed_version(plan: &Plan, runner: &impl Runner) -> Result<String> {
-    // Only --version is executed, so this never enters the daemon/login code path.
-    let command = Invocation::new(&plan.executable, ["--version"]);
-    let result = runner.output(&command).await?;
-    result.check(&command)?;
-    let version = result
-        .stdout
-        .trim()
-        .strip_prefix(concat!(env!("CARGO_PKG_NAME"), " "))
-        .filter(|value| {
-            !value.is_empty()
-                && value
-                    .chars()
-                    .all(|ch| ch.is_ascii_alphanumeric() || ".-+".contains(ch))
-        })
-        .context(Message::InstalledExecutableReturnedAnUnrecognizedVersion)?;
-    Ok(version.into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::controller::daemon::status::inspect;
+    use crate::infra::{
+        command::Runner,
+        error::{Error, Result},
+    };
+    use crate::system::define::services::Plan;
+    async fn report(plan: &Plan, runner: &impl Runner) -> Result<(String, Option<Error>)> {
+        let report = inspect(plan, runner).await?;
+        let text = format_report(&report);
+        Ok((text, report.state.and_then(Result::err)))
+    }
     use crate::infra::command::tests::{FakeRunner, RUNNING};
     use std::fs;
 

@@ -1,14 +1,25 @@
-use super::cli::LoginArgs;
-use crate::infra::error::Message;
-use crate::infra::error::{Context, Result, bail};
-use crate::{
-    infra::{config::Preferences, paths::Paths},
-    system::credentials,
-    system::wifi,
-    tui,
+//! Login preparation and execution without terminal or CLI dependencies.
+use crate::infra::{
+    config::Preferences,
+    control,
+    error::{Context, Message, Result},
+    paths::Paths,
+};
+use crate::system::{
+    credentials::{CredentialMode, Store},
+    shared::services,
+    wifi::{self, WifiConnection},
 };
 use cxxy_wlanlogin_lib::{Client, Credentials, Line, LoginOutcome};
-use std::io::{self, IsTerminal};
+
+#[derive(Default)]
+pub struct LoginRequest {
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub line: Option<Line>,
+    pub remember_me: bool,
+    pub credential_store: Option<CredentialMode>,
+}
 
 pub struct Form {
     pub credentials: Credentials,
@@ -16,8 +27,25 @@ pub struct Form {
     pub remember: bool,
 }
 
+pub struct PreparedLogin {
+    pub form: Form,
+    pub warning: Option<String>,
+    pub save_only: bool,
+}
+
+pub struct LoginResult {
+    pub outcome: Option<LoginOutcome>,
+    pub line: Line,
+    pub credentials_saved: bool,
+    pub warning: Option<String>,
+}
+
+pub fn validate_scope(paths: &Paths) -> Result<()> {
+    services::ensure_no_conflicting_install(paths)
+}
+
 pub fn resolve(
-    args: &mut LoginArgs,
+    args: &mut LoginRequest,
     saved: Option<&Credentials>,
     default_line: Line,
     force_remember: bool,
@@ -42,155 +70,97 @@ pub fn resolve(
         remember: force_remember || args.remember_me,
     }
 }
-
-pub async fn run(
-    client: &Client,
+pub async fn prepare(
     paths: &Paths,
-    args: LoginArgs,
+    mut request: LoginRequest,
     force_remember: bool,
-) -> Result<()> {
-    let wifi = wifi::WifiProbe::new().await;
-    run_with_wifi(client, paths, args, force_remember, &wifi).await
-}
-
-pub async fn run_with_wifi(
-    client: &Client,
-    paths: &Paths,
-    args: LoginArgs,
-    force_remember: bool,
-    wifi: &impl wifi::WifiConnection,
-) -> Result<()> {
-    let store = credentials::ScopedStore::new(paths, args.credential_store)?;
-    run_with_store(client, paths, args, force_remember, wifi, &store).await
-}
-
-async fn run_with_store(
-    client: &Client,
-    paths: &Paths,
-    mut args: LoginArgs,
-    force_remember: bool,
-    wifi: &impl wifi::WifiConnection,
-    store: &impl credentials::Store,
-) -> Result<()> {
-    let initial_wifi = wifi::wifi_state(wifi).await;
-    let save_only = !initial_wifi.is_target();
-    if args.password_stdin {
-        let mut password = String::new();
-        io::stdin()
-            .read_line(&mut password)
-            .context(Message::FailedToReadPasswordFromStdin)?;
-        if password.ends_with('\n') {
-            password.pop();
-            if password.ends_with('\r') {
-                password.pop();
-            }
-        }
-        args.password = Some(password);
-    }
-    let mut warning = initial_wifi.notice();
-    let saved = if args.username.is_none() || args.password.is_none() {
+    wifi: &impl WifiConnection,
+    store: &impl Store,
+) -> Result<PreparedLogin> {
+    let state = wifi::wifi_state(wifi).await;
+    let save_only = !state.is_target();
+    let mut warning = state.notice();
+    let saved = if request.username.is_none() || request.password.is_none() {
         match store.load().await {
             Ok(value) => value,
-            Err(e) => {
-                warning = Some(e.to_string());
+            Err(error) => {
+                warning = Some(error.to_string());
                 None
             }
         }
     } else {
         None
     };
-    let prefs = Preferences::load(paths)?;
-    let mut form = resolve(
-        &mut args,
+    let preferences = Preferences::load(paths)?;
+    let form = resolve(
+        &mut request,
         saved.as_ref(),
-        prefs.line,
+        preferences.line,
         force_remember || save_only,
     );
-    let interactive = wants_tui(&args, &form);
-    if interactive
-        && (args.non_interactive || !io::stdin().is_terminal() || !io::stdout().is_terminal())
-    {
-        bail!(Message::CredentialsAreMissingProvideArgumentsCXXYWLAN {
-            value0: (warning.map(|s| format!("；{s}")).unwrap_or_default()).to_string()
-        });
-    }
-    loop {
-        if interactive {
-            let remember_reason =
-                if force_remember && paths.scope == crate::infra::scope::Scope::System {
-                    Some("安装系统服务必须保存凭据，供本机开机自动登录使用。")
-                } else if force_remember {
-                    Some("安装服务必须保存账号和密码。")
-                } else if save_only {
-                    Some("离线配置仅保存账号和密码。")
-                } else {
-                    None
-                };
-            form = tui::prompt(form, remember_reason, warning.take())?;
-        }
-        let _operation = crate::infra::control::operation_lock(paths).await?;
-        match submit(client, &form, wifi).await {
-            Ok(outcome) => {
-                let authenticated = outcome.is_some();
-                let remember = form.remember || !authenticated;
-                if remember {
-                    store
-                        .save(form.credentials.clone())
-                        .await
-                        .context(if authenticated {
-                            "Authenticated but failed to save credentials; service installation cannot continue"
-                        } else {
-                            "Failed to save offline credentials; service installation cannot continue"
-                        })?;
-                }
-                Preferences { line: form.line }.save(paths)?;
-                let mut state = crate::infra::control::State::load(paths)?;
-                state.resume();
-                state.save(paths)?;
-                crate::infra::control::wake(paths).await;
-                if outcome == Some(LoginOutcome::AlreadyOnline) {
-                    tracing::info!(credentials_saved = remember, "{}", Message::AlreadyOnline);
-                } else if authenticated {
-                    tracing::info!(line = %form.line, credentials_saved = remember, "{}", Message::Authenticated);
-                } else {
-                    tracing::info!("{}", Message::CredentialsSavedOffline);
-                }
-                return Ok(());
-            }
-            Err(e) if interactive => {
-                warning = Some(format!("{e:#}"));
-            }
-            Err(e) => return Err(e),
-        }
-    }
+    Ok(PreparedLogin {
+        form,
+        warning,
+        save_only,
+    })
 }
 
-async fn submit(
+pub async fn execute(
     client: &Client,
+    paths: &Paths,
     form: &Form,
-    wifi: &impl wifi::WifiConnection,
-) -> Result<Option<LoginOutcome>> {
-    // Credential entry, keychain access and the operation lock may all take time.
-    // Re-read the SSID before Client::login sends even its initial status request.
+    wifi: &impl WifiConnection,
+    store: &impl Store,
+) -> Result<LoginResult> {
+    let _operation = control::operation_lock(paths).await?;
+    // Credential entry, keychain access and locking can take time; recheck SSID
+    // immediately before even the initial portal status request.
     let state = wifi::wifi_state(wifi).await;
-    if !state.is_target() {
-        if let Some(notice) = state.notice() {
-            tracing::warn!("{notice}");
-        }
-        return Ok(None);
+    let warning = state.notice();
+    let outcome = if state.is_target() {
+        Some(client.login(&form.credentials, form.line).await?)
+    } else {
+        None
+    };
+    let remember = form.remember || outcome.is_none();
+    if remember {
+        store
+            .save(form.credentials.clone())
+            .await
+            .context(if outcome.is_some() {
+                Message::SaveAuthenticatedCredentialsFailed
+            } else {
+                Message::SaveOfflineCredentialsFailed
+            })?;
     }
-    Ok(Some(client.login(&form.credentials, form.line).await?))
-}
-
-fn wants_tui(args: &LoginArgs, form: &Form) -> bool {
-    args.interactive
-        || form.credentials.username.trim().is_empty()
-        || form.credentials.password.is_empty()
+    Preferences { line: form.line }.save(paths)?;
+    let mut state = control::State::load(paths)?;
+    state.resume();
+    state.save(paths)?;
+    control::wake(paths).await;
+    Ok(LoginResult {
+        outcome,
+        line: form.line,
+        credentials_saved: remember,
+        warning,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::error::bail;
+    async fn run_with_store(
+        client: &Client,
+        paths: &Paths,
+        request: LoginRequest,
+        force_remember: bool,
+        wifi: &impl WifiConnection,
+        store: &impl Store,
+    ) -> Result<LoginResult> {
+        let prepared = prepare(paths, request, force_remember, wifi, store).await?;
+        execute(client, paths, &prepared.form, wifi, store).await
+    }
     use crate::system::wifi::WifiConnection;
     use cxxy_wlanlogin_lib::PortalConfig;
     use std::{cell::RefCell, collections::VecDeque, time::Duration};
@@ -223,7 +193,7 @@ mod tests {
         fail_save: bool,
     }
 
-    impl credentials::Store for TestStore {
+    impl Store for TestStore {
         async fn load(&self) -> Result<Option<Credentials>> {
             Ok(self.saved.borrow().clone())
         }
@@ -237,12 +207,11 @@ mod tests {
         }
     }
 
-    fn explicit_args() -> LoginArgs {
-        LoginArgs {
+    fn explicit_args() -> LoginRequest {
+        LoginRequest {
             username: Some("student".into()),
             password: Some("test-secret".into()),
             line: Some(Line::Free2),
-            non_interactive: true,
             ..Default::default()
         }
     }
@@ -269,15 +238,20 @@ mod tests {
                 username: "student".into(),
                 password: "test-secret".into(),
             });
-            LoginArgs {
+            LoginRequest {
                 line: Some(Line::Free2),
-                non_interactive: true,
                 ..Default::default()
             }
         } else {
             explicit_args()
         };
-        run_with_store(&client, &paths, args, install, &wifi, &store).await?;
+        let result = run_with_store(&client, &paths, args, install, &wifi, &store).await?;
+        assert!(result.outcome.is_none());
+        assert!(result.credentials_saved);
+        assert!(
+            result.warning.is_some(),
+            "callers must receive the offline reason"
+        );
         {
             let saved = store.saved.borrow();
             let saved = saved
@@ -392,7 +366,7 @@ mod tests {
                 Ok(Some("student-session".into())),
                 Ok(Some("student-session".into())),
             ]);
-            let args = LoginArgs {
+            let args = LoginRequest {
                 remember_me: remember,
                 ..explicit_args()
             };
@@ -432,7 +406,7 @@ mod tests {
                 ..Default::default()
             }
             .save(&paths)?;
-            let args = LoginArgs {
+            let args = LoginRequest {
                 remember_me: remember,
                 ..explicit_args()
             };
@@ -457,24 +431,12 @@ mod tests {
     }
 
     #[test]
-    fn saved_credentials_skip_tui_unless_requested() {
-        let saved = Credentials {
-            username: "student".into(),
-            password: "secret".into(),
-        };
-        let mut args = LoginArgs::default();
-        let form = resolve(&mut args, Some(&saved), Line::Free1, false);
-        assert!(!wants_tui(&args, &form));
-        args.interactive = true;
-        assert!(wants_tui(&args, &form));
-    }
-    #[test]
     fn changing_account_does_not_reuse_another_accounts_password() {
         let saved = Credentials {
             username: "old".into(),
             password: "old-secret".into(),
         };
-        let mut args = LoginArgs {
+        let mut args = LoginRequest {
             username: Some("new".into()),
             ..Default::default()
         };
@@ -485,7 +447,7 @@ mod tests {
     }
     #[test]
     fn install_forces_remember_even_without_the_flag() {
-        let form = resolve(&mut LoginArgs::default(), None, Line::Free1, true);
+        let form = resolve(&mut LoginRequest::default(), None, Line::Free1, true);
         assert!(form.remember);
     }
     #[test]
@@ -494,7 +456,7 @@ mod tests {
             username: "old".into(),
             password: "old-secret".into(),
         };
-        let mut args = LoginArgs {
+        let mut args = LoginRequest {
             username: Some("new".into()),
             password: Some("new-secret".into()),
             line: Some(Line::Campus),

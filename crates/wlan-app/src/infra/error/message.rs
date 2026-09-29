@@ -272,10 +272,6 @@ pub enum Message {
     ServiceIsOnlySupportedByWindowsService,
     #[error("Credentials saved without authentication; credentials have not been verified")]
     CredentialsSavedOffline,
-    #[error(
-        "Credentials are missing; provide arguments, CXXY_WLAN_USERNAME/CXXY_WLAN_PASSWORD, or an interactive terminal{value0}"
-    )]
-    CredentialsAreMissingProvideArgumentsCXXYWLAN { value0: String },
     #[error("Failed to read Wi-Fi SSID; check location permission: {code}")]
     FailedToReadWiFiSSIDCheck { code: String },
     #[error("Failed to enumerate Wi-Fi interfaces: {code}")]
@@ -394,6 +390,20 @@ pub enum Message {
     RuntimeCreationFailed,
     #[error("Unknown permission: {id}")]
     UnknownPermission { id: String },
+    #[error(
+        "Credentials are missing; provide arguments, CXXY_WLAN_USERNAME/CXXY_WLAN_PASSWORD, or an interactive terminal"
+    )]
+    CredentialsRequired,
+    #[error("Authenticated but failed to save credentials; service installation cannot continue")]
+    SaveAuthenticatedCredentialsFailed,
+    #[error("Failed to save offline credentials; service installation cannot continue")]
+    SaveOfflineCredentialsFailed,
+    #[error("Service log output pipe is unavailable")]
+    LogOutputUnavailable,
+    #[error("Service entry is not initialized")]
+    ServiceEntryUnavailable,
+    #[error("Not connected to Student_CX; credentials will be saved without authentication")]
+    NotConnectedToTargetWifi,
     #[error("{0}")]
     Detail(String),
 }

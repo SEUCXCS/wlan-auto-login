@@ -12,7 +12,7 @@ pub(crate) use crate::system::macos::services::definition::{macos_plan, macos_sy
 pub(crate) use crate::system::native::services::definition::plan;
 #[cfg(test)]
 pub(crate) use crate::system::windows::services::definition::{windows_plan, windows_system_plan};
-#[cfg(unix)]
+#[cfg(any(unix, test))]
 use std::path::PathBuf;
 use std::{fs, path::Path};
 pub(crate) fn ensure_no_conflicting_install(paths: &Paths) -> Result<()> {

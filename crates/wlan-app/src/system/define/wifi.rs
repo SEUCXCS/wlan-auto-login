@@ -26,10 +26,7 @@ impl WifiState {
     pub fn notice(&self) -> Option<String> {
         match self {
             Self::Target => None,
-            Self::Other => Some(
-                "Not connected to Student_CX; credentials will be saved without authentication"
-                    .into(),
-            ),
+            Self::Other => Some(Message::NotConnectedToTargetWifi.to_string()),
             Self::Unavailable(reason) => Some(
                 (Message::WiFiIdentificationUnavailableReasonCredentialsWill {
                     reason: (reason).to_string(),

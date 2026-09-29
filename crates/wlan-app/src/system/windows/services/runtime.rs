@@ -12,6 +12,13 @@ use windows_sys::Win32::System::Services::*;
 static HANDLE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(ptr::null_mut());
 static STOP: OnceLock<tokio::sync::Notify> = OnceLock::new();
 
+pub fn detach_console() {
+    // SAFETY: detaches only this process from its console.
+    unsafe {
+        windows_sys::Win32::System::Console::FreeConsole();
+    }
+}
+
 pub async fn stop_signal() {
     STOP.get_or_init(Default::default).notified().await;
 }
@@ -64,7 +71,7 @@ unsafe extern "system" fn service_main(_: u32, _: *mut windows_sys::core::PWSTR)
         report(SERVICE_RUNNING, 0);
         let result = runtime
             .block_on(ENTRY.get().ok_or_else(|| {
-                crate::infra::error::error!("Service entry is not initialized")
+                crate::infra::error::error!(Message::ServiceEntryUnavailable)
             })?());
         runtime.shutdown_timeout(crate::infra::shutdown::RUNTIME_GRACE);
         Ok::<_, crate::infra::error::Error>(result)

@@ -116,10 +116,15 @@ fn tail_start(file: &mut File, end: u64, lines: u32) -> Result<u64> {
     Ok(0)
 }
 
-pub(crate) async fn file_logs(path: &Path, options: LogOptions) -> Result<()> {
+pub(crate) async fn file_logs(
+    path: &Path,
+    options: LogOptions,
+    output: &mut impl Write,
+    stop: impl std::future::Future<Output = std::io::Result<()>>,
+) -> Result<()> {
+    tokio::pin!(stop);
     let mut cursor = Cursor::default();
-    let mut output = std::io::stdout();
-    match cursor.read(path, options, &mut output)? {
+    match cursor.read(path, options, output)? {
         None => tracing::info!("{}", Message::ServiceLogHasNotBeenCreated),
         Some(0) if options.lines > 0 => tracing::info!("{}", Message::NoServiceLogEntriesAvailable),
         _ => {}
@@ -127,9 +132,9 @@ pub(crate) async fn file_logs(path: &Path, options: LogOptions) -> Result<()> {
     if options.follow {
         loop {
             tokio::select! {
-                signal = tokio::signal::ctrl_c() => { signal.context(Message::FailedToRegisterCtrlCListener)?; break; },
+                signal = &mut stop => { signal.context(Message::FailedToRegisterCtrlCListener)?; break; },
                 _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
-                    cursor.read(path, options, &mut output)?;
+                    cursor.read(path, options, output)?;
                 }
             }
         }

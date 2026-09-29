@@ -7,16 +7,20 @@ use crate::infra::command::{Invocation, Runner, SystemRunner};
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result, ensure};
 use crate::system::define::services::ServiceManager;
-use crate::{infra::cleanup, infra::control, infra::paths::Paths, system::credentials};
+use crate::{infra::cleanup, infra::control, infra::paths::Paths};
 use std::{future::Future, time::Duration};
 
-pub async fn uninstall(paths: &Paths, purge: bool) -> Result<()> {
+pub async fn uninstall(
+    paths: &Paths,
+    purge: bool,
+    delete_credentials: impl Future<Output = Result<()>>,
+) -> Result<()> {
     uninstall_plan(
         paths,
         &plan(paths)?,
         purge,
         &SystemRunner,
-        credentials::delete(paths),
+        delete_credentials,
     )
     .await?;
     if purge {

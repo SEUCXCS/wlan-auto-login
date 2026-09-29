@@ -1,9 +1,9 @@
 #[cfg(target_os = "linux")]
-use super::command::SystemRunner;
+use crate::infra::command::SystemRunner;
 
-use super::{
-    definition::{Artifacts, Plan, plan},
-    manager::Manager,
+use crate::system::shared::services::{
+    Manager,
+    artifacts::{Artifacts, Plan, plan},
 };
 
 use crate::infra::error::Message;
@@ -11,7 +11,7 @@ use crate::infra::error::{Result, ensure};
 pub(crate) use crate::infra::file_log::LogOptions;
 use crate::infra::file_log::file_logs;
 use crate::infra::paths::Paths;
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 use crate::system::linux::services::logs::{follow_journal, journal_snapshot};
 
 use crate::system::define::services::LogSource as Source;
@@ -40,18 +40,19 @@ fn source(paths: &Paths, plan: &Plan, options: LogOptions) -> Result<Source> {
     }
 }
 
-pub async fn logs(paths: &Paths, options: LogOptions) -> Result<()> {
+pub async fn run(
+    paths: &Paths,
+    options: LogOptions,
+    output: &mut impl std::io::Write,
+    stop: impl std::future::Future<Output = std::io::Result<()>>,
+) -> Result<()> {
     let source = source(paths, &plan(paths)?, options)?;
     let result = match source {
         #[cfg(target_os = "linux")]
-        Source::Journal(command) if options.follow => {
-            follow_journal(&command, tokio::signal::ctrl_c()).await
-        }
+        Source::Journal(command) if options.follow => follow_journal(&command, output, stop).await,
         #[cfg(target_os = "linux")]
-        Source::Journal(command) => {
-            journal_snapshot(&command, &SystemRunner, &mut std::io::stdout()).await
-        }
-        Source::File(path) => file_logs(&path, options).await,
+        Source::Journal(command) => journal_snapshot(&command, &SystemRunner, output).await,
+        Source::File(path) => file_logs(&path, options, output, stop).await,
         // Other platform implementations are compiled for unit tests only.
         #[cfg(all(test, not(target_os = "linux")))]
         _ => unreachable!("the native service plan selects the native log source"),
@@ -72,9 +73,8 @@ pub async fn logs(paths: &Paths, options: LogOptions) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::command::tests::FakeRunner;
+    use crate::infra::error::Context;
     use crate::infra::scope::Scope;
-    use crate::infra::{command::Invocation, error::Context};
     use std::fs;
 
     #[test]
@@ -185,44 +185,6 @@ mod tests {
         );
         assert!(!paths.config.exists());
         assert!(!plan.executable.exists());
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg(target_os = "linux")]
-    async fn journal_follow_cancels_the_child_and_reports_failures() -> Result<()> {
-        let command = Invocation::new("sleep", ["30"]);
-        tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            follow_journal(&command, std::future::ready(Ok(()))),
-        )
-        .await??;
-        let command = Invocation::new("false", std::iter::empty::<&str>());
-        assert!(
-            follow_journal(&command, std::future::pending())
-                .await
-                .is_err()
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn journal_keeps_original_messages_and_reports_access_failures() -> Result<()> {
-        let command = Invocation::new("journalctl", ["--user"]);
-        let runner = FakeRunner::new([(true, "[INFO 2026-09-22 10:30:00] 日志\n")]);
-        let mut output = Vec::new();
-        journal_snapshot(&command, &runner, &mut output).await?;
-        assert_eq!(output, "[INFO 2026-09-22 10:30:00] 日志\n".as_bytes());
-        let runner = FakeRunner::new([(false, "access denied")]);
-        assert!(
-            journal_snapshot(&command, &runner, &mut Vec::new())
-                .await
-                .is_err()
-        );
-        let runner = FakeRunner::new([(true, "")]);
-        let mut output = Vec::new();
-        journal_snapshot(&command, &runner, &mut output).await?;
-        assert!(output.is_empty());
         Ok(())
     }
 }

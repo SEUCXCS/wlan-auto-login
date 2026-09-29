@@ -130,7 +130,7 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
         if !rollback_errors.is_empty() {
             return Err(error).context(
                 (Message::InstallationFailedAndRollbackWasIncomplete {
-                    value0: (rollback_errors.join("；")).to_string(),
+                    value0: rollback_errors.join("; "),
                 })
                 .to_string(),
             );
@@ -220,6 +220,7 @@ impl Backup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::infra::command::Invocation;
     #[cfg(unix)]
     use crate::system::define::services::{LABEL, Manager};

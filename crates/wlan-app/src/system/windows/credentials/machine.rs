@@ -32,7 +32,7 @@ pub async fn delete(paths: &Paths) -> Result<()> {
         crate::infra::error::ensure!(
             errors.is_empty(),
             Message::SystemCredentialDeletionFailed {
-                value0: (errors.join("；")).to_string()
+                value0: errors.join("; ")
             }
         );
         Ok(())

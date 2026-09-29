@@ -90,7 +90,6 @@ pub async fn until_stopped(
         biased;
         result = stop => {
             result?;
-            tracing::info!("{}", Message::DaemonStopped);
             Ok(())
         },
         result = work => result,

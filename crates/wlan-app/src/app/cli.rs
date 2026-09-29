@@ -1,5 +1,21 @@
+mod login;
+mod output;
+use crate::system::define::credentials::CredentialMode;
 use clap::{Args, Parser, Subcommand};
 use cxxy_wlanlogin_lib::Line;
+
+impl clap::ValueEnum for CredentialMode {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Native, Self::ProtectedFile]
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        Some(clap::builder::PossibleValue::new(match self {
+            Self::Native => "native",
+            Self::ProtectedFile => "protected-file",
+        }))
+    }
+}
 
 #[derive(Parser)]
 #[command(version, about = "Student_CX 校园网登录工具")]
@@ -97,6 +113,60 @@ pub struct LoginArgs {
     /// 缺少凭据时直接报错，不打开 TUI
     #[arg(long)]
     pub non_interactive: bool,
+}
+
+pub(super) async fn dispatch(
+    args: Cli,
+    context: &super::context::Context,
+) -> crate::infra::error::Result<()> {
+    use super::controller;
+    let paths = &context.paths;
+    if !matches!(
+        args.command,
+        Command::Daemon {
+            command: Some(DaemonCommand::Status | DaemonCommand::Logs(_)),
+            ..
+        }
+    ) {
+        paths.scope.require_access()?;
+    }
+    match args.command {
+        Command::Login(args) => login::run(context, args, false).await,
+        Command::Logout { forget } => controller::logout::run(&context.client, paths, forget).await,
+        Command::Install(args) => login::run(context, args, true).await,
+        Command::Uninstall { purge } => controller::uninstall::run(paths, purge).await,
+        Command::Daemon {
+            command: None,
+            background,
+            service,
+        } => controller::daemon::run::run(context, background, service).await,
+        Command::Daemon {
+            command: Some(command),
+            ..
+        } => match command {
+            DaemonCommand::Start => controller::daemon::start::run(paths).await,
+            DaemonCommand::Stop => controller::daemon::stop::run(paths).await,
+            DaemonCommand::Restart => controller::daemon::restart::run(paths).await,
+            DaemonCommand::Status => {
+                let reports =
+                    controller::daemon::status::run(paths, !args.user && !args.system).await?;
+                println!("{}", output::status(&reports));
+                controller::daemon::status::check(&reports)
+            }
+            DaemonCommand::Logs(options) => {
+                controller::daemon::logs::run(
+                    paths,
+                    crate::system::define::services::LogOptions {
+                        lines: options.lines,
+                        follow: options.follow,
+                    },
+                    &mut std::io::stdout(),
+                    tokio::signal::ctrl_c(),
+                )
+                .await
+            }
+        },
+    }
 }
 
 #[cfg(test)]
