@@ -1,5 +1,5 @@
-//! Reserved permission contract. No platform authorization API is invoked yet.
-#![allow(dead_code)] // Intentionally reserved for future platform authorization.
+//! Extensible platform permission and credential-access diagnostics.
+#![allow(dead_code)] // Frontends may use descriptors without exposing a permission command.
 use crate::infra::error::{Error, Message, Result};
 use std::{collections::BTreeMap, future::Future};
 
@@ -34,6 +34,9 @@ pub enum PermissionStatus {
     Granted,
     Denied,
     Restricted,
+    Unavailable,
+    Missing,
+    NeedsInteraction,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,7 +83,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn platform_placeholders_never_report_authorization() -> Result<()> {
+    async fn platform_descriptors_are_open_and_unknown_ids_are_rejected() -> Result<()> {
         assert!(
             crate::system::linux::permission::Permissions
                 .permissions()
@@ -100,6 +103,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["macos.location", "macos.keychain"]
         );
+        #[cfg(not(target_os = "macos"))]
         for permission in permissions {
             assert_eq!(
                 mac.status(&permission.id).await?,

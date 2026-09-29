@@ -45,6 +45,7 @@ core-foundation = "0.10"
 dispatch2 = "0.3"
 objc2 = "0.6"
 objc2-core-wlan = "0.3"
+objc2-core-location = { version = "0.3", default-features = false, features = ["std", "CLLocation", "CLLocationManager", "CLLocationManagerDelegate"] }
 objc2-foundation = "0.3"
 objc2-core-foundation = "0.3"
 objc2-system-configuration = "0.3"

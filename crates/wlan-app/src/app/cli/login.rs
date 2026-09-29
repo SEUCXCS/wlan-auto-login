@@ -36,6 +36,16 @@ pub async fn run(context: &Context, mut args: LoginArgs, installing: bool) -> Re
     }
     let interactive_requested = args.interactive;
     let non_interactive = args.non_interactive;
+    #[cfg(target_os = "macos")]
+    {
+        let allow_interaction = !non_interactive && io::stderr().is_terminal();
+        if let Err(error) = crate::system::macos::host::prepare(allow_interaction).await {
+            if installing {
+                return Err(error);
+            }
+            tracing::warn!(error = %error, "Wi-Fi permissions unavailable; offline credential setup remains available");
+        }
+    }
     let request = LoginRequest {
         username: args.username,
         password: args.password,

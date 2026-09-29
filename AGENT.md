@@ -65,7 +65,7 @@ For safe CLI smoke checks, use only `--help`, subcommand `--help`, and `--versio
 
 The dependency direction is `app -> system -> infra`, with direct `app -> infra` access allowed. Never make `system` depend on `app`, including through native service callbacks. Keep Clap and terminal dependencies out of system contracts. Do not change `wlan-api` as a side effect of an application-only refactor.
 
-Permission identifiers are open strings and descriptors have optional descriptions and extensible metadata. Collections may be empty. Linux and Windows currently expose none; macOS declares Location and Keychain. The interface is a placeholder: status and request return `NotImplemented` for declared IDs and an error for unknown IDs. Do not silently implement OS authorization or report placeholder permissions as granted.
+Permission identifiers are open strings and descriptors have optional descriptions and extensible metadata. Collections may be empty. Linux and Windows currently expose none; macOS declares Location and Keychain. Location uses the signed GUI-session host and requests authorization on demand during interactive foreground operations. Background and non-interactive operations never request permission. Keychain diagnostics are not yet implemented. Never report an unavailable capability as granted, and reject unknown identifiers. Host IPC must validate protocol versions, response IDs, frame sizes and the live peer's code identity; system clients also validate the active console user. Never transmit portal credentials through the Wi-Fi host.
 
 ## Errors, logs, and tests
 

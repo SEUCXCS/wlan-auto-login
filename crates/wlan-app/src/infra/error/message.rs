@@ -2,6 +2,26 @@
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)] // Some messages are used only by other compilation targets.
 pub enum Message {
+    #[error(
+        "Location access is unavailable ({state}); allow WLAN Login in System Settings > Privacy & Security > Location Services"
+    )]
+    LocationUnavailable { state: String },
+    #[error(
+        "A signed wlanlogin.app is required; build it with cargo xtask bundle macos and run its Contents/MacOS/wlanlogin executable"
+    )]
+    MacosBundleRequired,
+    #[error(
+        "No active macOS user session; automatic authentication is waiting for a user to log in"
+    )]
+    MacosUserSessionUnavailable,
+    #[error(
+        "Wi-Fi host is unavailable or not ready; retry the operation in the logged-in user's session"
+    )]
+    MacosHostUnavailable,
+    #[error("Wi-Fi host returned an invalid or incompatible response")]
+    MacosHostProtocol,
+    #[error("Wi-Fi host peer identity does not match the selected application and user")]
+    MacosHostIdentity,
     #[error("Login cancelled")]
     LoginCancelled,
     #[error("Installed executable returned an unrecognized version")]

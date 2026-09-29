@@ -21,7 +21,7 @@
 
 Linux 构建需要 C 工具链、`pkg-config` 和 D-Bus 开发库；例如 Debian / Ubuntu 的 `build-essential pkg-config libdbus-1-dev`。运行需要 NetworkManager；用户凭据保存需要 Secret Service 实现（如 GNOME Keyring），系统范围默认需要支持 `systemd-creds` 的 systemd。macOS 构建需要 Xcode Command Line Tools；Windows 构建需要与所选 Rust target 匹配的工具链。
 
-macOS 的 SSID 读取和 Keychain 访问受系统权限限制。项目已预留可扩展的 permission 接口，声明 Location 与 Keychain；当前状态查询和申请均返回 `NotImplemented`，尚未接入实际授权流程。Linux、Windows 的权限描述列表为空，不代表绕过已有的系统访问控制。
+macOS 的 SSID 读取和 Keychain 访问受系统权限限制。交互式登录或安装会按需启动签名 `.app` 中的 Wi-Fi 宿主，并在位置权限尚未决定时自动显示系统授权弹窗，无需单独执行权限命令。拒绝后需在系统设置的“隐私与安全性 → 定位服务”中修改。后台及 `--non-interactive` 不主动请求授权；无法识别 SSID 时保留离线配置能力，不提交门户认证。内部 permission 接口保留可扩展的 Location 与 Keychain 描述，Keychain 诊断适配尚待接入。Linux、Windows 的权限描述列表为空，不代表绕过已有的系统访问控制。
 
 ## 构建
 

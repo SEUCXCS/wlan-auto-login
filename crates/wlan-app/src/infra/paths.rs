@@ -14,6 +14,18 @@ pub fn project_dirs() -> Option<ProjectDirs> {
     ProjectDirs::from_path(app_dir(""))
 }
 
+#[cfg(target_os = "macos")]
+pub fn macos_bundle(scope: crate::infra::scope::Scope) -> Result<PathBuf> {
+    let root = match scope {
+        crate::infra::scope::Scope::User => project_dirs()
+            .context(Message::FailedToDetermineInstallationDirectory)?
+            .data_local_dir()
+            .to_owned(),
+        crate::infra::scope::Scope::System => app_dir("/Library/Application Support"),
+    };
+    Ok(root.join(crate::infra::identity::APP_BUNDLE))
+}
+
 pub fn user_daemon_executable() -> Result<PathBuf> {
     Ok(project_dirs()
         .context(Message::FailedToDetermineInstallationDirectory)?

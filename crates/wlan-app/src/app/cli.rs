@@ -32,6 +32,12 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    MacosHost {
+        #[arg(long)]
+        system_helper: bool,
+    },
     /// 登录校园网；不在 Student_CX 时仅保存凭据，凭据不足时打开交互界面
     Login(LoginArgs),
     /// 注销当前校园网会话
@@ -131,6 +137,18 @@ pub(super) async fn dispatch(
         paths.scope.require_access()?;
     }
     match args.command {
+        #[cfg(target_os = "macos")]
+        Command::MacosHost { system_helper } => {
+            use crate::system::macos::host::{Host, Role};
+            let host = Host::start(if system_helper {
+                Role::System
+            } else {
+                Role::Foreground
+            })
+            .await?;
+            let mut shutdown = crate::infra::shutdown::Shutdown::new()?;
+            crate::infra::shutdown::until_stopped(host.wait(), shutdown.wait()).await
+        }
         Command::Login(args) => login::run(context, args, false).await,
         Command::Logout { forget } => controller::logout::run(&context.client, paths, forget).await,
         Command::Install(args) => login::run(context, args, true).await,

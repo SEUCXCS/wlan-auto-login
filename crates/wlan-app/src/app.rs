@@ -10,6 +10,14 @@ use crate::{infra::logging, infra::paths as config, infra::scope, infra::shutdow
 use clap::Parser;
 
 pub(crate) fn run() -> std::process::ExitCode {
+    #[cfg(target_os = "macos")]
+    let args = if std::env::args_os().len() == 1 && crate::system::macos::bundle::current().is_ok()
+    {
+        cli::Cli::parse_from([crate::infra::identity::APP_NAME, "macos-host"])
+    } else {
+        cli::Cli::parse()
+    };
+    #[cfg(not(target_os = "macos"))]
     let args = cli::Cli::parse();
     #[cfg(windows)]
     if matches!(
@@ -40,6 +48,10 @@ async fn entry(args: cli::Cli) -> std::process::ExitCode {
     let selected =
         scope::elevated().map(|elevated| scope::Scope::select(args.user, args.system, elevated));
     let paths = selected.and_then(config::Paths::new);
+    #[cfg(target_os = "macos")]
+    if let Ok(paths) = &paths {
+        crate::system::macos::host::configure(paths.scope);
+    }
     let log = if matches!(
         args.command,
         cli::Command::Daemon {

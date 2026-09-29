@@ -1,5 +1,11 @@
 #[cfg(target_os = "macos")]
+pub(crate) mod bundle;
+#[cfg(target_os = "macos")]
 pub(crate) mod credentials;
+#[cfg(target_os = "macos")]
+pub(crate) mod host;
+#[cfg(target_os = "macos")]
+pub(crate) mod location;
 pub(crate) mod permission;
 pub(crate) mod services;
 #[cfg(target_os = "macos")]

@@ -79,7 +79,9 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 `PermissionId` 使用开放的字符串命名空间；`PermissionDescriptor` 支持名称、可选描述和任意键值元数据。`PermissionProvider::permissions()` 返回动态列表，允许为空，不要固定为两个权限或在公共契约中枚举平台权限种类。
 
-当前 Linux / Windows 返回空列表，macOS 仅声明 `macos.location` 与 `macos.keychain`。已声明权限的 `status()` / `request()` 返回 `NotImplemented`，未知标识返回错误。占位实现不请求授权、不报告已授权，也未接入登录或安装流程。实际授权能力应作为独立功能实现，并保留“不支持 / 未实现”和“已授权”的区别。
+Linux / Windows 返回空列表。macOS 的 `macos.location` 对接签名 Wi-Fi 宿主中的 Core Location；`macos.keychain` 诊断适配尚待接入。未知标识返回错误，保留“不支持 / 未实现”和“已授权”的区别。权限在前台操作需要时自动申请，不增加权限子命令。后台不触发授权弹窗。
+
+macOS Wi-Fi 宿主使用有长度限制的 IPC 帧、协议版本和请求 ID；客户端通过 socket 内核审计令牌验证对端签名与 UID，系统范围还检查活动控制台用户。宿主只提供网络状态，不接收校园网凭据。每次重新启动产生新的会话标识，原生查询有超时；Core Location 对象和 delegate 始终位于同一 RunLoop 线程。
 
 ### 错误与日志
 
