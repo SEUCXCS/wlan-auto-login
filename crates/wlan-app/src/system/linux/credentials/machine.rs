@@ -1,55 +1,26 @@
-use crate::infra::error::Message;
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "linux")]
-use linux::crypt;
-#[cfg(target_os = "linux")]
-pub use linux::linux_credential_directive;
+use crate::infra::error::{Context, Message, Result};
+use crate::system::define::credentials::CredentialMode;
 
-#[cfg(not(target_os = "macos"))]
-use super::decode;
-use super::encode;
-#[cfg(not(target_os = "macos"))]
-use crate::infra::error::Context;
-use crate::infra::error::Result;
-#[cfg(not(target_os = "macos"))]
+use crate::system::shared::credentials::decode;
+use crate::system::shared::credentials::encode;
+
 use crate::infra::filesystem::{private_dir, write_private};
 use crate::infra::paths::Paths;
 use cxxy_wlanlogin_lib::Credentials;
-#[cfg(not(target_os = "macos"))]
+
 use std::{fs, path::Path, sync::Mutex, time::SystemTime};
-#[cfg(not(target_os = "macos"))]
+
 use zeroize::Zeroizing;
 
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "macos")]
-pub use macos::authorize_binary;
-#[cfg(windows)]
-mod windows;
-
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
-pub enum CredentialMode {
-    Native,
-    ProtectedFile,
-}
-
 pub struct MachineStore {
-    #[cfg(not(target_os = "macos"))]
     paths: Paths,
-    #[cfg(not(target_os = "macos"))]
+
     mode: Option<CredentialMode>,
-    #[cfg(not(target_os = "macos"))]
+
     cache: Mutex<Option<(SystemTime, u64, Credentials)>>,
 }
 
 pub async fn delete(paths: &Paths) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = paths;
-        tokio::task::spawn_blocking(macos::delete).await?
-    }
-    #[cfg(not(target_os = "macos"))]
     {
         // Do not construct MachineStore: its validation intentionally rejects
         // conflicting storage modes, but cleanup must handle both files.
@@ -72,7 +43,6 @@ pub async fn delete(paths: &Paths) -> Result<()> {
 
 impl MachineStore {
     pub fn new(paths: Paths, mode: Option<CredentialMode>) -> Result<Self> {
-        #[cfg(target_os = "linux")]
         {
             let encrypted = paths.secrets.join("login.cred").try_exists()?;
             let plain = paths.secrets.join("login.json").try_exists()?;
@@ -89,39 +59,25 @@ impl MachineStore {
                 Message::ExistingCredentialsUseProtectedFileBackUp
             );
         }
-        #[cfg(not(target_os = "linux"))]
-        crate::infra::error::ensure!(
-            !matches!(mode, Some(CredentialMode::ProtectedFile)),
-            Message::ProtectedFileIsOnlyAvailableOnLinux
-        );
-        #[cfg(target_os = "macos")]
-        let _ = paths.secrets;
+
         Ok(Self {
-            #[cfg(not(target_os = "macos"))]
             paths,
-            #[cfg(not(target_os = "macos"))]
+
             mode,
-            #[cfg(not(target_os = "macos"))]
+
             cache: Mutex::new(None),
         })
     }
 
-    #[cfg(not(target_os = "macos"))]
     fn native_file(&self) -> std::path::PathBuf {
         self.paths.secrets.join("login.cred")
     }
-    #[cfg(not(target_os = "macos"))]
+
     fn plain_file(&self) -> std::path::PathBuf {
         self.paths.secrets.join("login.json")
     }
 
     pub async fn load(&self, background: bool) -> Result<Option<Credentials>> {
-        #[cfg(target_os = "macos")]
-        {
-            let _ = background;
-            tokio::task::spawn_blocking(macos::load).await?
-        }
-        #[cfg(not(target_os = "macos"))]
         {
             let path = if self.native_file().try_exists()? {
                 self.native_file()
@@ -144,7 +100,7 @@ impl MachineStore {
             {
                 return Ok(Some(credentials.clone()));
             }
-            #[cfg(target_os = "linux")]
+
             let bytes = if path == self.plain_file() {
                 Zeroizing::new(fs::read(&path)?)
             } else {
@@ -168,15 +124,7 @@ impl MachineStore {
                     crypt("decrypt", &encrypted).await?
                 }
             };
-            #[cfg(windows)]
-            let bytes = {
-                let _ = background;
-                crate::infra::error::ensure!(
-                    path == self.native_file(),
-                    Message::PlaintextMachineCredentialsAreNotSupportedOn
-                );
-                windows::decrypt(&fs::read(&path)?)?
-            };
+
             let credentials =
                 decode(std::str::from_utf8(&bytes).context(Message::SystemCredentialsAreNotUTF8)?)?;
             *self
@@ -190,32 +138,22 @@ impl MachineStore {
 
     pub async fn save(&self, credentials: Credentials) -> Result<()> {
         let text = encode(&credentials)?;
-        #[cfg(target_os = "macos")]
-        {
-            tokio::task::spawn_blocking(move || macos::save(&text)).await?
-        }
-        #[cfg(not(target_os = "macos"))]
+
         {
             private_dir(&self.paths.secrets)?;
-            #[cfg(target_os = "linux")]
+
             let plain = match self.mode {
                 Some(CredentialMode::ProtectedFile) => true,
                 Some(CredentialMode::Native) => false,
                 None => self.plain_file().try_exists()? && !self.native_file().try_exists()?,
             };
-            #[cfg(windows)]
-            let plain = {
-                let _ = &self.mode;
-                false
-            };
+
             let (path, bytes) = if plain {
                 tracing::warn!("{}", Message::SystemCredentialsWillBeStoredAsPlaintext);
                 (self.plain_file(), Zeroizing::new(text.as_bytes().to_vec()))
             } else {
-                #[cfg(target_os = "linux")]
                 let bytes = crypt("encrypt", text.as_bytes()).await?;
-                #[cfg(windows)]
-                let bytes = windows::encrypt(text.as_bytes())?;
+
                 (self.native_file(), bytes)
             };
             write_private(&path, &bytes)?;
@@ -237,14 +175,13 @@ impl MachineStore {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 fn validate_private(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     crate::infra::error::ensure!(
         metadata.is_file() && !metadata.file_type().is_symlink(),
         Message::CredentialPathMustBeARegularFile
     );
-    #[cfg(unix)]
+
     {
         use std::os::unix::fs::MetadataExt;
         crate::infra::error::ensure!(
@@ -255,8 +192,64 @@ fn validate_private(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(test, not(target_os = "macos")))]
-mod delete_tests {
+pub(super) async fn crypt(operation: &str, input: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+    crypt_with(std::ffi::OsStr::new("systemd-creds"), operation, input).await
+}
+
+async fn crypt_with(
+    program: &std::ffi::OsStr,
+    operation: &str,
+    input: &[u8],
+) -> Result<Zeroizing<Vec<u8>>> {
+    use std::{process::Stdio, time::Duration};
+    use tokio::io::AsyncWriteExt;
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args([operation, "--name=login", "-", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let mut child = command
+        .spawn()
+        .context(Message::FailedToRunSystemdCredsEncryptedCredentialsRequire)?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .context(Message::FailedToOpenCredentialInputPipe)?;
+    let output = tokio::time::timeout(Duration::from_secs(30), async {
+        stdin.write_all(input).await?;
+        drop(stdin);
+        child.wait_with_output().await
+    })
+    .await
+    .context(Message::SystemCredentialEncryptionOrDecryptionTimedOut)??;
+    crate::infra::error::ensure!(
+        output.status.success(),
+        Message::SystemCredentialOperationFailedStorageModeWas {
+            operation: (operation).to_string()
+        }
+    );
+    Ok(Zeroizing::new(output.stdout))
+}
+
+pub fn linux_credential_directive(paths: &Paths) -> Result<String> {
+    if paths.secrets.join("login.cred").try_exists()? {
+        Ok(format!(
+            "LoadCredentialEncrypted=login:{}\n",
+            paths.secrets.join("login.cred").display()
+        ))
+    } else if paths.secrets.join("login.json").try_exists()? {
+        // The explicit protected-file backend also supports systemd versions
+        // predating LoadCredential; the root service reads its private file.
+        Ok(String::new())
+    } else {
+        crate::infra::error::bail!(Message::SystemCredentialsAreMissingRunLoginSystemRemember)
+    }
+}
+
+#[cfg(test)]
+mod tests {
     use super::*;
 
     #[tokio::test]
@@ -279,7 +272,6 @@ mod delete_tests {
         Ok(())
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn deletion_unlinks_leaf_symlinks_but_rejects_redirected_directories() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -294,6 +286,76 @@ mod delete_tests {
         std::os::unix::fs::symlink(&paths.secrets, &link)?;
         paths.secrets = link;
         assert!(delete(&paths).await.is_err());
+        Ok(())
+    }
+
+    use crate::system::shared::credentials::decode;
+    use cxxy_wlanlogin_lib::Credentials;
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    #[tokio::test]
+    async fn secret_is_sent_to_cipher_over_stdin_and_errors_do_not_echo_it() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let helper = dir.path().join("mock-creds");
+        fs::write(
+            &helper,
+            "#!/bin/sh\n[ \"$#\" = 4 ] || exit 1\n[ \"$2\" = --name=login ] || exit 1\ncat\n",
+        )?;
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700))?;
+        let secret = b"fake-test-secret";
+        assert_eq!(
+            &*crypt_with(helper.as_os_str(), "encrypt", secret).await?,
+            secret
+        );
+        fs::write(&helper, "#!/bin/sh\ncat >&2\nexit 1\n")?;
+        let error = crypt_with(helper.as_os_str(), "encrypt", secret)
+            .await
+            .err()
+            .context("failure expected")?;
+        assert!(!format!("{error:#}").contains("fake-test-secret"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn protected_file_is_explicit_private_and_cannot_silently_replace_encryption()
+    -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::test(dir.path().join("private"));
+        let store = MachineStore::new(paths.clone(), Some(CredentialMode::ProtectedFile))?;
+        store
+            .save(Credentials {
+                username: "test-student".into(),
+                password: "test-secret".into(),
+            })
+            .await?;
+        let path = paths.secrets.join("login.json");
+        assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&paths.secrets)?.permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            decode(&fs::read_to_string(&path)?)?.username,
+            "test-student"
+        );
+        assert!(MachineStore::new(paths.clone(), Some(CredentialMode::Native)).is_err());
+        fs::remove_file(path)?;
+        fs::write(paths.secrets.join("login.cred"), "mock encrypted data")?;
+        assert!(MachineStore::new(paths, Some(CredentialMode::ProtectedFile)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn machine_secret_rejects_symlinks_and_broad_file_permissions() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let secret = dir.path().join("secret");
+        fs::write(&secret, "test data")?;
+        fs::set_permissions(&secret, fs::Permissions::from_mode(0o644))?;
+        assert!(validate_private(&secret).is_err());
+        fs::set_permissions(&secret, fs::Permissions::from_mode(0o600))?;
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&secret, &link)?;
+        assert!(validate_private(&link).is_err());
         Ok(())
     }
 }

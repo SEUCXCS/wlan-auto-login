@@ -1,11 +1,50 @@
-use crate::infra::error::Message;
-use crate::infra::error::{Context, Result};
+use crate::infra::error::{Context, Message, Result};
+use crate::system::define::credentials::CredentialMode;
+
+use crate::system::shared::credentials::encode;
+
+use crate::infra::paths::Paths;
+use cxxy_wlanlogin_lib::Credentials;
+
+pub struct MachineStore;
+
+pub async fn delete(paths: &Paths) -> Result<()> {
+    {
+        let _ = paths;
+        tokio::task::spawn_blocking(delete_native).await?
+    }
+}
+
+impl MachineStore {
+    pub fn new(paths: Paths, mode: Option<CredentialMode>) -> Result<Self> {
+        crate::infra::error::ensure!(
+            !matches!(mode, Some(CredentialMode::ProtectedFile)),
+            Message::ProtectedFileIsOnlyAvailableOnLinux
+        );
+
+        let _ = paths.secrets;
+        Ok(Self)
+    }
+
+    pub async fn load(&self, background: bool) -> Result<Option<Credentials>> {
+        {
+            let _ = background;
+            tokio::task::spawn_blocking(load_native).await?
+        }
+    }
+
+    pub async fn save(&self, credentials: Credentials) -> Result<()> {
+        let text = encode(&credentials)?;
+
+        tokio::task::spawn_blocking(move || save_native(&text)).await?
+    }
+}
+
 use core_foundation::{
     array::{CFArray, CFArrayRef},
     base::{CFType, TCFType},
     string::{CFString, CFStringRef},
 };
-use cxxy_wlanlogin_lib::Credentials;
 use security_framework::os::macos::keychain::SecKeychain;
 use security_framework_sys::base::{SecAccessRef, SecKeychainItemRef};
 use std::{
@@ -33,7 +72,7 @@ fn keychain() -> Result<SecKeychain> {
         .context(Message::FailedToOpenSystemKeychain)
 }
 
-pub fn delete() -> Result<()> {
+fn delete_native() -> Result<()> {
     let (_, item) = match keychain()?.find_generic_password(SERVICE, ACCOUNT) {
         Ok(found) => found,
         Err(error) if error.code() == -25300 => return Ok(()),
@@ -55,10 +94,11 @@ pub fn delete() -> Result<()> {
     Ok(())
 }
 
-pub fn load() -> Result<Option<Credentials>> {
+fn load_native() -> Result<Option<Credentials>> {
     match keychain()?.find_generic_password(SERVICE, ACCOUNT) {
         Ok((password, _)) => {
-            super::super::decode(std::str::from_utf8(password.as_ref())?).map(Some)
+            crate::system::shared::credentials::decode(std::str::from_utf8(password.as_ref())?)
+                .map(Some)
         }
         Err(error) if error.code() == -25300 => Ok(None),
         Err(error) => {
@@ -67,7 +107,7 @@ pub fn load() -> Result<Option<Credentials>> {
     }
 }
 
-pub fn save(text: &str) -> Result<()> {
+fn save_native(text: &str) -> Result<()> {
     keychain()?
         .set_generic_password(SERVICE, ACCOUNT, text.as_bytes())
         .context(Message::FailedToSaveSystemKeychainCredentials)?;

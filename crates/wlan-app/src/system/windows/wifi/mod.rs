@@ -1,6 +1,6 @@
-use super::{TARGET_SSID, worker::Worker};
 use crate::infra::error::Message;
 use crate::infra::error::{Result, bail};
+use crate::system::{define::wifi::TARGET_SSID, shared::wifi::Worker};
 use std::{
     ffi::c_void,
     ptr,
@@ -185,5 +185,15 @@ unsafe extern "system" fn changed(data: *mut L2_NOTIFICATION_DATA, context: *mut
     {
         events.generation.fetch_add(1, Ordering::Relaxed);
         events.notify.notify_one();
+    }
+}
+impl crate::system::define::wifi::WifiConnection for Monitor {
+    async fn target_session(&self) -> Result<Option<String>> {
+        self.snapshot().await
+    }
+}
+impl crate::system::define::wifi::WifiMonitor for Monitor {
+    async fn changed(&mut self) -> Result<()> {
+        Monitor::changed(self).await
     }
 }

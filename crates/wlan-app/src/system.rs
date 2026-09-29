@@ -8,13 +8,13 @@ pub(crate) mod macos;
 pub(crate) mod windows;
 
 #[cfg(target_os = "linux")]
-#[allow(unused_imports)]
 pub(crate) use linux as native;
 #[cfg(target_os = "macos")]
-#[allow(unused_imports)]
 pub(crate) use macos as native;
 #[cfg(target_os = "windows")]
-#[allow(unused_imports)]
 pub(crate) use windows as native;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!("Supported platforms: Linux, macOS and Windows");
+
+pub(crate) mod shared;
+pub(crate) use shared::{credentials, wifi};

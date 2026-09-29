@@ -72,7 +72,7 @@ pub struct LogsArgs {
 pub struct LoginArgs {
     /// 系统凭据存储；Linux 旧系统可显式选择 protected-file
     #[arg(long, value_enum)]
-    pub credential_store: Option<crate::credentials::CredentialMode>,
+    pub credential_store: Option<crate::system::credentials::CredentialMode>,
     #[arg(short, long, env = "CXXY_WLAN_USERNAME", hide_env_values = true)]
     pub username: Option<String>,
     #[arg(

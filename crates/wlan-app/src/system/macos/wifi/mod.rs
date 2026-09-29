@@ -1,6 +1,6 @@
-use super::{TARGET_SSID, worker::Worker};
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result, bail};
+use crate::system::{define::wifi::TARGET_SSID, shared::wifi::Worker};
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2_core_foundation::{CFArray, CFRetained, CFString};
 use objc2_core_wlan::{CWInterfaceMode, CWWiFiClient};
@@ -170,4 +170,14 @@ unsafe extern "C-unwind" fn changed(
         events.observe(&identity);
     }
     events.notify.notify_one();
+}
+impl crate::system::define::wifi::WifiConnection for Monitor {
+    async fn target_session(&self) -> Result<Option<String>> {
+        self.snapshot().await
+    }
+}
+impl crate::system::define::wifi::WifiMonitor for Monitor {
+    async fn changed(&mut self) -> Result<()> {
+        Monitor::changed(self).await
+    }
 }

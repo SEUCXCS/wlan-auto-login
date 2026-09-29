@@ -2,11 +2,11 @@
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
 use crate::{
-    credentials,
     infra::control,
     infra::paths::Paths,
     service,
-    wifi::{WifiConnection, WifiProbe},
+    system::credentials,
+    system::wifi::{WifiConnection, WifiProbe},
 };
 use cxxy_wlanlogin_lib::Client;
 use std::future::Future;

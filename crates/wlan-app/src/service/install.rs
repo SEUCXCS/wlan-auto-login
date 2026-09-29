@@ -19,7 +19,7 @@ pub async fn install(paths: &Paths) -> Result<()> {
         if paths.scope == crate::infra::scope::Scope::System {
             plan.content = plan.content.replace(
                 "# CREDENTIALS\n",
-                &crate::credentials::linux_credential_directive(paths)?,
+                &crate::system::credentials::linux_credential_directive(paths)?,
             );
         }
         plan
@@ -80,7 +80,7 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
         }
         #[cfg(target_os = "macos")]
         if paths.scope == crate::infra::scope::Scope::System {
-            crate::credentials::authorize_binary(&plan.executable)?;
+            crate::system::credentials::authorize_binary(&plan.executable)?;
         }
         write_definition(&plan.definition, plan.content.as_bytes())?;
         for command in &plan.start {
@@ -111,7 +111,7 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
         #[cfg(target_os = "macos")]
         if paths.scope == crate::infra::scope::Scope::System
             && old_executable.existed()
-            && let Err(e) = crate::credentials::authorize_binary(&plan.executable)
+            && let Err(e) = crate::system::credentials::authorize_binary(&plan.executable)
         {
             rollback_errors.push(e.to_string());
         }

@@ -1,6 +1,6 @@
-use super::TARGET_SSID;
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
+use crate::system::define::wifi::TARGET_SSID;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use zbus::{
@@ -161,6 +161,17 @@ fn relevant(message: &zbus::Message) -> bool {
         .any(|key| changed.contains_key(*key) || invalidated.iter().any(|v| v == key));
     }
     false
+}
+
+impl crate::system::define::wifi::WifiConnection for Monitor {
+    async fn target_session(&self) -> Result<Option<String>> {
+        self.snapshot().await
+    }
+}
+impl crate::system::define::wifi::WifiMonitor for Monitor {
+    async fn changed(&mut self) -> Result<()> {
+        Monitor::changed(self).await
+    }
 }
 
 #[cfg(test)]

@@ -1,17 +1,17 @@
-use super::{decode, encode};
 use crate::infra::error::Message;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::system::shared::credentials::decode;
+use zeroize::Zeroizing;
+
 use crate::infra::error::bail;
 use crate::infra::error::{Context, Result};
+pub(crate) use crate::system::shared::credentials::{load_user as load, save_user as save};
 use cxxy_wlanlogin_lib::Credentials;
-use zeroize::Zeroizing;
 
 const SERVICE: &str = "org.seucxcs.cxxy-wlanlogin";
 const ENTRY: &str = "saved-login";
 
 pub async fn delete() -> Result<()> {
     tokio::task::spawn_blocking(|| {
-        #[cfg(target_os = "linux")]
         {
             use dbus_secret_service::{EncryptionType, SecretService};
             let service = SecretService::connect(EncryptionType::Dh)?;
@@ -28,36 +28,13 @@ pub async fn delete() -> Result<()> {
             }
             Ok(())
         }
-        #[cfg(not(target_os = "linux"))]
-        match keyring::Entry::new(SERVICE, ENTRY)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(error).context(Message::FailedToDeleteUserCredentials),
-        }
     })
     .await
     .context(Message::CredentialDeletionTaskFailed)?
 }
 
-pub async fn load() -> Result<Option<Credentials>> {
-    tokio::task::spawn_blocking(|| {
-        let entry =
-            keyring::Entry::new(SERVICE, ENTRY).context(Message::FailedToOpenSystemKeyring)?;
-        let text = match entry.get_password() {
-            Ok(value) => Zeroizing::new(value),
-            Err(keyring::Error::NoEntry) => return Ok(None),
-            Err(e) => {
-                return Err(e).context(Message::FailedToReadCredentialsUnlockTheSystemKeyring);
-            }
-        };
-        decode(&text).map(Some)
-    })
-    .await
-    .context(Message::CredentialReadTaskFailed)?
-}
-
 /// Background reads never ask the user to unlock the keychain.
 pub async fn load_for_daemon() -> Result<Option<Credentials>> {
-    #[cfg(target_os = "linux")]
     {
         tokio::task::spawn_blocking(|| {
             use dbus_secret_service::{EncryptionType, SecretService};
@@ -87,35 +64,8 @@ pub async fn load_for_daemon() -> Result<Option<Credentials>> {
         .await
         .context(Message::BackgroundCredentialReadTaskFailed)?
     }
-    #[cfg(not(target_os = "linux"))]
-    load().await
 }
 
 pub fn prepare_daemon() -> Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        // SAFETY: daemon is a separate process and performs no interactive
-        // keychain operations. This process-wide switch prevents native dialogs.
-        let status =
-            unsafe { security_framework_sys::keychain::SecKeychainSetUserInteractionAllowed(0) };
-        if status != 0 {
-            bail!(Message::FailedToDisableBackgroundKeychainPromptsStatus {
-                status: (status).to_string()
-            });
-        }
-    }
     Ok(())
-}
-
-pub async fn save(credentials: Credentials) -> Result<()> {
-    tokio::task::spawn_blocking(move || {
-        let text = encode(&credentials)?;
-        keyring::Entry::new(SERVICE, ENTRY)
-            .context(Message::FailedToOpenSystemKeyring)?
-            .set_password(&text)
-            .context(Message::FailedToSaveCredentialsUnlockTheSystemKeyring)?;
-        Ok(())
-    })
-    .await
-    .context(Message::CredentialSaveTaskFailed)?
 }

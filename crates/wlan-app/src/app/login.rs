@@ -2,9 +2,10 @@ use super::cli::LoginArgs;
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result, bail};
 use crate::{
-    credentials,
     infra::{config::Preferences, paths::Paths},
-    tui, wifi,
+    system::credentials,
+    system::wifi,
+    tui,
 };
 use cxxy_wlanlogin_lib::{Client, Credentials, Line, LoginOutcome};
 use std::io::{self, IsTerminal};
@@ -190,7 +191,7 @@ fn wants_tui(args: &LoginArgs, form: &Form) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wifi::WifiConnection;
+    use crate::system::wifi::WifiConnection;
     use cxxy_wlanlogin_lib::PortalConfig;
     use std::{cell::RefCell, collections::VecDeque, time::Duration};
     use tokio::{

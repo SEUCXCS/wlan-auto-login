@@ -1,6 +1,6 @@
-use super::ScopedStore;
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
+use crate::system::credentials::ScopedStore;
 use cxxy_wlanlogin_lib::Credentials;
 use std::{future::Future, sync::Arc, time::Duration};
 

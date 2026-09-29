@@ -1,18 +1,12 @@
-//! Choose the credential backend for the selected scope.
+//! Scoped credential selection and shared encoding; native APIs live under each platform.
 use crate::infra::error::Message;
-mod background;
-mod machine;
-pub use machine::CredentialMode;
+pub(crate) use crate::system::define::credentials::{CredentialMode, Store};
 #[cfg(target_os = "macos")]
-pub use machine::authorize_binary;
+pub(crate) use crate::system::native::credentials::machine::authorize_binary;
 #[cfg(target_os = "linux")]
-pub use machine::linux_credential_directive;
-
-mod user;
-
-pub(crate) use background::BackgroundReader;
-pub(crate) use user::prepare_daemon;
-
+pub(crate) use crate::system::native::credentials::machine::linux_credential_directive;
+pub(crate) use crate::system::native::credentials::user::prepare_daemon;
+use crate::system::native::credentials::{machine, user};
 /// Delete without loading or decoding secrets, including damaged or duplicate files.
 pub async fn delete(paths: &crate::infra::paths::Paths) -> crate::infra::error::Result<()> {
     match paths.scope {
@@ -25,11 +19,6 @@ use crate::infra::error::{Context, Result, bail};
 use cxxy_wlanlogin_lib::Credentials;
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
-
-pub trait Store {
-    fn load(&self) -> impl std::future::Future<Output = Result<Option<Credentials>>>;
-    fn save(&self, credentials: Credentials) -> impl std::future::Future<Output = Result<()>>;
-}
 
 pub struct ScopedStore {
     machine: Option<machine::MachineStore>,
@@ -50,7 +39,7 @@ impl ScopedStore {
         }
     }
 
-    async fn load_background(&self) -> Result<Option<Credentials>> {
+    pub(crate) async fn load_background(&self) -> Result<Option<Credentials>> {
         match &self.machine {
             Some(store) => store.load(true).await,
             None => user::load_for_daemon().await,
@@ -75,13 +64,13 @@ impl Store for ScopedStore {
 }
 
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
-struct Secret {
+pub(crate) struct Secret {
     version: u8,
     username: String,
     password: String,
 }
 
-fn encode(credentials: &Credentials) -> Result<Zeroizing<String>> {
+pub(crate) fn encode(credentials: &Credentials) -> Result<Zeroizing<String>> {
     crate::infra::error::ensure!(
         !credentials.username.trim().is_empty() && !credentials.password.is_empty(),
         Message::UsernameAndPasswordMustNotBeEmpty
@@ -93,7 +82,7 @@ fn encode(credentials: &Credentials) -> Result<Zeroizing<String>> {
     })?))
 }
 
-fn decode(text: &str) -> Result<Credentials> {
+pub(crate) fn decode(text: &str) -> Result<Credentials> {
     let secret: Secret =
         serde_json::from_str(text).context(Message::InvalidSavedCredentialFormat)?;
     if secret.version != 1 || secret.username.trim().is_empty() || secret.password.is_empty() {
@@ -105,6 +94,36 @@ fn decode(text: &str) -> Result<Credentials> {
     })
 }
 
+const USER_SERVICE: &str = "org.seucxcs.cxxy-wlanlogin";
+const USER_ENTRY: &str = "saved-login";
+pub async fn load_user() -> Result<Option<Credentials>> {
+    tokio::task::spawn_blocking(|| {
+        let entry = keyring::Entry::new(USER_SERVICE, USER_ENTRY)
+            .context(Message::FailedToOpenSystemKeyring)?;
+        let text = match entry.get_password() {
+            Ok(value) => Zeroizing::new(value),
+            Err(keyring::Error::NoEntry) => return Ok(None),
+            Err(e) => {
+                return Err(e).context(Message::FailedToReadCredentialsUnlockTheSystemKeyring);
+            }
+        };
+        decode(&text).map(Some)
+    })
+    .await
+    .context(Message::CredentialReadTaskFailed)?
+}
+pub async fn save_user(credentials: Credentials) -> Result<()> {
+    tokio::task::spawn_blocking(move || {
+        let text = encode(&credentials)?;
+        keyring::Entry::new(USER_SERVICE, USER_ENTRY)
+            .context(Message::FailedToOpenSystemKeyring)?
+            .set_password(&text)
+            .context(Message::FailedToSaveCredentialsUnlockTheSystemKeyring)?;
+        Ok(())
+    })
+    .await
+    .context(Message::CredentialSaveTaskFailed)?
+}
 #[cfg(test)]
 mod tests {
     use super::*;

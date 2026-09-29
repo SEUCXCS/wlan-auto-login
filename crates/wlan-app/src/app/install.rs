@@ -2,7 +2,7 @@
 use super::{cli::LoginArgs, login};
 use crate::infra::error::Message;
 use crate::infra::error::Result;
-use crate::{credentials, infra::paths::Paths, service, wifi};
+use crate::{infra::paths::Paths, service, system::credentials, system::wifi};
 use cxxy_wlanlogin_lib::Client;
 
 pub(super) async fn run(client: &Client, paths: &Paths, args: LoginArgs) -> Result<()> {

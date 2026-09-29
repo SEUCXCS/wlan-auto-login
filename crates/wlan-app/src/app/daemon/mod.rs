@@ -1,15 +1,16 @@
 //! Run the automatic-login loop and coordinate its event sources.
 use crate::infra::error::Message;
+mod credentials;
 mod policy;
 use policy::Policy;
 
 use crate::infra::error::{Context, Result, bail};
 use crate::{
-    credentials,
     infra::control,
     infra::shutdown::{Shutdown, until_stopped},
     infra::{config::Preferences, paths::Paths},
-    wifi::{Monitor, WifiConnection},
+    system::credentials as stores,
+    system::wifi::{Monitor, WifiConnection},
 };
 use cxxy_wlanlogin_lib::{AuthState, Client, Credentials, LoginOutcome};
 use std::{future::Future, time::Duration};
@@ -46,7 +47,7 @@ pub async fn run(client: &Client, paths: &Paths) -> Result<()> {
 
 async fn run_inner(client: &Client, paths: &Paths) -> Result<()> {
     ensure_scope(paths)?;
-    credentials::prepare_daemon()?;
+    stores::prepare_daemon()?;
     let _singleton = control::singleton(paths)?;
     let (_server, mut commands) = control::serve(paths).await?;
     let wake = tokio::sync::Notify::new();

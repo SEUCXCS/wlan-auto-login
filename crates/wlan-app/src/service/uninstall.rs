@@ -6,7 +6,7 @@ use super::{
 };
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result, ensure};
-use crate::{credentials, infra::cleanup, infra::control, infra::paths::Paths};
+use crate::{infra::cleanup, infra::control, infra::paths::Paths, system::credentials};
 use std::{future::Future, time::Duration};
 
 pub async fn uninstall(paths: &Paths, purge: bool) -> Result<()> {
