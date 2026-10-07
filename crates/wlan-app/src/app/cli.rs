@@ -144,10 +144,8 @@ pub(super) async fn dispatch(
         Command::MacosCredentialCheck => {
             let status =
                 crate::system::macos::credentials::access::status(paths.scope, false).await?;
-            crate::infra::error::ensure!(
-                status == crate::system::define::permission::PermissionStatus::Granted,
-                "Installed application cannot read credentials without interaction: {status:?}"
-            );
+            let result = crate::system::macos::credentials::access::CredentialCheck::new(status);
+            println!("{}", serde_json::to_string(&result)?);
             Ok(())
         }
         #[cfg(target_os = "macos")]

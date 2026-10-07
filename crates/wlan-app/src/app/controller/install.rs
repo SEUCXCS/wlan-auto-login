@@ -24,12 +24,11 @@ pub async fn prepare(
             Message::NoticeServiceInstallationCanContinueAndAuthentication { notice }
         );
     }
-    let saved = store.load().await?;
-    let required = saved.is_none()
-        || refresh
+    let required = refresh
         || request.username.is_some()
         || request.password.is_some()
-        || request.credential_store.is_some();
+        || request.credential_store.is_some()
+        || store.load().await?.is_none();
     if required {
         tracing::warn!(
             "{}",
@@ -40,4 +39,50 @@ pub async fn prepare(
 }
 pub async fn run(paths: &Paths) -> Result<()> {
     services::install(paths).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wlanlogin_lib::Credentials;
+
+    struct Offline;
+    impl WifiConnection for Offline {
+        async fn target_session(&self) -> Result<Option<String>> {
+            Ok(None)
+        }
+    }
+
+    struct InaccessibleStore;
+    impl Store for InaccessibleStore {
+        async fn load(&self) -> Result<Option<Credentials>> {
+            crate::infra::error::bail!("credentials need interaction")
+        }
+        async fn save(&self, _: Credentials) -> Result<()> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_refresh_does_not_read_the_keychain_before_login_preparation() -> Result<()>
+    {
+        let explicit = LoginRequest {
+            username: Some("student".into()),
+            password: Some("secret".into()),
+            ..Default::default()
+        };
+        assert!(prepare(&explicit, false, &Offline, &InaccessibleStore).await?);
+        assert!(prepare(&LoginRequest::default(), true, &Offline, &InaccessibleStore).await?);
+        assert!(
+            prepare(
+                &LoginRequest::default(),
+                false,
+                &Offline,
+                &InaccessibleStore
+            )
+            .await
+            .is_err()
+        );
+        Ok(())
+    }
 }

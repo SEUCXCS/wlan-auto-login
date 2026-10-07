@@ -73,6 +73,7 @@ pub(crate) fn macos_plan(
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>{LABEL}</string>
+<key>AssociatedBundleIdentifiers</key><array><string>{app_id}</string></array>
 <key>ProgramArguments</key><array>{arguments}</array>
 <key>EnvironmentVariables</key><dict><key>WLANLOGIN_MANAGED</key><string>1</string></dict>
 <key>RunAtLoad</key><true/>
@@ -80,7 +81,8 @@ pub(crate) fn macos_plan(
 <key>ThrottleInterval</key><integer>30</integer>
 <key>StandardErrorPath</key><string>{log}</string>
 </dict></plist>
-"#
+"#,
+        app_id = crate::infra::identity::APP_ID
     );
     let bootout =
         || Invocation::new("launchctl", [OsStr::new("bootout"), OsStr::new(&target)]).optional();
@@ -182,6 +184,9 @@ mod tests {
             "<string>--system</string><string>daemon</string><string>--background</string>"
         ));
         assert!(root.content.contains("<key>WLANLOGIN_MANAGED</key>"));
+        for plan in [&user, &root] {
+            assert!(plan.content.contains("<key>AssociatedBundleIdentifiers</key><array><string>dev.cxcs.tools.wlanlogin</string></array>"));
+        }
         Ok(())
     }
 }

@@ -272,7 +272,13 @@ async fn call(operation: Operation, launch: bool) -> Result<Response> {
             if let Some(stream) = connect(&session, selected, &app).await? {
                 stream
             } else {
-                launch_host(&app, selected, session.uid).await?;
+                launch_host(
+                    &app,
+                    selected,
+                    session.uid,
+                    matches!(operation, Operation::Authorize),
+                )
+                .await?;
                 tokio::time::timeout(Duration::from_secs(10), async {
                     loop {
                         if let Some(stream) = connect(&session, selected, &app).await? {
@@ -413,17 +419,24 @@ async fn connect(session: &Session, scope: Scope, app: &Path) -> Result<Option<U
     Ok(None)
 }
 
-async fn launch_host(app: &Path, scope: Scope, uid: u32) -> Result<()> {
+fn host_launch(
+    app: &Path,
+    scope: Scope,
+    uid: u32,
+    interactive: bool,
+) -> crate::infra::command::Invocation {
     use crate::infra::command::Invocation;
     use std::ffi::OsString;
-    let mut args: Vec<OsString> = vec![
-        "-n".into(),
-        "-g".into(),
+    let mut args: Vec<OsString> = vec!["-n".into()];
+    if !interactive {
+        args.push("-g".into());
+    }
+    args.extend([
         "-a".into(),
         app.as_os_str().to_owned(),
         "--args".into(),
         "macos-host".into(),
-    ];
+    ]);
     if scope == Scope::System {
         args.push("--system-helper".into());
         let mut command: Vec<OsString> = vec![
@@ -435,10 +448,58 @@ async fn launch_host(app: &Path, scope: Scope, uid: u32) -> Result<()> {
             "/usr/bin/open".into(),
         ];
         command.extend(args);
-        Invocation::new("/bin/launchctl", command).run().await
+        Invocation::new("/bin/launchctl", command)
     } else {
-        Invocation::new("/usr/bin/open", args).run().await
+        Invocation::new("/usr/bin/open", args)
     }
+}
+
+async fn launch_host(app: &Path, scope: Scope, uid: u32, interactive: bool) -> Result<()> {
+    host_launch(app, scope, uid, interactive).run().await
+}
+
+/// AppKit activation properties update on the main run loop. Keep it running for
+/// GUI hosts while Tokio owns their asynchronous work, including managed hosts
+/// that may later receive an explicit foreground authorization request over IPC.
+pub fn run_gui(
+    runtime: &tokio::runtime::Runtime,
+    operation: impl std::future::Future<Output = std::process::ExitCode> + Send + 'static,
+) -> std::process::ExitCode {
+    use objc2::{msg_send, rc::Retained};
+    use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
+    use std::sync::mpsc;
+
+    objc2::rc::autoreleasepool(|_| unsafe {
+        let app: Retained<objc2::runtime::AnyObject> =
+            msg_send![objc2::class!(NSApplication), sharedApplication];
+        let _: () = msg_send![&*app, finishLaunching];
+        let (sender, receiver) = mpsc::sync_channel(1);
+        // The monitor also closes the channel if the operation panics.
+        let task = runtime.spawn(operation);
+        runtime.spawn(async move {
+            let result = task.await.unwrap_or(std::process::ExitCode::FAILURE);
+            let _ = sender.send(result);
+        });
+        loop {
+            match receiver.try_recv() {
+                Ok(result) => return result,
+                Err(mpsc::TryRecvError::Disconnected) => return std::process::ExitCode::FAILURE,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            objc2::rc::autoreleasepool(|_| {
+                let deadline = NSDate::dateWithTimeIntervalSinceNow(0.05);
+                let event: Option<Retained<objc2::runtime::AnyObject>> = msg_send![
+                    &*app, nextEventMatchingMask: usize::MAX,
+                    untilDate: &*deadline, inMode: NSDefaultRunLoopMode, dequeue: true
+                ];
+                if let Some(event) = event {
+                    let _: () = msg_send![&*app, sendEvent: &*event];
+                }
+            });
+            // A run loop without sources may return immediately.
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    })
 }
 
 struct Session {
@@ -504,6 +565,21 @@ async fn write_frame<T: Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_interactive_authorization_launches_in_the_foreground() {
+        for scope in [Scope::User, Scope::System] {
+            let foreground = host_launch(Path::new("/Applications/Test.app"), scope, 501, true);
+            let background = host_launch(Path::new("/Applications/Test.app"), scope, 501, false);
+            assert!(!foreground.args.iter().any(|arg| arg == "-g"));
+            assert!(background.args.iter().any(|arg| arg == "-g"));
+            assert!(foreground.args.iter().any(|arg| arg == "macos-host"));
+            if scope == Scope::System {
+                assert_eq!(foreground.program, "/bin/launchctl");
+                assert!(foreground.args.iter().any(|arg| arg == "#501"));
+                assert!(foreground.args.iter().any(|arg| arg == "--system-helper"));
+            }
+        }
+    }
     #[tokio::test]
     async fn ipc_rejects_oversized_frames_without_allocating_the_payload() -> Result<()> {
         let (mut writer, mut reader) = tokio::io::duplex(64);

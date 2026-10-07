@@ -10,6 +10,12 @@ pub enum Message {
     KeychainTrustedApplicationFailed { status: i32 },
     #[error("Failed to create credential access control: {status}")]
     KeychainAccessCreateFailed { status: i32 },
+    #[error("Failed to inspect existing credential access control: {status}")]
+    KeychainAccessCopyFailed { status: i32 },
+    #[error("Failed to inspect or update credential read permissions: {status}")]
+    KeychainReadAccessFailed { status: i32 },
+    #[error("Failed to inspect or unlock the selected Keychain")]
+    KeychainUnlockFailed,
     #[error("Failed to authorize the installed application to read credentials: {status}")]
     KeychainAuthorizeFailed { status: i32 },
     #[error("Unmanaged or redirected bundle member retained: {path}")]
@@ -41,8 +47,32 @@ pub enum Message {
     LocationRunLoopFailed,
     #[error("Location manager stopped")]
     LocationManagerStopped,
-    #[error("Location authorization timed out; retry after responding to the system dialog")]
+    #[error(
+        "Location permission request timed out before a decision; respond to the system dialog or retry from a foreground session"
+    )]
     LocationAuthorizationTimedOut,
+    #[error(
+        "Wi-Fi authorization host could not become active; retry from the logged-in user's foreground session"
+    )]
+    LocationActivationFailed,
+    #[error(
+        "Wi-Fi authorization host did not become active before the deadline; no permission request was sent"
+    )]
+    LocationActivationTimedOut,
+    #[error(
+        "Location access was denied; enable WLAN Login in System Settings > Privacy & Security > Location Services"
+    )]
+    LocationDenied,
+    #[error(
+        "Location Services are disabled globally; enable them in System Settings > Privacy & Security > Location Services"
+    )]
+    LocationServicesDisabled,
+    #[error("Location access is restricted by macOS policy")]
+    LocationRestricted,
+    #[error("Location authorization state before the foreground request")]
+    LocationAuthorizationBefore,
+    #[error("Location authorization state after the foreground request")]
+    LocationAuthorizationAfter,
     #[error("Wi-Fi host is already running")]
     MacosHostAlreadyRunning,
     #[error("Native Wi-Fi query timed out")]
@@ -69,6 +99,10 @@ pub enum Message {
     KeychainAuthorizationTimedOut,
     #[error("Installed application cannot read its saved credentials silently")]
     InstalledCredentialCheckFailed,
+    #[error("Installed credential check returned an invalid or incompatible result")]
+    InstalledCredentialCheckProtocol,
+    #[error("Installed application cannot read its saved credentials silently ({state})")]
+    InstalledCredentialAccessUnavailable { state: String },
     #[error("Installation failed; previous bundle, definition and credential access restored")]
     BundleInstallationRestored,
     #[error(

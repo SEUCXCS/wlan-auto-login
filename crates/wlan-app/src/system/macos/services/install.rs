@@ -2,17 +2,20 @@
 use super::payload::{self, Payload};
 use crate::infra::{
     cleanup,
-    command::{Invocation, SystemRunner},
+    command::{Invocation, Runner, SystemRunner},
     control,
     error::{Context, Message, Result},
     paths::{self, Paths},
     scope::Scope,
 };
 use crate::system::{
-    define::services::{Action, Plan, ServiceManager},
+    define::{
+        permission::PermissionStatus,
+        services::{Action, Plan, ServiceManager},
+    },
     macos::{bundle, credentials::access, host},
 };
-use std::{fs, path::Path};
+use std::{fs, future::Future, path::Path};
 
 pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
     crate::infra::error::ensure!(
@@ -81,8 +84,7 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
                 fs::Permissions::from_mode(0o755),
             )?;
         }
-        authorize(paths.scope, &plan.executable).await?;
-        verify_credentials(&plan).await?;
+        prepare_credentials(paths.scope, &plan.executable, CheckFormat::Current).await?;
         // Authorize the newly installed identity, which can differ after ad-hoc signing.
         if let Err(error) = host::prepare(access::interaction_allowed()).await {
             if paths.scope == Scope::System && !access::interaction_allowed() {
@@ -135,12 +137,15 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
                 } else {
                     &original
                 };
-                if let Err(e) = authorize(paths.scope, executable).await {
-                    failures.push(e.to_string());
-                }
-                if transaction.existed()
-                    && let Err(e) = verify_credentials(&plan).await
-                {
+                let restored = if transaction.existed() {
+                    prepare_credentials(paths.scope, executable, CheckFormat::Previous).await
+                } else if legacy_owned {
+                    // A legacy executable may predate the installed-check protocol.
+                    authorize(paths.scope, executable).await
+                } else {
+                    prepare_credentials(paths.scope, executable, CheckFormat::Current).await
+                };
+                if let Err(e) = restored {
                     failures.push(e.to_string());
                 }
             }
@@ -187,21 +192,107 @@ async fn authorize(scope: Scope, executable: &Path) -> Result<()> {
     .await
     .context(Message::KeychainAuthorizationTimedOut)??
 }
-async fn verify_credentials(plan: &Plan) -> Result<()> {
-    Invocation::new(
-        &plan.executable,
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CheckFormat {
+    Current,
+    Previous,
+}
+
+async fn prepare_credentials(scope: Scope, executable: &Path, format: CheckFormat) -> Result<()> {
+    ensure_credential_access(
+        || credential_status(scope, executable, &SystemRunner, format),
+        || async move {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(90),
+                tokio::task::spawn_blocking(move || access::unlock_if_needed(scope)),
+            )
+            .await
+            .context(Message::KeychainAuthorizationTimedOut)?
+            .context(Message::KeychainUnlockFailed)?
+        },
+        || authorize(scope, executable),
+    )
+    .await
+}
+
+async fn ensure_credential_access<P, U, A>(
+    mut probe: impl FnMut() -> P,
+    unlock: impl FnOnce() -> U,
+    authorize: impl FnOnce() -> A,
+) -> Result<()>
+where
+    P: Future<Output = Result<PermissionStatus>>,
+    U: Future<Output = Result<bool>>,
+    A: Future<Output = Result<()>>,
+{
+    let mut status = probe().await?;
+    if status == PermissionStatus::Granted {
+        return Ok(());
+    }
+    require_authorizable(&status)?;
+    if unlock().await? {
+        status = probe().await?;
+        if status == PermissionStatus::Granted {
+            return Ok(());
+        }
+        require_authorizable(&status)?;
+    }
+    authorize().await?;
+    let status = probe().await?;
+    crate::infra::error::ensure!(
+        status == PermissionStatus::Granted,
+        Message::InstalledCredentialAccessUnavailable {
+            state: format!("{status:?}")
+        }
+    );
+    Ok(())
+}
+
+fn require_authorizable(status: &PermissionStatus) -> Result<()> {
+    crate::infra::error::ensure!(
+        matches!(
+            status,
+            PermissionStatus::NeedsInteraction | PermissionStatus::Denied
+        ),
+        Message::InstalledCredentialAccessUnavailable {
+            state: format!("{status:?}")
+        }
+    );
+    Ok(())
+}
+
+async fn credential_status(
+    scope: Scope,
+    executable: &Path,
+    runner: &impl Runner,
+    format: CheckFormat,
+) -> Result<PermissionStatus> {
+    let command = Invocation::new(
+        executable,
         [
-            if plan.scope == Scope::System {
+            if scope == Scope::System {
                 "--system"
             } else {
                 "--user"
             },
             "macos-credential-check",
         ],
-    )
-    .run()
-    .await
-    .context(Message::InstalledCredentialCheckFailed)
+    );
+    let output = runner
+        .output(&command)
+        .await
+        .context(Message::InstalledCredentialCheckFailed)?;
+    output
+        .check(&command)
+        .context(Message::InstalledCredentialCheckFailed)?;
+    // The previous installed checker reported success only after a silent read,
+    // using its exit status with no stdout. Accept that proof during rollback.
+    if format == CheckFormat::Previous && output.stdout.trim().is_empty() {
+        return Ok(PermissionStatus::Granted);
+    }
+    serde_json::from_str::<access::CredentialCheck>(&output.stdout)
+        .context(Message::InstalledCredentialCheckProtocol)?
+        .into_status()
 }
 async fn stop(paths: &Paths, plan: &Plan) -> Result<()> {
     let state = plan.manager.query(&SystemRunner).await?;
@@ -241,4 +332,198 @@ fn prepare_system_directories() -> Result<()> {
     );
     fs::set_permissions(application, fs::Permissions::from_mode(0o755))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infra::command::tests::FakeRunner;
+    use std::cell::RefCell;
+
+    #[tokio::test]
+    async fn repeated_install_with_read_access_never_unlocks_or_rewrites_acl() -> Result<()> {
+        for _ in 0..3 {
+            ensure_credential_access(
+                || async { Ok(PermissionStatus::Granted) },
+                || async { panic!("authorized installs must not request unlock") },
+                || async { panic!("authorized installs must not rewrite access") },
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn locked_keychain_is_rechecked_before_any_acl_change() -> Result<()> {
+        let statuses = RefCell::new(
+            [
+                PermissionStatus::NeedsInteraction,
+                PermissionStatus::Granted,
+            ]
+            .into_iter(),
+        );
+        ensure_credential_access(
+            || async {
+                statuses
+                    .borrow_mut()
+                    .next()
+                    .context(Message::UnexpectedServiceCommand)
+            },
+            || async { Ok(true) },
+            || async { panic!("unlocking was sufficient; owner and ACL must be retained") },
+        )
+        .await?;
+        assert!(statuses.borrow_mut().next().is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_or_unavailable_credentials_and_failed_probes_do_not_modify_access() {
+        for status in [
+            PermissionStatus::Missing,
+            PermissionStatus::Unavailable,
+            PermissionStatus::Unknown,
+        ] {
+            assert!(
+                ensure_credential_access(
+                    || {
+                        let status = status.clone();
+                        async move { Ok(status) }
+                    },
+                    || async { panic!("unavailable items must be retained") },
+                    || async { panic!("unavailable items must not be authorized") },
+                )
+                .await
+                .is_err()
+            );
+        }
+        assert!(
+            ensure_credential_access(
+                || async { crate::infra::error::bail!(Message::InstalledCredentialCheckFailed) },
+                || async { panic!("failed process probes must not request unlock") },
+                || async { panic!("failed process probes must not modify access") },
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn changed_identity_requires_successful_installed_recheck() {
+        for final_status in [PermissionStatus::Granted, PermissionStatus::Denied] {
+            let statuses = RefCell::new(
+                [PermissionStatus::NeedsInteraction, final_status.clone()].into_iter(),
+            );
+            let calls = RefCell::new(Vec::new());
+            let result = ensure_credential_access(
+                || async {
+                    calls.borrow_mut().push("probe");
+                    statuses
+                        .borrow_mut()
+                        .next()
+                        .context(Message::UnexpectedServiceCommand)
+                },
+                || async {
+                    calls.borrow_mut().push("unlock");
+                    Ok(false)
+                },
+                || async {
+                    calls.borrow_mut().push("authorize");
+                    Ok(())
+                },
+            )
+            .await;
+            assert_eq!(result.is_ok(), final_status == PermissionStatus::Granted);
+            assert_eq!(*calls.borrow(), ["probe", "unlock", "authorize", "probe"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn installed_probe_rejects_failed_malformed_or_incompatible_results() -> Result<()> {
+        for (success, stdout) in [
+            (false, ""),
+            (true, ""),
+            (true, r#"{"version":2,"status":"Granted"}"#),
+        ] {
+            let runner = FakeRunner::new([(success, stdout)]);
+            assert!(
+                credential_status(
+                    Scope::User,
+                    Path::new("/isolated/app"),
+                    &runner,
+                    CheckFormat::Current
+                )
+                .await
+                .is_err()
+            );
+        }
+        let runner = FakeRunner::new([(true, r#"{"version":1,"status":"Granted"}"#)]);
+        assert_eq!(
+            credential_status(
+                Scope::System,
+                Path::new("/isolated/app"),
+                &runner,
+                CheckFormat::Current
+            )
+            .await?,
+            PermissionStatus::Granted
+        );
+        assert_eq!(
+            runner.calls.borrow()[0].args,
+            ["--system", "macos-credential-check"]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rollback_accepts_previous_silent_checker_success_but_never_failure() -> Result<()> {
+        let runner = FakeRunner::new([(true, "")]);
+        assert_eq!(
+            credential_status(
+                Scope::User,
+                Path::new("/isolated/old-app"),
+                &runner,
+                CheckFormat::Previous
+            )
+            .await?,
+            PermissionStatus::Granted
+        );
+        let runner = FakeRunner::new([(false, "")]);
+        assert!(
+            credential_status(
+                Scope::User,
+                Path::new("/isolated/old-app"),
+                &runner,
+                CheckFormat::Previous
+            )
+            .await
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_unlock_or_authorization_returns_to_the_install_transaction() {
+        let result = ensure_credential_access(
+            || async { Ok(PermissionStatus::NeedsInteraction) },
+            || async { crate::infra::error::bail!(Message::KeychainUnlockFailed) },
+            || async { panic!("failed unlock must not change ACL") },
+        )
+        .await;
+        assert!(result.is_err());
+        let calls = RefCell::new(0);
+        let result = ensure_credential_access(
+            || async {
+                *calls.borrow_mut() += 1;
+                Ok(PermissionStatus::NeedsInteraction)
+            },
+            || async { Ok(false) },
+            || async {
+                crate::infra::error::bail!(Message::KeychainAuthorizeFailed { status: -128 })
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(*calls.borrow(), 1);
+    }
 }

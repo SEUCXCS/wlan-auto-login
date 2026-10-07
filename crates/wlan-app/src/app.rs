@@ -10,14 +10,6 @@ use crate::{infra::logging, infra::paths as config, infra::scope, infra::shutdow
 use clap::Parser;
 
 pub(crate) fn run() -> std::process::ExitCode {
-    #[cfg(target_os = "macos")]
-    let args = if std::env::args_os().len() == 1 && crate::system::macos::bundle::current().is_ok()
-    {
-        cli::Cli::parse_from([crate::infra::identity::APP_NAME, "macos-host"])
-    } else {
-        cli::Cli::parse()
-    };
-    #[cfg(not(target_os = "macos"))]
     let args = cli::Cli::parse();
     #[cfg(windows)]
     if matches!(
@@ -32,6 +24,24 @@ pub(crate) fn run() -> std::process::ExitCode {
     }
     match tokio::runtime::Runtime::new() {
         Ok(runtime) => {
+            #[cfg(target_os = "macos")]
+            let gui = unsafe { libc::geteuid() } != 0
+                && (matches!(args.command, cli::Command::MacosHost { .. })
+                    || (matches!(
+                        args.command,
+                        cli::Command::Daemon {
+                            command: None,
+                            background: true,
+                            ..
+                        }
+                    ) && std::env::var_os("WLANLOGIN_MANAGED").is_some_and(|v| v == "1")));
+            #[cfg(target_os = "macos")]
+            let result = if gui {
+                crate::system::macos::host::run_gui(&runtime, entry(args))
+            } else {
+                runtime.block_on(entry(args))
+            };
+            #[cfg(not(target_os = "macos"))]
             let result = runtime.block_on(entry(args));
             runtime.shutdown_timeout(shutdown::RUNTIME_GRACE);
             result
