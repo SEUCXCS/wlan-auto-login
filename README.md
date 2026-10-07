@@ -1,17 +1,304 @@
-# WLAN Auto Login
+# CXXY WLAN Auto Login
 
-面向东南大学成贤学院 `Student_CX` 校园 Wi-Fi 的 Rust 登录工具，支持 CLI、终端交互界面、系统凭据存储和后台自动登录。
+面向东南大学成贤学院 `Student_CX` 校园 Wi-Fi 的自动登录工具，支持 Linux、macOS 和 Windows。可通过命令行或终端交互界面登录、注销、保存凭据，并安装后台服务，在连接校园 Wi-Fi 后自动检查和恢复认证。
 
-- 登录、注销、状态识别与重复登录保护。
-- Linux、macOS、Windows 原生 Wi-Fi 事件与服务管理适配。
-- 用户与系统两种安装范围，各自保存配置、凭据和运行状态。
-- 离线预配置、自动重试、服务日志查看与完整卸载。
+账号密码保存在所选安装范围的系统凭据存储中。用户与系统安装相互独立，支持离线预配置、自动重试、日志查看和卸载清理。
 
-本仓库是一个 Cargo workspace：`crates/wlan-api`（包名 `wlanlogin-lib`）负责门户协议，`crates/wlan-app`（包名 `wlanlogin-cli`，可执行文件名 `wlanlogin`）负责应用与系统集成。
+[下载 Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) · [问题反馈](https://github.com/SEUCXCS/wlan-auto-login/issues) · [构建教程](#构建教程) · [详细使用教程](#详细使用教程) · [贡献指南](CONTRIBUTING.md) · [MIT 许可证](LICENSE)
 
-[构建](#构建) · [使用](#使用) · [后台自动登录](#后台自动登录) · [日志与排障](#日志与排障) · [项目结构](#项目结构) · [参与贡献](#参与贡献)
+---
 
-## 平台与依赖
+## 快速使用
+
+Windows 和 Linux 使用 Releases 中的二进制文件；MacOS 需要自行构建并签名，或对发布的预构建 `.app` 在本机签名。下载时选择与系统和 CPU 架构匹配的附件；可用平台与文件以实际发布内容为准。
+
+- [Linux](#quick-linux)
+- [MacOS](#quick-macos)
+- [Windows](#quick-windows)
+
+<a id="quick-linux"></a>
+
+### Linux
+
+运行需要 NetworkManager、D-Bus 和 systemd。用户范围保存凭据还需要 Secret Service 实现，例如已解锁的 GNOME Keyring；系统范围默认使用 `systemd-creds` 加密凭据，需要支持该命令的 systemd。
+
+从 [Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) 下载适合当前架构的 Linux 二进制文件，解压后得到 `wlanlogin`。若没有对应附件，参照 [Linux 构建教程](#build-linux)。在包含该文件的目录执行：
+
+```sh
+mkdir -p "$HOME/.local/bin"
+install -m 0755 ./wlanlogin "$HOME/.local/bin/wlanlogin"
+export PATH="$HOME/.local/bin:$PATH"
+
+wlanlogin --version
+wlanlogin --user install
+wlanlogin --user daemon status
+```
+
+`install` 会引导输入账号、密码和线路，保存凭据并安装、启动用户后台服务。未连接 `Student_CX` 时也可以提前配置。要在新终端中使用命令，将 `export PATH="$HOME/.local/bin:$PATH"` 加入所用 shell 的配置文件，例如 Bash 的 `~/.bashrc` 或 Zsh 的 `~/.zshrc`。
+
+需要随开机启动的系统服务时，改用管理员权限执行；用户与系统两种安装范围选择一种即可：
+
+```sh
+sudo "$HOME/.local/bin/wlanlogin" --system install
+sudo "$HOME/.local/bin/wlanlogin" --system daemon status
+```
+
+安装范围、凭据存储和旧版 systemd 的替代方案见 [安装与后台自动登录](#安装与后台自动登录)。
+
+<a id="quick-macos"></a>
+
+### MacOS
+
+需要完整的 `wlanlogin.app`，仅复制裸二进制文件不足以完成 Wi-Fi 定位授权。应用声明的最低系统版本为 macOS 13.0，预构建附件的兼容范围以发布说明为准。
+
+#### 1. 获取应用包
+
+两种方式任选其一：
+
+- **自行构建**：前往 [MacOS 构建教程](#build-macos)，运行 `cargo xtask bundle macos` 打包。构建章节提供返回本节的链接。
+- **给预构建应用签名**：若 [Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) 提供未使用开发证书签名的 `.app`，下载与 Apple Silicon（`arm64`）或 Intel（`x86_64`）匹配的附件，解压后将 `wlanlogin.app` 放到 `~/Downloads/`，然后执行：
+
+```sh
+export WLANLOGIN_APP="$HOME/Downloads/wlanlogin.app"
+```
+
+预构建应用可以在本机重新签名，无需重新编译 Rust。它可能完全未签名，也可能带有 ad-hoc 签名；下文的 `codesign --force` 适用于这两种情况。没有适合的预构建附件时使用源码构建。
+
+<a id="macos-signing"></a>
+
+#### 2. 创建本地代码签名证书
+
+本地使用可以创建自签名证书，无需 Apple Developer 付费账号。已有固定的代码签名证书时可直接使用，并在下文替换证书名称。
+
+1. 打开“钥匙串访问”（可通过 Spotlight 搜索），选择“登录”钥匙串。
+2. 从菜单选择“钥匙串访问 → 证书助理 → 创建证书”。
+3. 名称填写 `wlanlogin-dev`，身份类型选择“自签名根证书”，证书类型选择“代码签名（Code Signing）”。按向导完成创建，将证书存入“登录”钥匙串。
+4. 打开该证书的详情，在“信任”中将“代码签名”设为“始终信任”，按系统提示输入密码保存。
+5. 确认证书展开后包含对应的私钥，并检查可用身份：
+
+```sh
+security find-identity -v -p codesigning
+```
+
+输出应包含 `wlanlogin-dev`。若显示 `0 valid identities found`，检查证书用途、信任设置、有效期、私钥是否存在，以及“登录”钥匙串是否已解锁。证书和私钥应保留供以后升级签名使用；仅保留同名证书而重新生成密钥，不能保持原来的签名身份。
+
+#### 3. 签名并验证
+
+先安装 Xcode Command Line Tools（已有时跳过）：
+
+```sh
+xcode-select --install
+```
+
+确认 `WLANLOGIN_APP` 指向上一步获取或构建的应用包，再签名：
+
+```sh
+codesign --force --sign "wlanlogin-dev" \
+  --identifier dev.cxcs.tools.wlanlogin \
+  --options runtime --timestamp=none "$WLANLOGIN_APP"
+
+codesign --verify --deep --strict --verbose=2 "$WLANLOGIN_APP"
+codesign -dv --verbose=4 "$WLANLOGIN_APP"
+```
+
+系统可能询问是否允许 `codesign` 访问证书私钥；确认使用的是刚创建的证书后授权。这里禁用时间戳，使本地自签名不依赖 Apple 时间戳服务。固定证书有助于升级时保持定位和钥匙串授权身份，但不保证系统永远不再询问。
+
+本地签名不等同于 Developer ID 签名和 Apple 公证。若下载的应用仍被 Gatekeeper 阻止启动，在确认来源后前往“系统设置 → 隐私与安全性”，按系统提示选择“仍要打开”。
+
+#### 4. 复制应用并添加命令入口
+
+以下两种放置方式选择一种。macOS 的应用目录名称是 `Applications`。
+
+**仅供当前用户使用**，复制到 `~/Applications` 并链接到 `~/.local/bin`：
+
+```sh
+mkdir -p "$HOME/Applications" "$HOME/.local/bin"
+ditto "$WLANLOGIN_APP" "$HOME/Applications/wlanlogin.app"
+ln -sf "$HOME/Applications/wlanlogin.app/Contents/MacOS/wlanlogin" \
+  "$HOME/.local/bin/wlanlogin"
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+将 `export PATH="$HOME/.local/bin:$PATH"` 加入 `~/.zshrc`，以便新终端也能找到命令。
+
+**供本机用户使用**，复制到 `/Applications` 并链接到 `/usr/local/bin`：
+
+```sh
+sudo ditto "$WLANLOGIN_APP" "/Applications/wlanlogin.app"
+sudo mkdir -p /usr/local/bin
+sudo ln -sf "/Applications/wlanlogin.app/Contents/MacOS/wlanlogin" \
+  /usr/local/bin/wlanlogin
+export PATH="/usr/local/bin:$PATH"
+```
+
+若 `/usr/local/bin` 尚未在 PATH 中，将上述 PATH 设置加入 `~/.zshrc`。先完成签名再复制，复制后不要修改包内文件。使用包内程序的符号链接，可以让 CLI 和 Wi-Fi 授权宿主共用完整应用包。
+
+#### 5. 授权并安装后台服务
+
+在已登录桌面的普通终端中执行：
+
+```sh
+wlanlogin --version
+wlanlogin --user install
+wlanlogin --user daemon status
+```
+
+按提示填写校园网账号、密码和线路，并完成授权：
+
+- **定位服务**：系统会按需将 WLAN Login 的授权宿主带到前台，询问是否允许定位。允许后才能读取当前 Wi-Fi 名称。程序只在识别到 `Student_CX` 时向校园网提交认证。
+- **钥匙串访问**：保存或读取凭据时，系统可能要求解锁钥匙串、输入 macOS 登录密码或确认访问。核对请求来自 `wlanlogin` 后允许；希望后台持续读取时，按弹窗提供的选项选择“始终允许”。
+- **后台活动**：如果系统提示后台项目，确认允许 WLAN Login 在后台运行；也可在系统设置中检查“登录项与扩展”中的后台活动设置，名称因 macOS 版本而异。
+
+应用包放在 `/Applications` 并不表示已安装系统服务。需要系统范围时，使用 `sudo wlanlogin --system install`；若命令仅链接到 `~/.local/bin`，使用 `sudo "$HOME/.local/bin/wlanlogin" --system install`。系统服务也需要当前桌面用户完成定位授权，root 不能绕过该权限。
+
+`install` 会将完整应用包复制到所选范围的 Application Support 目录，再注册并启动后台服务。包内程序仍需指定子命令；双击 `.app` 或无参数运行不会自动完成安装。
+
+#### 不小心拒绝了权限怎么办
+
+**定位权限**：打开“系统设置 → 隐私与安全性 → 定位服务”，确认全局定位服务已开启，并启用 WLAN Login。此前已允许或拒绝时，重复运行命令不会再次弹出首次授权提示。若列表尚无该应用，先在桌面会话的终端运行一次交互式 `wlanlogin --user login`，让程序按需申请权限，再检查列表。设备受管理策略限制时，需要管理员解除限制。
+
+**钥匙串访问**：解锁“登录”钥匙串，在桌面会话的终端中重新运行同一范围的 `install` 并允许访问；系统范围使用 sudo。仍被拒绝时，在“钥匙串访问”中定位本程序的密码条目，打开“访问控制”，核对并添加实际安装的 `Contents/MacOS/wlanlogin` 程序，保存后重新安装。用户条目的服务名为 `dev.cxcs.tools.wlanlogin`，系统条目为 `dev.cxcs.tools.wlanlogin.system`，账户均为 `saved-login`；系统条目位于“系统”钥匙串，修改可能要求管理员密码。安装程序的路径见 [数据与安装目录](#数据与安装目录)。
+
+后台不会主动弹出定位或钥匙串授权框，`--non-interactive` 也不会申请授权。修复后重新执行同一范围的 `install`；服务已安装时也可执行 `daemon restart`，再用 `daemon logs -f` 检查。读取失败不会自动删除保存的凭据。
+
+<a id="quick-windows"></a>
+
+### Windows
+
+从 [Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) 下载适合当前架构的 Windows 二进制文件，解压后得到 `wlanlogin.exe`。若没有对应附件，参照 [Windows 构建教程](#build-windows)。
+
+在该文件所在目录打开普通 PowerShell，安装用户后台任务：
+
+```powershell
+.\wlanlogin.exe --version
+.\wlanlogin.exe --user install
+.\wlanlogin.exe --user daemon status
+```
+
+按提示填写账号、密码和线路。用户凭据保存到 Credential Manager，后台任务在当前用户登录后启动。需要随开机启动的系统服务时，改用“以管理员身份运行”的 PowerShell，在程序目录执行：
+
+```powershell
+.\wlanlogin.exe --system install
+.\wlanlogin.exe --system daemon status
+```
+
+系统范围使用机器 DPAPI 保存凭据。两种安装范围选择一种即可；要在任意目录运行命令，将 `wlanlogin.exe` 所在目录加入对应的用户或系统 PATH，再打开新终端。
+
+## 构建教程
+
+项目使用 Cargo workspace、Rust 2024 edition 和 resolver 3。先安装 [Rust 与 Cargo](https://www.rust-lang.org/tools/install)、Git 和各平台所需的原生工具。仓库未固定 Rust 工具链，也未声明 MSRV；edition 的最低版本不能代表整个依赖树的最低版本。
+
+以下构建均在仓库根目录执行，使用已提交的 `Cargo.lock`，不需要手动更新依赖。
+
+<a id="build-linux"></a>
+
+### Linux
+
+构建需要 C 工具链、`pkg-config` 和 D-Bus 开发库。Debian / Ubuntu 可安装：
+
+```sh
+sudo apt update
+sudo apt install git build-essential pkg-config libdbus-1-dev
+```
+
+其他发行版安装对应的软件包；运行依赖见 [Linux 快速使用](#quick-linux)。Rust 安装完成后，构建应用：
+
+```sh
+git clone https://github.com/SEUCXCS/wlan-auto-login.git
+cd wlan-auto-login
+cargo build --release --locked -p wlanlogin-cli --bin wlanlogin
+```
+
+产物为 `target/release/wlanlogin`。可在该目录执行快速使用中的复制步骤，或在仓库根目录执行：
+
+```sh
+mkdir -p "$HOME/.local/bin"
+install -m 0755 target/release/wlanlogin "$HOME/.local/bin/wlanlogin"
+```
+
+[返回 Linux 快速使用](#quick-linux)，继续配置 PATH 和安装服务。
+
+<a id="build-macos"></a>
+
+### MacOS
+
+构建需要 macOS、Xcode Command Line Tools 和原生 Rust 工具链。先安装命令行工具：
+
+```sh
+xcode-select --install
+```
+
+安装 Rust 后，在终端克隆并打包：
+
+```sh
+git clone https://github.com/SEUCXCS/wlan-auto-login.git
+cd wlan-auto-login
+cargo xtask bundle macos --codesign-identity=-
+export WLANLOGIN_APP="$PWD/target/release/bundle/wlanlogin.app"
+```
+
+该命令构建 `wlanlogin-cli` 的 `wlanlogin` 程序，生成 plist 并验证应用包，默认产物为 `target/release/bundle/wlanlogin.app`。这里先生成 ad-hoc 签名包，随后用本地固定证书重新签名；`cargo build` 只生成可执行文件，不能替代这一步。
+
+[返回 MacOS 快速使用：创建证书、签名与安装](#macos-signing)。后续命令使用上面设置的 `WLANLOGIN_APP`。
+
+打包也支持指定构建配置、架构和输出目录，例如：
+
+```sh
+rustup target add aarch64-apple-darwin
+cargo xtask bundle macos --codesign-identity=- \
+  --profile dev --target aarch64-apple-darwin
+export WLANLOGIN_APP="$PWD/target/aarch64-apple-darwin/debug/bundle/wlanlogin.app"
+```
+
+Apple Silicon 的 target 为 `aarch64-apple-darwin`，Intel 为 `x86_64-apple-darwin`。指定 `--target` 后，产物路径增加 target 层级；`dev` 配置对应 `debug` 目录。还可使用 `--target-dir` 或 `CARGO_TARGET_DIR` 指定输出根目录，并以 xtask 输出的 `Bundle:` 路径为准。
+
+已有适用于发布的 Developer ID Application 证书时，可在打包时直接指定：
+
+```sh
+cargo xtask bundle macos --codesign-identity "Developer ID Application: YOUR NAME (TEAMID)"
+```
+
+签名身份优先使用 `--codesign-identity`，其次为 `CODESIGN_IDENTITY`，默认是 `-`（ad-hoc）。显式使用 `--codesign-identity=-` 可覆盖环境变量。xtask 使用证书时会开启 hardened runtime 并请求 Apple 时间戳；本地自签名证书可能无法取得时间戳，建议采用上文先打包再 `--timestamp=none` 签名的流程。打包失败不会降级签名，也不会替换此前已验证的 bundle；打包不包含 Apple 公证或后台服务安装。
+
+<a id="build-windows"></a>
+
+### Windows
+
+推荐使用 Rust 的 MSVC 工具链。安装 Git、[Rust 与 Cargo](https://www.rust-lang.org/tools/install)，以及 [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)；在 Build Tools 安装器中选择“使用 C++ 的桌面开发”，并安装对应架构的 MSVC 编译工具和 Windows SDK。
+
+在能找到 MSVC 工具的 PowerShell 或 Developer PowerShell 中执行：
+
+```powershell
+git clone https://github.com/SEUCXCS/wlan-auto-login.git
+cd wlan-auto-login
+cargo build --release --locked -p wlanlogin-cli --bin wlanlogin
+```
+
+默认产物为 `target\release\wlanlogin.exe`。如果选择 GNU target，需另行安装对应的 MinGW 工具链；仅添加 Rust target 不会安装原生链接工具。
+
+[返回 Windows 快速使用](#quick-windows)，在 `target\release` 目录运行安装命令，或将程序复制到固定目录并加入 PATH。
+
+## 详细使用教程
+
+以下示例使用已加入 PATH 的 `wlanlogin`。Windows 未配置 PATH 时，在程序目录将命令替换为 `.\wlanlogin.exe`。参数详情可通过 `wlanlogin --help` 和各子命令的 `--help` 查看。
+
+### 安装与后台自动登录
+
+```sh
+wlanlogin --user install
+wlanlogin --user daemon status
+```
+
+`install` 会保存后台所需的凭据并安装、启动服务。缺少已保存的凭据时，进入登录流程并强制开启 Remember me；不在 `Student_CX` 时可先离线保存，接入校园 Wi-Fi 后再认证。
+
+| 安装范围 | 启动时机 | 操作方式 |
+| --- | --- | --- |
+| 用户 `--user` | 当前用户登录后 | 普通终端执行 `wlanlogin --user install` |
+| 系统 `--system` | 随开机启动 | Linux / macOS 使用 `sudo wlanlogin --system install`；Windows 使用管理员终端 |
+
+普通终端默认选择用户范围，sudo／管理员终端默认选择系统范围。用户范围需要普通用户会话，系统服务的登录、注销及启停需要管理员权限。若 sudo 找不到用户 PATH 中的程序，使用完整路径，例如 `sudo "$HOME/.local/bin/wlanlogin" --system install`。
+
+两个范围分别保存配置、凭据和运行状态；切换范围前先卸载原服务，再在新范围保存凭据并安装。程序会安装后台专用副本，之后更新原始 CLI 文件不会自动升级正在运行的服务。
 
 | 平台 | Wi-Fi 识别 | 用户服务 / 系统服务 | 用户凭据 / 系统凭据 |
 | --- | --- | --- | --- |
@@ -19,248 +306,180 @@
 | macOS | CoreWLAN、SystemConfiguration | LaunchAgent / LaunchDaemon | 用户 Keychain / System Keychain |
 | Windows | Native Wi-Fi API | Task Scheduler / Service Control Manager | Credential Manager / 机器 DPAPI |
 
-Linux 构建需要 C 工具链、`pkg-config` 和 D-Bus 开发库；例如 Debian / Ubuntu 的 `build-essential pkg-config libdbus-1-dev`。运行需要 NetworkManager；用户凭据保存需要 Secret Service 实现（如 GNOME Keyring），系统范围默认需要支持 `systemd-creds` 的 systemd。macOS 构建需要 Xcode Command Line Tools；Windows 构建需要与所选 Rust target 匹配的工具链。
-
-macOS 的 SSID 读取和 Keychain 访问受系统权限限制。交互式登录、注销或安装会按需启动签名 `.app` 中的 Wi-Fi 宿主；位置权限尚未决定时，先将宿主带到前台并确认激活，再请求系统授权，无需单独执行权限命令。已有的允许或拒绝不会再次弹窗；拒绝后需在系统设置的“隐私与安全性 → 定位服务”中修改。日志记录申请前后的权限状态，并区分拒绝、全局定位关闭、前台激活失败或超时、授权决定超时。后台及 `--non-interactive` 不主动请求授权；无法识别 SSID 时保留离线配置能力，不提交门户认证。内部 permission 接口保留可扩展的 Location 与 Keychain 描述，Keychain 按本程序的凭据条目授权，没有全局“钥匙串权限”；交互式前台操作允许系统请求解锁或确认访问，后台静默读取。诊断区分无凭据、需要交互、拒绝和不可用；读取失败不会删除原条目。Linux、Windows 的权限描述列表为空，不代表绕过已有的系统访问控制。
-
-## 构建
-
-安装 Rust 与 Cargo 后，在仓库根目录构建。项目使用 Rust 2024 edition，未固定工具链，也未声明 MSRV；不要把 edition 的最低版本当作整个依赖树的最低版本。此前架构重构在 Rust/Cargo `1.100.0-nightly` 上验证，这不是强制 nightly 的要求。
+Linux 旧系统可显式改用受文件权限保护的明文凭据：
 
 ```sh
-git clone https://github.com/SEUCXCS/wlan-auto-login.git
-cd wlan-auto-login
-cargo build --release --locked --workspace
+sudo wlanlogin --system install --credential-store protected-file
 ```
 
-生成的程序为 `target/release/wlanlogin`，Windows 下带 `.exe` 后缀。将程序放入 `PATH`，即可使用以下命令。
+该模式仅适用于 Linux 系统范围，凭据以**明文**保存在仅管理员可读的文件中。默认加密模式失败时不会自动降级；macOS 和 Windows 不支持此选项。
 
-macOS 应用打包使用 xtask（需要 macOS 和 Xcode Command Line Tools）：
+macOS 安装会校验完整应用包，替换旧副本后检查实际安装程序的凭据读取与 Wi-Fi 能力，再注册、启动服务。失败时尝试恢复旧安装；回滚未完成时会保留恢复目录并报告位置。系统服务仍从当前活动桌面用户的授权宿主获取 Wi-Fi 状态；尚无桌面用户、用户切换或定位未授权时，会等待有效状态。无桌面会话的非交互系统安装，需要以后在登录用户的终端中通过 `sudo wlanlogin --system login` 完成定位授权。
 
-```sh
-cargo xtask bundle macos
-cargo xtask bundle macos --codesign-identity wlanlogin-dev
-CODESIGN_IDENTITY=wlanlogin-dev cargo xtask bundle macos
-cargo xtask bundle macos --profile dev --target aarch64-apple-darwin
-```
-
-`bundle macos` 自动编译 `wlanlogin-cli` 的 `wlanlogin` 程序，默认 release，产物在相应构建目录的 `bundle/wlanlogin.app`。支持 `--profile`、`--target`、`--target-dir` 和 `CARGO_TARGET_DIR`；普通编译继续使用 `cargo build`，没有 `xtask build` 命令。
-
-签名身份优先使用 `--codesign-identity`，其次为 `CODESIGN_IDENTITY`，默认 `-`（ad-hoc）。显式使用 `--codesign-identity=-` 可覆盖环境变量。ad-hoc 签名随构建变化，位置和钥匙串授权可能需要重新确认。可先在“钥匙串访问”的证书助理中创建用途为 Code Signing 的固定开发证书，例如 `wlanlogin-dev`；发布使用 Developer ID Application 证书。使用证书时开启 hardened runtime 和时间戳。打包会检查 plist 和签名，签名失败不会降级为 ad-hoc；新产物验证成功后才替换旧 bundle。打包不包含公证或安装操作。
-
-打包后可运行 `target/release/bundle/wlanlogin.app/Contents/MacOS/wlanlogin install`（系统范围加 `sudo`）；相邻的 `target/release/wlanlogin install` 也会查找 `bundle/wlanlogin.app`。`cargo build` 只编译可执行文件，不能替代位置权限所需的签名应用包。`install` 本身包含原有的凭据保存和按需校园网登录流程。
-
-包内与包外的 `wlanlogin` 使用相同命令规则，都需要指定子命令；无参数不会启动 daemon 或 Wi-Fi 宿主。Wi-Fi 授权由 `install` / `login` / `logout` 按需完成，无需手动启动辅助程序。授权绑定应用身份，但当前网络状态仍由登录用户会话中的内部宿主实时读取；安装成功后，服务会自动使用这项能力。
-
-安装保存凭据时，查找、更新和授权条目不会为了取得条目引用而读取密码，也不会在保存接口中重复读取原密码。新凭据在创建时设置当前程序和已有安装的读取授权；更新保留原访问控制。安装先让实际目标程序静默检查读取能力，已能读取就跳过权限修改；钥匙串锁定时先解锁并重新检查。确需新增授权时，仅补充密码读取权限，保留所有者及其他权限，随后再次静默验证。因此相同签名身份且钥匙串已解锁时，重复安装不会再触发安装流程的权限修改确认。首次授权、签名身份变化或钥匙串锁定时，系统仍可能要求确认或解锁。安装后的读取检查和 daemon 始终禁用交互。
-
-macOS 的后台服务关联 `wlanlogin.app` 的应用身份，使系统设置中的后台活动归属 WLAN Login。用户服务仍由 Launch Services 启动；系统可能保留先前 `open` 的历史记录，新服务的显示名称由 macOS 根据应用信息决定。
-
-安装会校验包标识与签名、暂存整个包，停止旧实例后替换，再由安装后的程序静默检查所选范围的凭据读取能力，按需解锁或补充授权后复查。随后准备新安装身份的 Wi-Fi 能力，交互式安装会按需申请定位权限，再注册服务并启动。用户 LaunchAgent 通过 Launch Services 启动应用，系统 LaunchDaemon 直接运行包内程序；确认托管实例就绪后才报告成功。失败会尝试恢复旧包、服务定义和凭据访问；回滚失败保留恢复目录并报告位置。升级时重新运行新版本的 `install`。固定证书有助于保持权限身份；ad-hoc 更新可能再次请求授权。
-
-系统 daemon 的 root 身份不能绕过位置权限。它从活动控制台用户的签名 Wi-Fi 宿主获取网络状态，并验证 UID 和进程签名；宿主不接触校园网凭据。开机尚无 GUI 用户、用户切换、定位未授权时，系统服务等待有效网络状态，不使用旧 SSID 自动认证。无 GUI 会话时可以非交互安装系统服务，但仍须以后在登录用户会话中通过交互式 `sudo wlanlogin --system login` 按需授权。后台不会弹窗；手动前台 daemon 也不会申请位置权限。
-
-
-### 从旧名称升级
-
-本次改名不自动迁移旧版的服务、配置或凭据，也不提供旧命令和旧环境变量别名。升级前先使用旧版 `cxxy-wlanlogin-cli`，按原安装范围卸载服务；需要清除旧配置和凭据时加 `--purge`。普通卸载保留的旧凭据不会被新版读取或清理。
+### 登录、修改账号与保存凭据
 
 ```sh
-cxxy-wlanlogin-cli --user uninstall --purge        # 原用户范围安装
-sudo cxxy-wlanlogin-cli --system uninstall --purge # 原系统范围安装，Linux / macOS
-```
-
-Windows 原系统范围安装，在管理员终端执行 `cxxy-wlanlogin-cli --system uninstall --purge`。以上命令按实际安装范围选择；没有安装服务但保存过旧凭据时，也可用旧版在对应范围执行 `uninstall --purge`。保留旧版程序直到清理完成，避免旧服务与新版同时运行。
-
-之后安装新版，在同一范围执行 `wlanlogin login --interactive --remember-me` 重新保存账号、密码和线路，再执行 `wlanlogin install`。系统范围为两条命令都添加 `--system` 并使用 sudo／管理员终端。自动化脚本同步改用 `wlanlogin` 和 `WLANLOGIN_USERNAME`、`WLANLOGIN_PASSWORD`、`WLANLOGIN_LINE`。
-
-平台验证命令见 [CONTRIBUTING.md](CONTRIBUTING.md#测试与验证)。交叉编译检查覆盖目标平台的代码与测试编译，不代表对应平台的运行验证。
-
-## 使用
-
-```sh
-wlanlogin login                         # 使用已保存的凭据，或打开交互界面
+wlanlogin login                         # 使用已保存凭据，缺少时打开交互界面
 wlanlogin login --remember-me           # 登录并保存账号密码
-wlanlogin login --interactive           # 修改账号、密码或线路
-wlanlogin logout                        # 注销，并暂停当前连接的自动登录
-wlanlogin logout --forget               # 注销、停止后台进程并删除所选范围的凭据
+wlanlogin login --interactive           # 打开表单，修改账号、密码或线路
+wlanlogin login --interactive --remember-me
 ```
 
-交互界面支持输入账号密码、选择线路和勾选 Remember me。Tab 切换控件，方向键选择线路，空格切换复选框，Esc 取消。
+表单支持账号、密码、线路和 Remember me。Tab 切换控件，方向键选择线路，空格切换复选框，Esc 取消。只有识别到 `Student_CX` 时才执行校园网认证；其他网络或无法读取 SSID 时保留离线保存能力。
 
-当前设备已认证在线时，`login` 只提示已在线，不重复提交凭据，也不声称本次提供的凭据或线路已通过认证。修改账号或线路需要先 `logout` 再登录；`--remember-me` 仍可保存凭据供后续使用。
+已认证在线时，`login` 只提示已在线，不重复提交凭据；本次提供的账号和线路并不因此视为通过认证。需要切换账号或线路时，先 `logout` 再登录；`--remember-me` 仍可保存新凭据供后续使用。系统范围的操作也要使用相同范围和管理员权限。
 
-登录前会检查 Wi-Fi：连接 `Student_CX` 时执行认证；不在该网络或无法识别 SSID 时，仅保存凭据，方便提前配置。用户凭据通过系统密钥管理器保存。
-
-也可以通过参数或环境变量提供凭据，跳过交互界面：
+### 参数与自动化
 
 | 参数 | 环境变量 | 说明 |
 | --- | --- | --- |
-| `--username` / `-u` | `WLANLOGIN_USERNAME` | 账号 |
-| `--password` / `-p` | `WLANLOGIN_PASSWORD` | 密码；也可用 `--password-stdin` 从标准输入读取 |
+| `--username` / `-u` | `WLANLOGIN_USERNAME` | 校园网账号 |
+| `--password` / `-p` | `WLANLOGIN_PASSWORD` | 密码；也可用 `--password-stdin` 读取标准输入的一行 |
 | `--line` | `WLANLOGIN_LINE` | `free1`（免费 1）、`free2`（免费 2）、`campus`（内网） |
-| `--non-interactive` | — | 凭据不足时直接报错 |
+| `--remember-me` | — | 保存凭据 |
+| `--interactive` | — | 强制打开终端表单 |
+| `--non-interactive` | — | 凭据不足时报错，不打开表单 |
+| `--credential-store` | — | Linux 系统凭据存储模式：`native` 或 `protected-file` |
 
-自动化场景优先使用 `--password-stdin`；直接在命令行传入密码可能进入 shell 历史或进程参数列表。
+自动化时优先将密码通过标准输入传入，并选择 `--non-interactive`。`--password` 可能将密码留在 shell 历史或进程参数列表中。macOS 的非交互操作和后台服务不会主动请求系统授权，首次使用前应完成交互式授权。
 
-## 后台自动登录
+### 管理后台服务
 
 ```sh
-wlanlogin install          # 安装并启动后台服务
-wlanlogin daemon status    # 查看安装与运行状态
-wlanlogin daemon logs      # 查看最近 100 行服务日志
-wlanlogin daemon logs -f   # 持续查看新日志，Ctrl+C 退出
-wlanlogin daemon start     # 启动服务
-wlanlogin daemon stop      # 停止服务，保留自动启动设置
-wlanlogin daemon restart   # 重启服务
-wlanlogin uninstall        # 卸载服务，保留已保存的凭据
-wlanlogin uninstall --purge # 卸载服务并清理所选范围的应用数据和凭据
+wlanlogin daemon status       # 查看安装、版本与运行状态
+wlanlogin daemon start        # 启动已安装服务
+wlanlogin daemon stop         # 停止服务，保留自动启动设置
+wlanlogin daemon restart      # 重启服务
 ```
 
-`daemon logs -n 200` 可指定历史日志行数，`-n 0 -f` 只查看新日志。新安装的 Linux 服务、macOS 与 Windows 服务均读取应用配置目录中的 `daemon.log`；同一应用 ID 下没有应用日志标记的 Linux 服务定义仍读取 journal。改名前的旧服务按上文升级步骤卸载，新版不接管旧名称的服务。按 `--user` / `--system` 选择范围；读取系统日志可能需要 sudo 或管理员权限。未安装时会报错，服务停止后仍可查看已有日志。
+`start`、`stop`、`restart` 只管理已安装服务，未安装时会报错。直接运行 `wlanlogin daemon` 会在当前进程运行自动登录循环，需要提前在同一范围保存凭据；macOS 的手动前台 daemon 也不会申请定位权限。
 
-`install` 缺少已保存凭据时会先进入登录流程，强制开启 Remember me，并在交互界面显示黄色提示。不在 `Student_CX` 时可先保存凭据并完成安装。
+后台只在连接 `Student_CX` 且门户明确返回离线时提交认证，未知状态不自动登录。确认在线后每 4 分钟检查一次，登录成功后先在 30 秒后确认状态；新的 Wi-Fi 会话立即触发检查。首次取得状态前的临时网络错误按 1、2、4 秒最多快速重试三次，之后按 30、60、120 秒退避，最多等待 2 分钟。
 
-- **普通用户安装**：用户登录操作系统后启动。
-- **sudo／管理员安装**：安装系统服务，随开机启动。Linux、macOS 使用 `sudo wlanlogin install`，Windows 使用管理员终端。
+手动注销会暂停当前连接的自动登录。恢复时需在同一范围手动登录，或重新接入目标 Wi-Fi；重启服务会保留同一连接的暂停状态。
 
-可用全局参数 `--user` / `--system` 指定范围；系统服务的登录、注销及启停也需要管理员权限。两个范围的凭据独立，切换安装范围前需先卸载原服务。系统凭据在 Linux 使用 `systemd-creds` 加密，在 macOS 使用 System Keychain，在 Windows 使用机器 DPAPI；Linux 系统安装需要支持加密凭据的 systemd。
+### 日志与排障
 
-Linux 旧系统可显式使用 `--credential-store protected-file`，例如 `sudo wlanlogin --system install --credential-store protected-file`。此模式以仅管理员可读的文件权限保护**明文**凭据；默认加密模式失败时不会自动降级。该选项仅用于系统范围，macOS / Windows 不支持此明文模式。
+```sh
+wlanlogin daemon logs          # 最近 100 行
+wlanlogin daemon logs -n 200   # 最近 200 行
+wlanlogin daemon logs -f       # 持续查看，Ctrl+C 退出
+wlanlogin daemon logs -n 0 -f  # 只查看新日志
+```
 
-后台仅在连接 `Student_CX` 时访问门户，使用 `chkstatus` 的 `result=1` / `0` 判断在线 / 离线，确认离线后登录；未知状态不自动提交登录。确认在线后每 4 分钟检查一次，登录成功后先在 30 秒后确认状态；新 Wi-Fi 会话仍会立即触发检查。首次取得状态前遇到临时网络错误时，按 1、2、4 秒最多快速重试三次，之后进入 30、60、120 秒的常规退避，最多等待 2 分钟；重试到期直接触发，不再等待下一个检查周期。手动注销后，需在同一范围手动登录或重新接入目标 Wi-Fi 才能恢复自动登录；重启 daemon 会保留同一连接的暂停状态。
+日志读取所选范围配置目录中的 `daemon.log`；同一应用 ID 下的旧 Linux 服务若未配置应用日志，则读取 journal。服务停止后仍可查看已有日志，未安装时会报错。系统日志可能需要 sudo 或管理员权限。
 
-`retry_after_secs` 表示下次重新检查的等待时间，不保证届时一定提交登录。默认日志会记录重试开始，并在首次检查、结果变化或错误恢复后输出 `Network check completed`：`outcome` 区分 `online`（已在线）、`waiting_for_target_wifi`（未识别到目标 Wi-Fi）、`automatic_login_paused`（手动注销后暂停）、`unknown_portal_state`（门户状态未知）等，`next_check_secs` 表示下次计划检查的等待时间。相同结果不会每次轮询重复输出。macOS 已连接但无法读取 SSID 时会明确报错并重试，不会因 BSSID 同时不可读而误判为未连接；Wi-Fi 宿主通信错误也会标明来源。
+日志使用英文事件文本、UTC RFC 3339 时间和结构化字段，默认级别为 `info`。前台诊断可使用：
 
-直接运行 `wlanlogin daemon` 会在当前进程运行后台循环，需要事先在同一范围保存凭据。`start`、`stop`、`restart` 仅管理已安装服务，未安装时会报错。
+```sh
+RUST_LOG=wlanlogin=debug wlanlogin --user daemon
+```
 
-更多参数见 `wlanlogin --help` 和各子命令的 `--help`。
+该环境变量只影响本次启动的进程，已安装服务需要在服务环境中配置。后台启动时若日志已超过 2 MiB，会清空该文件；不提供持续轮转或历史归档。
 
-### 应用标识与目录
+`retry_after_secs` 表示下次重新检查的等待时间，不保证届时提交登录。`Network check completed` 的 `outcome` 表示检查结果，例如 `online`、`waiting_for_target_wifi`、`automatic_login_paused`、`unknown_portal_state`；`next_check_secs` 为下次检查间隔。日志记录首次结果、变化和错误恢复，相同结果不会在每次轮询重复输出。
 
-应用 ID 为 `dev.cxcs.tools.wlanlogin`，数据和程序目录采用 `cxcs-tools/wlanlogin` 两级结构。ID 与目录路径分别使用；Windows 服务名不含斜杠。
+| 现象 | 处理方式 |
+| --- | --- |
+| `command not found` / 无法识别命令 | 检查程序路径、符号链接和 PATH，或用完整路径执行 |
+| 仅保存凭据，没有认证 | 确认已连接 `Student_CX`，macOS 检查定位授权 |
+| 密钥管理器不可用或需要交互 | 解锁凭据存储，在同一范围进行前台授权；macOS 参照上文权限恢复步骤 |
+| 已在线，但新账号未生效 | 先注销再登录 |
+| 服务未安装或安装不完整 | 在同一范围执行 `daemon status`，必要时重新 `install` |
+| 显式登录后后台未恢复 | 确认两者使用相同的 `--user` / `--system` 范围 |
+| 认证被拒绝后不再自动重试 | 用 `login --interactive --remember-me` 更新凭据 |
+| macOS 已连接 Wi-Fi 却无法读取 SSID | 检查全局定位服务及 WLAN Login 授权，修复后重新安装或重启服务 |
+
+问题反馈请附平台、版本、安装范围、复现步骤及脱敏日志。协议细节见 [状态查询](docs/eportal-status.md)、[登录](docs/eportal-login.md) 和 [注销](docs/eportal-logout.md)。
+
+### 注销与卸载
+
+```sh
+wlanlogin logout               # 注销并暂停当前连接的自动登录
+wlanlogin logout --forget      # 注销、停止后台进程并删除所选范围的凭据
+wlanlogin uninstall            # 停止并卸载服务，保留凭据和配置
+wlanlogin uninstall --purge    # 卸载服务并清理应用数据、日志和凭据
+```
+
+`logout --forget` 保留服务安装及线路配置。未连接校园网时只清理本地凭据；门户注销失败或无法识别 Wi-Fi 时仍尝试删除凭据，但以非零退出码说明注销未完成。凭据删除失败同样报错，并保持自动登录暂停。以后可通过 `login --remember-me` 保存新凭据，再用 `daemon start` 恢复。
+
+`uninstall --purge` 清理服务注册、后台程序副本、应用管理的数据及凭据。停止或注销服务失败时不会继续删除数据；凭据删除失败时保留剩余文件，可修复原因后重试。它只作用于所选范围，不跨用户清理。
+
+```sh
+wlanlogin --user uninstall --purge
+sudo wlanlogin --system uninstall --purge  # Linux / macOS 系统范围
+```
+
+Windows 系统范围在管理员终端执行 `wlanlogin --system uninstall --purge`。macOS 服务停止、重启及卸载会等待托管应用退出，单独手动运行的前台 daemon 不受 `daemon stop` 影响；卸载完整包前也会停止 Wi-Fi 宿主。
+
+原始下载的 CLI、手动复制到 Applications 的应用包及 PATH 符号链接需要自行移除。`--purge` 保留其他文件、共享的 `cxcs-tools` 父目录及同级工具；系统服务审计记录由操作系统保留策略管理。macOS 包内存在未知文件或符号链接时会报错并保留它们。
+
+### 升级
+
+同名新版使用新二进制或新应用包重新执行同一范围的 `install`。macOS 应先用原来的固定证书签名，再更新 Applications 中的源应用并安装；ad-hoc 签名或更换证书可能需要重新授权。
+
+从旧命令 `cxxy-wlanlogin-cli` 升级时，服务、配置和凭据不会自动迁移，也不提供旧命令或旧环境变量别名。保留旧版程序，先按原安装范围卸载：
+
+```sh
+cxxy-wlanlogin-cli --user uninstall --purge
+sudo cxxy-wlanlogin-cli --system uninstall --purge  # Linux / macOS 系统范围
+```
+
+Windows 原系统安装在管理员终端执行 `cxxy-wlanlogin-cli --system uninstall --purge`。仅选择实际安装范围；没有服务但保存过旧凭据时，也可用旧版在对应范围执行清理。
+
+然后在新程序的同一范围重新保存凭据并安装：
+
+```sh
+wlanlogin --user login --interactive --remember-me
+wlanlogin --user install
+```
+
+系统安装使用 `--system` 并提供管理员权限。自动化脚本同步改用 `wlanlogin`、`WLANLOGIN_USERNAME`、`WLANLOGIN_PASSWORD` 和 `WLANLOGIN_LINE`。
+
+### 数据与安装目录
+
+应用 ID 为 `dev.cxcs.tools.wlanlogin`，应用目录采用 `cxcs-tools/wlanlogin` 两级结构。以下为默认路径；Linux 用户目录遵循 XDG 环境变量，Windows 使用系统 Known Folder 路径。
+
+| 平台 | 用户配置、日志与运行文件 | 系统配置与运行文件 |
+| --- | --- | --- |
+| Linux | `~/.config/cxcs-tools/wlanlogin/` | `/var/lib/cxcs-tools/wlanlogin/`、`/run/cxcs-tools/wlanlogin/`；凭据文件位于 `/etc/cxcs-tools/wlanlogin/` |
+| macOS | `~/Library/Application Support/cxcs-tools/wlanlogin/` | `/Library/Application Support/cxcs-tools/wlanlogin/state/`、`/var/run/cxcs-tools/wlanlogin/`；凭据在 System Keychain |
+| Windows | `%APPDATA%\cxcs-tools\wlanlogin\config\` | `%ProgramData%\cxcs-tools\wlanlogin\` 下的 `state`、`run`、`secrets` |
+
+| 平台 | 用户后台程序副本 | 系统后台程序副本 |
+| --- | --- | --- |
+| Linux | `~/.local/share/cxcs-tools/wlanlogin/bin/wlanlogin-daemon` | `/usr/local/libexec/cxcs-tools/wlanlogin/wlanlogin-daemon` |
+| macOS | `~/Library/Application Support/cxcs-tools/wlanlogin/wlanlogin.app` | `/Library/Application Support/cxcs-tools/wlanlogin/wlanlogin.app` |
+| Windows | `%LOCALAPPDATA%\cxcs-tools\wlanlogin\data\bin\wlanlogin-daemon.exe` | `%ProgramFiles%\cxcs-tools\wlanlogin\wlanlogin-daemon.exe` |
+
+macOS 实际后台可执行文件位于上述应用包的 `Contents/MacOS/wlanlogin`，钥匙串访问控制需要授权该实际安装程序。
 
 | 用途 | 名称 |
 | --- | --- |
 | Linux systemd unit | `dev.cxcs.tools.wlanlogin.service` |
 | macOS launchd Label / plist | `dev.cxcs.tools.wlanlogin` / `dev.cxcs.tools.wlanlogin.plist` |
 | Windows 系统服务 | `dev.cxcs.tools.wlanlogin` |
-| Windows 用户计划任务 | `dev.cxcs.tools.wlanlogin-{SID}`，每个用户独立 |
+| Windows 用户计划任务 | `dev.cxcs.tools.wlanlogin-{SID}` |
 | 用户凭据 service / entry | `dev.cxcs.tools.wlanlogin` / `saved-login` |
 | macOS 系统凭据 service / account | `dev.cxcs.tools.wlanlogin.system` / `saved-login` |
 
-下表列出默认路径；Linux 用户目录遵循 XDG 环境变量，Windows 基础目录通过系统 Known Folder API 定位。
+## 参与贡献
 
-| 平台 | 用户配置、日志和运行文件 | 系统配置、运行文件和凭据 |
-| --- | --- | --- |
-| Linux | `~/.config/cxcs-tools/wlanlogin/` | `/var/lib/cxcs-tools/wlanlogin/`、`/run/cxcs-tools/wlanlogin/`、`/etc/cxcs-tools/wlanlogin/` |
-| macOS | `~/Library/Application Support/cxcs-tools/wlanlogin/` | `/Library/Application Support/cxcs-tools/wlanlogin/state/`、`/var/run/cxcs-tools/wlanlogin/`；凭据在 System Keychain |
-| Windows | `%APPDATA%\cxcs-tools\wlanlogin\config\` | `%ProgramData%\cxcs-tools\wlanlogin\` 下的 `state`、`run`、`secrets` |
+问题与建议请提交到 [Issues](https://github.com/SEUCXCS/wlan-auto-login/issues)，代码贡献请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。`crates/wlan-api`（`wlanlogin-lib`）负责门户协议，`crates/wlan-app`（`wlanlogin-cli`）负责应用及系统集成，`xtask` 负责 macOS 打包；模块职责与平台验证要求见贡献指南。自动化编码代理的工作约定见 [AGENT.md](AGENT.md)。
 
-用户后台程序副本位于 Linux 的 `~/.local/share/cxcs-tools/wlanlogin/bin/`、Windows 的 `%LOCALAPPDATA%\cxcs-tools\wlanlogin\data\bin\`。系统副本位于 Linux 的 `/usr/local/libexec/cxcs-tools/wlanlogin/`、Windows 的 `%ProgramFiles%\cxcs-tools\wlanlogin\`。文件名为 `wlanlogin-daemon`，Windows 加 `.exe`。macOS 安装完整的 `wlanlogin.app`，用户范围位于 `~/Library/Application Support/cxcs-tools/wlanlogin/`，系统范围位于 `/Library/Application Support/cxcs-tools/wlanlogin/`；实际程序为包内的 `Contents/MacOS/wlanlogin`。
-
-## 日志与排障
-
-应用日志使用英文事件文本、UTC RFC 3339 时间、日志级别、模块路径以及结构化字段，例如：
-
-```text
-2026-09-29T08:00:00Z INFO  wlanlogin::app::daemon::runtime: Daemon started scope="user" ssid="Student_CX"
-```
-
-默认级别为 `info`，可用 `RUST_LOG` 调整；前台运行时日志写入 stderr。以下设置仅作用于本次启动的进程，已安装服务需要在服务环境中配置：
-
-```sh
-RUST_LOG=wlanlogin=debug wlanlogin --user daemon
-```
-
-后台日志写入所选范围配置目录下的 `daemon.log`。程序启动时若已有日志超过 2 MiB，会清空该文件；这不是持续轮转或历史归档。门户错误会转换为英文诊断并保留错误分类；可识别的已知返回码保留英文说明，未知、脱敏或截断后无法识别的内容使用通用摘要，不输出原始门户响应或凭据。CLI 帮助和 TUI 保留中文，底层操作系统错误可能使用系统语言。
-
-| 现象 | 检查方式 |
-| --- | --- |
-| 仅保存凭据，没有认证 | 确认已连接 `Student_CX`，并检查 SSID 读取权限 |
-| 密钥管理器不可用 | 解锁用户密钥管理器；后台不会主动弹出交互提示 |
-| 已在线，但新账号未生效 | 先注销再登录；已在线时不会重新提交凭据 |
-| 服务未安装或安装不完整 | 用同一范围执行 `daemon status`，必要时重新 `install` |
-| 显式登录后 daemon 没有恢复 | 确认两者使用相同的 `--user` / `--system` 范围 |
-| 自动重试暂停 | 更新被拒绝的凭据：`login --interactive --remember-me` |
-
-报告问题时提供平台、版本、操作范围和已脱敏的日志。
-
-## 完全登出与卸载
-
-`logout --forget` 会暂停自动登录、停止该范围的后台进程，并删除保存的账号密码。未连接 `Student_CX` 时只清理本地凭据；门户请求失败或无法识别 Wi-Fi 时仍尝试删除凭据，但会以非零退出码说明门户注销未完成。凭据删除失败同样会报错，自动登录保持暂停。此选项保留服务安装和线路配置；之后可通过 `login --remember-me` 保存新凭据，再用 `daemon start` 恢复后台运行。
-
-`uninstall --purge` 会移除服务注册、服务定义文件、安装的后台程序副本，以及应用管理的日志、配置、运行文件、凭据和清空后的应用目录。服务文件丢失但注册仍残留时也会尝试卸载；停止或注销服务失败时不会继续删除数据，凭据删除失败会保留剩余文件并报告未完成，可修复原因后重试。
-
-两个选项都只作用于所选的 `--user` 或 `--system` 范围，不跨用户清理。普通终端默认使用用户范围，sudo／管理员终端默认使用系统范围。例如：
-
-```sh
-wlanlogin --user logout --forget
-wlanlogin --user uninstall --purge
-sudo wlanlogin --system uninstall --purge  # Linux / macOS 系统范围
-```
-
-Windows 系统范围在管理员终端运行 `wlanlogin --system uninstall --purge`。
-
-macOS 的停止、重启和卸载会先注销当前 launchd 作业，再等待托管应用退出；单独手动运行的前台 daemon 不受 `daemon stop` 影响。卸载同时移除完整应用包，清理前会停止临时 Wi-Fi 宿主。包内存在未知文件或符号链接时，操作会报错并保留它们。
-
-`--purge` 清理本程序管理的文件，保留原始 CLI 文件、目录中的其他文件、共享的 `cxcs-tools` 父目录及其中的其他工具。旧 Linux 共享 journal 中的历史日志，以及 Windows/macOS/Linux 的系统服务审计记录，无法作为应用文件单独删除，仍由操作系统的日志保留策略管理；本工具不会清空全系统日志。
-
-## 协议文档
-
-- [状态查询（chkstatus）](docs/eportal-status.md)：设备信息、认证状态、后台检查和重试行为。
-- [登录](docs/eportal-login.md)
-- [注销](docs/eportal-logout.md)
-
-## 项目结构
-
-```text
-crates/
-├── wlan-api/                     # 门户协议库
-└── wlan-app/
-    ├── Cargo.toml
-    └── src/
-        ├── main.rs              # 最小程序入口
-        ├── app.rs               # 应用初始化与依赖装配
-        ├── app/
-        │   ├── cli.rs           # Clap 参数、命令分发
-        │   ├── cli/             # 终端输入与结果展示
-        │   ├── tui.rs           # 交互表单
-        │   ├── context.rs       # 应用依赖
-        │   ├── controller.rs
-        │   ├── controller/      # login、logout、install、uninstall、daemon/*
-        │   ├── daemon.rs
-        │   └── daemon/          # 调度、单次检查、凭据后台读取、重试策略
-        ├── infra.rs
-        ├── infra/               # 错误、日志、配置、路径、IPC、锁、文件与进程
-        ├── system.rs
-        └── system/
-            ├── define.rs
-            ├── define/          # credentials、services、wifi、permission 契约
-            ├── shared.rs
-            ├── shared/          # 共用适配与服务安装/卸载事务
-            ├── linux/           # mod.rs、services/、credentials/、wifi/、permission.rs
-            ├── macos/           # 同上
-            └── windows/         # 同上；services/runtime.rs 对接 SCM
-```
-
-`app` 组织业务操作，`system` 提供平台能力，`infra` 提供通用机制；后两层不依赖 `app`。`wlan-app` 的单元测试均写在所属源文件末尾的 `#[cfg(test)] mod tests` 中。详细职责、扩展方式与验证流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-## 开发验证
+开发验证使用模拟门户、临时目录、模拟服务命令及隔离 IPC，不访问真实校园网或操作已安装服务、真实凭据。部分测试需要本地 socket 和子进程权限，Linux 测试还需要 `dbus-daemon`。在仓库根目录执行：
 
 ```sh
 cargo fmt --all -- --check
+cargo check --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo build --release --locked --workspace
+git diff --check
 ```
 
-测试使用 loopback 模拟门户、临时目录、模拟服务命令和隔离 IPC。部分测试需要本地 socket、D-Bus 与子进程权限；Linux 测试环境还需要 `dbus-daemon`。开发验证不连接真实校园门户、不切换 Wi-Fi、不操作已安装服务或真实凭据。
-
-## 参与贡献
-
-问题与建议请提交到 [Issues](https://github.com/SEUCXCS/wlan-auto-login/issues)，代码贡献请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。自动化编码代理的工具链和工作约定见 [AGENT.md](AGENT.md)。每个完整功能单独提交，提交信息遵循 Conventional Commits。
+每个完整功能单独提交，提交信息遵循 Conventional Commits。交叉编译通过只代表编译检查，不代表目标操作系统的运行验证。
 
 ## 许可证
 
-仓库目前未附带 `LICENSE` 文件，尚未声明开源许可证。
+本项目采用 [MIT License](LICENSE)。
