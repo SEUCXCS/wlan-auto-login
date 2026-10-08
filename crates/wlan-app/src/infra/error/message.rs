@@ -2,6 +2,143 @@
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)] // Some messages are used only by other compilation targets.
 pub enum Message {
+    #[error("Invalid SMAppService response")]
+    MacosServiceProtocol,
+    #[error("SMAppService must run inside the installed signed application bundle")]
+    MacosServiceBundleIdentity,
+    #[error("Bundle service definition is missing; rebuild with cargo xtask bundle macos")]
+    MacosServiceDefinitionMissing,
+    #[error("SMAppService {action} failed: {error}")]
+    MacosServiceOperationFailed { action: String, error: String },
+    #[error("Timed out waiting for SMAppService unregistration; application files retained")]
+    MacosServiceUnregisterTimedOut,
+    #[error(
+        "Background service is registered but needs approval; allow WLAN Login in System Settings > General > Login Items, then run daemon start in the same scope"
+    )]
+    MacosBackgroundApprovalRequired,
+    #[error("Failed to configure Keychain interaction: {status}")]
+    KeychainInteractionFailed { status: i32 },
+    #[error("Failed to delete Keychain credential: {status}")]
+    KeychainDeleteFailed { status: i32 },
+    #[error("Failed to establish trusted application identity: {status}")]
+    KeychainTrustedApplicationFailed { status: i32 },
+    #[error("Failed to create credential access control: {status}")]
+    KeychainAccessCreateFailed { status: i32 },
+    #[error("Failed to inspect existing credential access control: {status}")]
+    KeychainAccessCopyFailed { status: i32 },
+    #[error("Failed to inspect or update credential read permissions: {status}")]
+    KeychainReadAccessFailed { status: i32 },
+    #[error("Failed to inspect or unlock the selected Keychain")]
+    KeychainUnlockFailed,
+    #[error("Failed to authorize the installed application to read credentials: {status}")]
+    KeychainAuthorizeFailed { status: i32 },
+    #[error("Unmanaged or redirected bundle member retained: {path}")]
+    BundleUnmanagedMember { path: String },
+    #[error("Unexpected bundle identity: {key}")]
+    UnexpectedBundleIdentity { key: String },
+    #[error("Installation rollback incomplete: {failures}; recovery files: {backup}")]
+    BundleRollbackIncomplete { failures: String, backup: String },
+    #[error(
+        "System application directory must be owned by root, readable and traversable by users, and not writable by them: {path}"
+    )]
+    SystemApplicationDirectoryPermissions { path: String },
+
+    #[error("Keychain operation lock is poisoned")]
+    KeychainOperationLockPoisoned,
+    #[error("Failed to open user Keychain")]
+    FailedToOpenUserKeychain,
+    #[error(
+        "Saved credentials are inaccessible; unlock Keychain or allow WLAN Login during a foreground operation"
+    )]
+    KeychainCredentialInaccessible,
+    #[error("Cannot update the existing credential; the original item has been retained")]
+    KeychainUpdateRetainedCredential,
+    #[error("Failed to save Keychain credentials")]
+    KeychainSaveFailed,
+    #[error("Failed to access credential for deletion; item retained")]
+    KeychainDeleteAccessFailed,
+    #[error("Failed to start Core Location run loop")]
+    LocationRunLoopFailed,
+    #[error("Location manager stopped")]
+    LocationManagerStopped,
+    #[error(
+        "Location permission request timed out before a decision; respond to the system dialog or retry from a foreground session"
+    )]
+    LocationAuthorizationTimedOut,
+    #[error(
+        "Wi-Fi authorization host could not become active; retry from the logged-in user's foreground session"
+    )]
+    LocationActivationFailed,
+    #[error(
+        "Wi-Fi authorization host did not become active before the deadline; no permission request was sent"
+    )]
+    LocationActivationTimedOut,
+    #[error(
+        "Location access was denied; enable WLAN Login in System Settings > Privacy & Security > Location Services"
+    )]
+    LocationDenied,
+    #[error(
+        "Location Services are disabled globally; enable them in System Settings > Privacy & Security > Location Services"
+    )]
+    LocationServicesDisabled,
+    #[error("Location access is restricted by macOS policy")]
+    LocationRestricted,
+    #[error("Location authorization state before the foreground request")]
+    LocationAuthorizationBefore,
+    #[error("Location authorization state after the foreground request")]
+    LocationAuthorizationAfter,
+    #[error("Wi-Fi host is already running")]
+    MacosHostAlreadyRunning,
+    #[error("Native Wi-Fi query timed out")]
+    NativeWifiQueryTimedOut,
+    #[error("The connected Wi-Fi network name is unavailable despite Location authorization")]
+    ConnectedWifiNameUnavailable,
+    #[error("Wi-Fi host request failed")]
+    MacosHostRequestFailed,
+    #[error("Failed to identify the current Wi-Fi connection")]
+    WifiIdentificationFailed,
+    #[error("Managed Wi-Fi hosts stop with their service")]
+    ManagedHostStopsWithService,
+    #[error("Wi-Fi helper did not stop; bundle retained")]
+    MacosHostStopFailed,
+    #[error("Bundle member escaped its root")]
+    BundleMemberOutsideRoot,
+    #[error("Non-UTF-8 bundle member")]
+    BundleMemberNotUtf8,
+    #[error("Bundle executable is missing")]
+    BundleExecutableMissing,
+    #[error("Service registration succeeded but the managed application did not become ready")]
+    ManagedAppNotReady,
+    #[error("Timed out authorizing installed Keychain identity")]
+    KeychainAuthorizationTimedOut,
+    #[error("Installed application cannot read its saved credentials silently")]
+    InstalledCredentialCheckFailed,
+    #[error("Installed credential check returned an invalid or incompatible result")]
+    InstalledCredentialCheckProtocol,
+    #[error("Installed application cannot read its saved credentials silently ({state})")]
+    InstalledCredentialAccessUnavailable { state: String },
+    #[error("Installation failed; previous bundle, definition and credential access restored")]
+    BundleInstallationRestored,
+    #[error(
+        "Location access is unavailable ({state}); allow WLAN Login in System Settings > Privacy & Security > Location Services"
+    )]
+    LocationUnavailable { state: String },
+    #[error(
+        "A signed wlanlogin.app is required; build it with cargo xtask bundle macos and run its Contents/MacOS/wlanlogin executable"
+    )]
+    MacosBundleRequired,
+    #[error(
+        "No active macOS user session; automatic authentication is waiting for a user to log in"
+    )]
+    MacosUserSessionUnavailable,
+    #[error(
+        "Wi-Fi host is unavailable or not ready; retry the operation in the logged-in user's session"
+    )]
+    MacosHostUnavailable,
+    #[error("Wi-Fi host returned an invalid or incompatible response")]
+    MacosHostProtocol,
+    #[error("Wi-Fi host peer identity does not match the selected application and user")]
+    MacosHostIdentity,
     #[error("Login cancelled")]
     LoginCancelled,
     #[error("Installed executable returned an unrecognized version")]
@@ -378,6 +515,10 @@ pub enum Message {
     MonitorUnavailable,
     #[error("Network check failed")]
     CheckFailed,
+    #[error("Retrying network check")]
+    RetryingNetworkCheck,
+    #[error("Network check completed")]
+    NetworkCheckCompleted,
     #[error("Network event subscription disconnected")]
     MonitorDisconnected,
     #[error("Authentication succeeded")]

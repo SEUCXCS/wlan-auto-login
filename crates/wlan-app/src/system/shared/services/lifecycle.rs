@@ -44,6 +44,11 @@ async fn manage_plan(
     if !plan.manager.installed(&state) {
         bail!(Message::ServiceNotRegistered);
     }
+    #[cfg(target_os = "macos")]
+    if crate::system::macos::bundle::enclosing(&plan.executable).is_some() {
+        return crate::system::macos::services::runtime::manage(paths, plan, action, state, runner)
+            .await;
+    }
     // Do not send IPC Stop or use the daemon singleton lock: these commands
     // control only the registered service, never a manually launched process.
     plan.manager.manage(plan, action, state, runner).await

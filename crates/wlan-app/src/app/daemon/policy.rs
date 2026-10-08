@@ -39,6 +39,10 @@ impl Policy {
         self.credential_blocked = true;
     }
 
+    pub(super) fn credentials_rejected(&self) -> bool {
+        self.credential_blocked
+    }
+
     pub(super) fn update(&mut self, session: Option<String>, control: &mut control::State) -> bool {
         let changed = self.session != session;
         let saved_changed = control.session != session;
@@ -100,7 +104,6 @@ impl Policy {
         self.initial_status_pending = false;
     }
 
-    #[cfg(test)]
     pub(super) fn retry_deadline(&self) -> Option<Instant> {
         self.retry_at
     }

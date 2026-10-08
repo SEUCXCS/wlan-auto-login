@@ -52,17 +52,57 @@ async fn uninstall_plan(
         cleanup::validate_directory(directory)?;
     }
     assert_owned(&plan.definition)?;
+    #[cfg(target_os = "macos")]
+    let bundle = crate::system::macos::bundle::enclosing(&plan.executable);
+    #[cfg(target_os = "macos")]
+    if let Some(app) = &bundle
+        && app.exists()
+    {
+        crate::system::macos::services::payload::validate(app).await?;
+    }
     let service_lock = control::service_lock(paths)?;
     // Query registrations even when the definition was manually removed.
     let state = plan.manager.query(runner).await?;
-    if state.running || state.pending {
+    let must_stop = state.running || state.pending;
+    #[cfg(target_os = "macos")]
+    let must_stop = must_stop || (bundle.is_some() && state.registered);
+    if must_stop {
+        #[cfg(target_os = "macos")]
+        if matches!(plan.manager, Manager::MacosAppService { .. }) {
+            // Native registration can persist while the job is unloaded or
+            // waiting for approval. Boot out only an actually loaded job.
+            plan.manager
+                .manage(
+                    plan,
+                    crate::system::define::services::Action::Stop,
+                    crate::system::define::services::ServiceState::absent(),
+                    runner,
+                )
+                .await?;
+        }
         for command in &plan.stop {
+            #[cfg(target_os = "macos")]
+            if matches!(plan.manager, Manager::MacosAppService { .. }) {
+                continue;
+            }
+            #[cfg(target_os = "macos")]
+            if bundle.is_some() {
+                let mut required = command.clone();
+                required.optional = false;
+                execute(runner, &required).await?;
+                continue;
+            }
             execute(runner, command).await?;
         }
         wait_for_manager(&plan.manager, runner, false).await?;
     }
     control::stop(paths).await;
     control::wait_stopped(paths).await?;
+    #[cfg(target_os = "macos")]
+    if let Some(app) = &bundle {
+        control::stop_managed(paths).await?;
+        crate::system::macos::host::stop_helpers(paths.scope, app).await?;
+    }
     let daemon_lock = control::singleton(paths)?;
     let operation_lock = control::operation_lock(paths).await?;
     if state.registered {
@@ -71,7 +111,15 @@ async fn uninstall_plan(
         }
     }
     remove_enable_link(plan)?;
-    cleanup::remove_file(&plan.definition)?;
+    #[cfg(target_os = "macos")]
+    let bundled_definition = matches!(plan.manager, Manager::MacosAppService { .. });
+    #[cfg(not(target_os = "macos"))]
+    let bundled_definition = false;
+    // Keep a signed bundle intact if credential deletion later fails. Its
+    // packaged definition is removed together with the payload, after unregister.
+    if !bundled_definition {
+        cleanup::remove_file(&plan.definition)?;
+    }
     for command in &plan.reload {
         execute(runner, command).await?;
     }
@@ -82,6 +130,13 @@ async fn uninstall_plan(
             .await
             .context(Message::ServiceUninstalledButCredentialDeletionFailedRetryUninstall)?;
     }
+    #[cfg(target_os = "macos")]
+    if let Some(app) = &bundle {
+        crate::system::macos::services::payload::remove(app)?;
+    } else {
+        cleanup::remove_file(&plan.executable)?;
+    }
+    #[cfg(not(target_os = "macos"))]
     cleanup::remove_file(&plan.executable)
         .context(Message::ServiceUninstalledButInstalledExecutableCouldNotBe)?;
     if purge {
@@ -94,6 +149,20 @@ async fn uninstall_plan(
         // Windows requires the handles closed before their lock files are removed.
         drop(operation_lock);
         drop(daemon_lock);
+        #[cfg(target_os = "macos")]
+        if bundle.is_some() {
+            cleanup::remove_file(&paths.runtime.join("managed.lock"))?;
+            if paths.scope == crate::infra::scope::Scope::User {
+                for name in [
+                    "wifi-foreground.lock",
+                    "wifi-service.lock",
+                    "wifi-foreground.sock",
+                    "wifi-service.sock",
+                ] {
+                    cleanup::remove_file(&paths.runtime.join(name))?;
+                }
+            }
+        }
         for name in ["operation.lock", "daemon.lock"] {
             cleanup::remove_file(&paths.runtime.join(name))?;
         }

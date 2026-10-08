@@ -27,6 +27,8 @@ NetworkManager, Secret Service, and native service managers are runtime dependen
 
 ## Commands
 
+macOS bundles are built with `cargo xtask bundle macos`, optionally using `--codesign-identity` or `CODESIGN_IDENTITY` (CLI takes precedence; default is ad-hoc `-`). `xtask/` shares `infra/identity.rs` and renders `packaging/macos/Info.plist`; it builds the explicit `wlanlogin` binary, validates the bundle, and publishes it only after successful signing. Ordinary compilation uses Cargo, not an xtask build subcommand. Bundle generation does not install or launch services.
+
 Run relevant checks after each logical change and the complete set before delivery of an architectural change:
 
 ```sh
@@ -63,13 +65,15 @@ For safe CLI smoke checks, use only `--help`, subcommand `--help`, and `--versio
 
 The dependency direction is `app -> system -> infra`, with direct `app -> infra` access allowed. Never make `system` depend on `app`, including through native service callbacks. Keep Clap and terminal dependencies out of system contracts. Do not change `wlan-api` as a side effect of an application-only refactor.
 
-Permission identifiers are open strings and descriptors have optional descriptions and extensible metadata. Collections may be empty. Linux and Windows currently expose none; macOS declares Location and Keychain. The interface is a placeholder: status and request return `NotImplemented` for declared IDs and an error for unknown IDs. Do not silently implement OS authorization or report placeholder permissions as granted.
+Permission identifiers are open strings and descriptors have optional descriptions and extensible metadata. Collections may be empty. Linux and Windows currently expose none; macOS declares Location and Keychain. Location uses the signed GUI-session host and requests authorization on demand during interactive foreground operations. Background and non-interactive operations never request permission. Keychain diagnostics inspect only the selected scope’s own item without UI and distinguish missing, needs-interaction, denied and unavailable. Serialize native Keychain operations around the process-wide UI switch; failed reads must retain credentials. Never report an unavailable capability as granted, and reject unknown identifiers. Host IPC must validate protocol versions, response IDs, frame sizes and the live peer's code identity; system clients also validate the active console user. Never transmit portal credentials through the Wi-Fi host.
 
 ## Errors, logs, and tests
 
 Use `infra::error::{Error, Result, Context, Message}`. Define application error and event templates with `thiserror` in `infra/error/`; keep their text in English. Preserve source errors and portal error classifications. `anyhow` is confined to the error boundary for external errors.
 
 Use `tracing` with structured fields such as `error`, `scope`, and `retry_after_secs`. The shared formatter writes UTC RFC 3339 timestamps, severity, target, and fields. The default filter is `info`; `RUST_LOG` overrides it. CLI help and TUI labels may remain Chinese. Never log secrets, authentication query strings, or raw portal payloads.
+
+Daemon checks return outcomes to the runtime, which logs the first result, changes and recovery after failures at `info`, with `outcome` and `next_check_secs`. Log when a retry starts without repeating unchanged waiting states on every poll. On macOS, SSID and BSSID can both be redacted by Location access controls; use interface mode to detect a connected interface with an unreadable name and return an error so retries remain visible and credentials stay protected.
 
 All `wlan-app` tests belong at the bottom of the owning source file in `#[cfg(test)] mod tests`, even when long. Do not extract `tests.rs`, separate test directories, or tests via `#[path]`. Shared mocks may live in a relevant module's inline test module, such as `infra::command::tests`. Preserve the existing API protocol fixtures and integration tests.
 
@@ -84,7 +88,7 @@ Preserve these behavioral boundaries:
 - Keep shutdown listeners alive and continuously drain NetworkManager D-Bus events.
 - Bound native calls and credential reads; keep at most one background credential read in flight.
 - Keep user and system scope separate, including credential cleanup and daemon wake/reset.
-- Retain operation locks, service transaction rollback, and stop-before-cleanup ordering.
+- Retain operation locks, service transaction rollback, and stop-before-cleanup ordering. macOS installs whole signed bundles, validates installed credential access in the installed process, and retains recovery directories after incomplete rollback. Native jobs use SMAppService with signed, bundle-contained definitions and BundleProgram; never rewrite these definitions during installation. Stop preserves native registration; replacement and uninstall wait for native unregistration completion before removing the bundle. Background approval is separate from liveness and must not block uninstall. Retain legacy launchd migration and rollback: bootout before authenticated managed-stop IPC; never signal an unverified PID. The managed startup guard checks actual launchd loading, not merely persistent SMAppService registration. Bundle cleanup accepts only the exact xtask member inventory and rejects symlinks or unknown files.
 
 ## Delivery
 

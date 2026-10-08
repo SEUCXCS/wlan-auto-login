@@ -90,9 +90,19 @@ pub(crate) struct Artifacts {
 impl Artifacts {
     pub fn read(plan: &Plan) -> Result<Self> {
         assert_owned(&plan.definition)?;
+        let executable = is_file(&plan.executable)?;
+        #[cfg(target_os = "macos")]
+        let executable =
+            if let Some(app) = crate::system::macos::bundle::enclosing(&plan.executable) {
+                executable
+                    && is_file(&app.join("Contents/Info.plist"))?
+                    && is_file(&app.join("Contents/_CodeSignature/CodeResources"))?
+            } else {
+                executable
+            };
         Ok(Self {
             definition: is_file(&plan.definition)?,
-            executable: is_file(&plan.executable)?,
+            executable,
         })
     }
 

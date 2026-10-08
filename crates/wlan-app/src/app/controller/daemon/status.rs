@@ -31,6 +31,24 @@ pub async fn run(paths: &Paths, discover: bool) -> Result<Vec<InstallationReport
     let mut reports = Vec::new();
     for plan in plans {
         let report = inspect(&plan, &SystemRunner).await?;
+        #[cfg(target_os = "macos")]
+        let report = {
+            let mut report = report;
+            if plan.scope == Scope::User
+                && crate::system::macos::bundle::enclosing(&plan.executable).is_some()
+                && let Some(Ok(state)) = &mut report.state
+            {
+                let actual = crate::infra::control::managed_pid(&Paths::new(plan.scope)?).await;
+                let wrapper_running = state.running;
+                state.running = actual.is_some();
+                state.pid = actual;
+                if wrapper_running && !state.running {
+                    state.state = "waiting for managed daemon readiness".into();
+                    state.pending = true;
+                }
+            }
+            report
+        };
         if report.files.any() {
             reports.push(report);
         }

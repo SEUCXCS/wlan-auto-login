@@ -1,167 +1,27 @@
-use crate::infra::error::{Context, Message, Result};
+use super::access;
+use crate::infra::{
+    error::{Message, Result, ensure},
+    paths::Paths,
+    scope::Scope,
+};
 use crate::system::define::credentials::CredentialMode;
-
-use crate::system::shared::credentials::encode;
-
-use crate::infra::paths::Paths;
 use wlanlogin_lib::Credentials;
-
 pub struct MachineStore;
-
-pub async fn delete(paths: &Paths) -> Result<()> {
-    {
-        let _ = paths;
-        tokio::task::spawn_blocking(delete_native).await?
-    }
-}
-
 impl MachineStore {
-    pub fn new(paths: Paths, mode: Option<CredentialMode>) -> Result<Self> {
-        crate::infra::error::ensure!(
+    pub fn new(_paths: Paths, mode: Option<CredentialMode>) -> Result<Self> {
+        ensure!(
             !matches!(mode, Some(CredentialMode::ProtectedFile)),
             Message::ProtectedFileIsOnlyAvailableOnLinux
         );
-
-        let _ = paths.secrets;
         Ok(Self)
     }
-
     pub async fn load(&self, background: bool) -> Result<Option<Credentials>> {
-        {
-            let _ = background;
-            tokio::task::spawn_blocking(load_native).await?
-        }
+        access::load(Scope::System, background).await
     }
-
     pub async fn save(&self, credentials: Credentials) -> Result<()> {
-        let text = encode(&credentials)?;
-
-        tokio::task::spawn_blocking(move || save_native(&text)).await?
+        access::save(Scope::System, credentials).await
     }
 }
-
-use core_foundation::{
-    array::{CFArray, CFArrayRef},
-    base::{CFType, TCFType},
-    string::{CFString, CFStringRef},
-};
-use security_framework::os::macos::keychain::SecKeychain;
-use security_framework_sys::base::{SecAccessRef, SecKeychainItemRef};
-use std::{
-    ffi::{CString, c_char, c_void},
-    os::unix::ffi::OsStrExt,
-    path::Path,
-};
-
-use crate::infra::identity::{CREDENTIAL_ENTRY as ACCOUNT, SYSTEM_CREDENTIAL_SERVICE as SERVICE};
-
-#[link(name = "Security", kind = "framework")]
-unsafe extern "C" {
-    fn SecTrustedApplicationCreateFromPath(path: *const c_char, app: *mut *mut c_void) -> i32;
-    fn SecAccessCreate(
-        description: CFStringRef,
-        applications: CFArrayRef,
-        access: *mut SecAccessRef,
-    ) -> i32;
-    fn SecKeychainItemSetAccess(item: SecKeychainItemRef, access: SecAccessRef) -> i32;
-}
-
-fn keychain() -> Result<SecKeychain> {
-    SecKeychain::open("/Library/Keychains/System.keychain")
-        .context(Message::FailedToOpenSystemKeychain)
-}
-
-fn delete_native() -> Result<()> {
-    let (_, item) = match keychain()?.find_generic_password(SERVICE, ACCOUNT) {
-        Ok(found) => found,
-        Err(error) if error.code() == -25300 => return Ok(()),
-        Err(error) => {
-            return Err(error).context(Message::FailedToFindSystemKeychainCredentialsForDeletion);
-        }
-    };
-    // SAFETY: item is a live, retained reference from the selected system keychain.
-    // The high-level delete wrapper discards OSStatus, so check it explicitly.
-    let code = unsafe {
-        security_framework_sys::keychain_item::SecKeychainItemDelete(item.as_concrete_TypeRef())
-    };
-    crate::infra::error::ensure!(
-        code == 0 || code == -25300,
-        Message::FailedToDeleteSystemKeychainCredentialsCode {
-            code: (code).to_string()
-        }
-    );
-    Ok(())
-}
-
-fn load_native() -> Result<Option<Credentials>> {
-    match keychain()?.find_generic_password(SERVICE, ACCOUNT) {
-        Ok((password, _)) => {
-            crate::system::shared::credentials::decode(std::str::from_utf8(password.as_ref())?)
-                .map(Some)
-        }
-        Err(error) if error.code() == -25300 => Ok(None),
-        Err(error) => {
-            Err(error).context(Message::FailedToReadSystemKeychainCredentialsCheckService)
-        }
-    }
-}
-
-fn save_native(text: &str) -> Result<()> {
-    keychain()?
-        .set_generic_password(SERVICE, ACCOUNT, text.as_bytes())
-        .context(Message::FailedToSaveSystemKeychainCredentials)?;
-    let current = std::env::current_exe()?;
-    let installed = crate::infra::paths::system_daemon_executable()?;
-    authorize_binary(if installed.try_exists()? {
-        &installed
-    } else {
-        &current
-    })
-}
-
-pub fn authorize_binary(binary: &Path) -> Result<()> {
-    let (_, item) = keychain()?.find_generic_password(SERVICE, ACCOUNT)?;
-    let mut applications = Vec::new();
-    for path in [std::env::current_exe()?, binary.to_owned()] {
-        let path = CString::new(path.as_os_str().as_bytes())?;
-        // SAFETY: Security creates a CF object retained by CFType until after setting the ACL.
-        unsafe {
-            let mut application = std::ptr::null_mut();
-            let result = SecTrustedApplicationCreateFromPath(path.as_ptr(), &mut application);
-            crate::infra::error::ensure!(
-                result == 0,
-                Message::FailedToAuthorizeTheServiceExecutableTo {
-                    result: (result).to_string()
-                }
-            );
-            applications.push(CFType::wrap_under_create_rule(application));
-        }
-    }
-    let applications = CFArray::from_CFTypes(&applications);
-    let description = CFString::new("Student_CX system service credentials");
-    // SAFETY: all objects remain alive; access is released on success and on failure.
-    unsafe {
-        let mut access = std::ptr::null_mut();
-        let result = SecAccessCreate(
-            description.as_concrete_TypeRef(),
-            applications.as_concrete_TypeRef(),
-            &mut access,
-        );
-        crate::infra::error::ensure!(
-            result == 0,
-            Message::FailedToCreateSystemCredentialAccessControl {
-                result: (result).to_string()
-            }
-        );
-        let owned = CFType::wrap_under_create_rule(access.cast());
-        let result = SecKeychainItemSetAccess(item.as_concrete_TypeRef(), access);
-        drop(owned);
-        crate::infra::error::ensure!(
-            result == 0,
-            Message::FailedToApplySystemCredentialAccessControl {
-                result: (result).to_string()
-            }
-        );
-    }
-    Ok(())
+pub async fn delete(_paths: &Paths) -> Result<()> {
+    access::delete(Scope::System).await
 }

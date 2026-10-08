@@ -1,39 +1,27 @@
-use crate::infra::error::Message;
-
-use crate::infra::error::bail;
-use crate::infra::error::{Context, Result};
-pub(crate) use crate::system::shared::credentials::{load_user as load, save_user as save};
+use super::access;
+use crate::infra::{
+    error::{Message, Result},
+    scope::Scope,
+};
 use wlanlogin_lib::Credentials;
-
-use crate::infra::identity::{APP_ID as SERVICE, CREDENTIAL_ENTRY as ENTRY};
-
+pub async fn load() -> Result<Option<Credentials>> {
+    access::load(Scope::User, false).await
+}
+pub async fn save(credentials: Credentials) -> Result<()> {
+    access::save(Scope::User, credentials).await
+}
 pub async fn delete() -> Result<()> {
-    tokio::task::spawn_blocking(
-        || match keyring::Entry::new(SERVICE, ENTRY)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(error).context(Message::FailedToDeleteUserCredentials),
-        },
-    )
-    .await
-    .context(Message::CredentialDeletionTaskFailed)?
+    access::delete(Scope::User).await
 }
-
-/// Background reads never ask the user to unlock the keychain.
 pub async fn load_for_daemon() -> Result<Option<Credentials>> {
-    load().await
+    access::load(Scope::User, true).await
 }
-
 pub fn prepare_daemon() -> Result<()> {
-    {
-        // SAFETY: daemon is a separate process and performs no interactive
-        // keychain operations. This process-wide switch prevents native dialogs.
-        let status =
-            unsafe { security_framework_sys::keychain::SecKeychainSetUserInteractionAllowed(0) };
-        if status != 0 {
-            bail!(Message::FailedToDisableBackgroundKeychainPromptsStatus {
-                status: (status).to_string()
-            });
-        }
-    }
+    access::configure_interaction(false);
+    let code = unsafe { security_framework_sys::keychain::SecKeychainSetUserInteractionAllowed(0) };
+    crate::infra::error::ensure!(
+        code == 0,
+        Message::KeychainInteractionFailed { status: code }
+    );
     Ok(())
 }

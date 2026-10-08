@@ -27,6 +27,12 @@ impl ServiceManager for Manager {
             Self::Launchd { domain, .. } if domain == "system" => "launchd LaunchDaemon",
             #[cfg(any(target_os = "macos", test))]
             Self::Launchd { .. } => "launchd LaunchAgent",
+            #[cfg(any(target_os = "macos", test))]
+            Self::MacosAppService { domain, .. } if domain == "system" => {
+                "SMAppService LaunchDaemon"
+            }
+            #[cfg(any(target_os = "macos", test))]
+            Self::MacosAppService { .. } => "SMAppService LaunchAgent",
             #[cfg(any(target_os = "windows", test))]
             Self::TaskScheduler { .. } => "Windows Task Scheduler",
             #[cfg(any(windows, test))]
@@ -40,6 +46,8 @@ impl ServiceManager for Manager {
             Self::Systemd { .. } => crate::infra::identity::SYSTEMD_UNIT,
             #[cfg(any(target_os = "macos", test))]
             Self::Launchd { target, .. } => target,
+            #[cfg(any(target_os = "macos", test))]
+            Self::MacosAppService { target, .. } => target,
             #[cfg(any(target_os = "windows", test))]
             Self::TaskScheduler { name } => name,
             #[cfg(any(windows, test))]
@@ -55,6 +63,8 @@ impl ServiceManager for Manager {
                 let _ = state;
                 true
             }
+            #[cfg(any(target_os = "macos", test))]
+            Self::MacosAppService { .. } => state.registered,
             #[cfg(any(target_os = "linux", test))]
             Self::Systemd { .. } => state.registered,
             #[cfg(any(target_os = "windows", test))]
@@ -73,6 +83,17 @@ impl ServiceManager for Manager {
             #[cfg(any(target_os = "macos", test))]
             Self::Launchd { domain, target } => {
                 crate::system::macos::services::manager::query(domain, target, runner).await
+            }
+            #[cfg(any(target_os = "macos", test))]
+            Self::MacosAppService {
+                domain,
+                target,
+                executable,
+            } => {
+                crate::system::macos::services::app_service::query(
+                    domain, target, executable, runner,
+                )
+                .await
             }
             #[cfg(any(target_os = "windows", test))]
             Self::TaskScheduler { name } => {
@@ -101,6 +122,18 @@ impl ServiceManager for Manager {
             Self::Launchd { domain, target } => {
                 crate::system::macos::services::manager::manage(
                     domain, target, plan, action, state, runner,
+                )
+                .await
+            }
+            #[cfg(any(target_os = "macos", test))]
+            Self::MacosAppService {
+                domain,
+                target,
+                executable,
+            } => {
+                let _ = state;
+                crate::system::macos::services::app_service::manage(
+                    domain, target, executable, plan, action, runner,
                 )
                 .await
             }

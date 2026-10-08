@@ -32,6 +32,18 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    MacosService { action: MacosServiceAction },
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    MacosCredentialCheck,
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    MacosHost {
+        #[arg(long)]
+        system_helper: bool,
+    },
     /// 登录校园网；不在 Student_CX 时仅保存凭据，凭据不足时打开交互界面
     Login(LoginArgs),
     /// 注销当前校园网会话
@@ -58,6 +70,14 @@ pub enum Command {
         #[arg(long)]
         purge: bool,
     },
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum MacosServiceAction {
+    Status,
+    Register,
+    Unregister,
 }
 
 #[derive(Subcommand, Debug, PartialEq, Eq)]
@@ -128,11 +148,66 @@ pub(super) async fn dispatch(
             ..
         }
     ) {
-        paths.scope.require_access()?;
+        #[cfg(target_os = "macos")]
+        let read_only = matches!(
+            args.command,
+            Command::MacosService {
+                action: MacosServiceAction::Status
+            }
+        );
+        #[cfg(not(target_os = "macos"))]
+        let read_only = false;
+        if !read_only {
+            paths.scope.require_access()?;
+        }
     }
     match args.command {
+        #[cfg(target_os = "macos")]
+        Command::MacosService { action } => {
+            let action = match action {
+                MacosServiceAction::Status => "status",
+                MacosServiceAction::Register => "register",
+                MacosServiceAction::Unregister => "unregister",
+            };
+            println!(
+                "{}",
+                crate::system::macos::services::app_service::perform(paths.scope, action)?
+            );
+            Ok(())
+        }
+        #[cfg(target_os = "macos")]
+        Command::MacosCredentialCheck => {
+            let status =
+                crate::system::macos::credentials::access::status(paths.scope, false).await?;
+            let result = crate::system::macos::credentials::access::CredentialCheck::new(status);
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
+        #[cfg(target_os = "macos")]
+        Command::MacosHost { system_helper } => {
+            use crate::system::macos::host::{Host, Role};
+            let host = Host::start(if system_helper {
+                Role::System
+            } else {
+                Role::Foreground
+            })
+            .await?;
+            let mut shutdown = crate::infra::shutdown::Shutdown::new()?;
+            crate::infra::shutdown::until_stopped(host.wait(), shutdown.wait()).await
+        }
         Command::Login(args) => login::run(context, args, false).await,
-        Command::Logout { forget } => controller::logout::run(&context.client, paths, forget).await,
+        Command::Logout { forget } => {
+            #[cfg(target_os = "macos")]
+            {
+                use std::io::IsTerminal;
+                if let Err(error) =
+                    crate::system::macos::host::prepare(std::io::stderr().is_terminal()).await
+                {
+                    tracing::warn!(%error, "Wi-Fi authorization unavailable during logout");
+                }
+            }
+            controller::logout::run(&context.client, paths, forget).await
+        }
         Command::Install(args) => login::run(context, args, true).await,
         Command::Uninstall { purge } => controller::uninstall::run(paths, purge).await,
         Command::Daemon {

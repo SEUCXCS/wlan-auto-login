@@ -18,6 +18,8 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 ## 模块职责
 
+`xtask/` 提供 `cargo xtask bundle macos`，负责调用 Cargo 构建、生成 plist、组装与验证签名应用包。名称复用 `infra/identity.rs`，版本来自 workspace；plist 模板位于 `packaging/macos/`。普通编译使用 Cargo。维护打包流程时验证参数覆盖环境变量、实际构建产物路径以及失败保留旧 bundle 的行为。
+
 `main.rs` 只调用 `app::run()`。不要向入口增加认证、服务管理或平台分支。
 
 | 路径（相对 `crates/wlan-app/src`） | 维护范围 |
@@ -49,7 +51,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 | `system/{linux,macos,windows}/services/` | 原生服务定义、管理器状态解析、日志来源；Windows 另含 SCM 进程适配 |
 | `system/{linux,macos,windows}/credentials/` | 用户与系统凭据后端 |
 | `system/{linux,macos,windows}/wifi/` | 平台 SSID 查询、连接标识、网络事件订阅 |
-| `system/{linux,macos,windows}/permission.rs` | 平台权限声明与未来授权适配入口 |
+| `system/{linux,macos,windows}/permission.rs` | 平台权限声明、按需授权与状态诊断 |
 
 依赖方向是 `app → system → infra`，`app` 也可直接使用 `infra`。`system` 和 `infra` 不得反向依赖 `app`；`infra` 不依赖 `system`。Clap、终端输入和展示属于应用前端，不能进入系统契约。原生 SDK 调用放在平台适配器内；通用的文件权限、进程身份和信号机制可在 `infra` 使用必要的条件编译。
 
@@ -69,7 +71,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 新增平台后更新 `system.rs`、目标依赖、构建检查和 README。将运行验证与交叉编译结果分开记录。
 
-应用 ID 固定为 `dev.cxcs.tools.wlanlogin`，目录采用 `cxcs-tools/wlanlogin` 两级结构；名称常量集中在 `infra/identity.rs`，路径通过 `infra/paths.rs` 构造。不要使用 `ProjectDirs::from` 推导这个布局：Linux 会忽略组织参数，macOS 会拼成点分名称；用户目录使用 `ProjectDirs::from_path`。macOS 系统 Keychain 授权和服务安装必须共用后台程序路径。Windows 服务的创建、查询、启停和 SCM 回调注册使用同一个 ID，用户计划任务追加 SID。
+应用 ID 固定为 `dev.cxcs.tools.wlanlogin`，目录采用 `cxcs-tools/wlanlogin` 两级结构；名称常量集中在 `infra/identity.rs`，路径通过 `infra/paths.rs` 构造。不要使用 `ProjectDirs::from` 推导这个布局：Linux 会忽略组织参数，macOS 会拼成点分名称；用户目录使用 `ProjectDirs::from_path`。macOS 的 Keychain 授权和服务安装必须共用包内程序路径。完整包的事务安装位于 `system/macos/services/`；严格限制可清理的包成员，新增打包资源时同步更新成员列表。用户与系统服务通过 `SMAppService` 注册，启动定义位于包内 `Contents/Library/LaunchAgents` / `LaunchDaemons`，使用 `BundleProgram`。定义在 xtask 签名前生成，安装期间不得改写签名包。原生 API 由安装副本中的私有命令调用，检查主 bundle 身份，返回带版本、作用域和应用 ID 的状态；不依赖外部 CLI 的位置。停止先 bootout，再通过带令牌的托管模式 IPC 等待进程退出；停止保留原生注册，卸载及替换签名包前需等待原生注销完成。等待用户后台批准不能报告为运行中，也不能阻塞卸载。保留旧外部 plist 的识别、迁移和失败恢复。手动前台 daemon 不接受托管停止指令；托管启动持锁后再次检查实际 launchd 注册。Windows 服务的创建、查询、启停和 SCM 回调注册使用同一个 ID，用户计划任务追加 SID。
 
 改名不自动迁移旧安装，升级步骤见 README。清理只能删除应用自己的文件和清空后的 `wlanlogin` 目录，必须保留 `cxcs-tools` 父目录和同级工具；验证组织目录与应用目录的符号链接／reparse point 边界。Cargo 包为 `wlanlogin-cli` / `wlanlogin-lib`，可执行文件通过 `[[bin]]` 命名为 `wlanlogin`，日志 target 前缀也为 `wlanlogin`。
 
@@ -77,7 +79,13 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 `PermissionId` 使用开放的字符串命名空间；`PermissionDescriptor` 支持名称、可选描述和任意键值元数据。`PermissionProvider::permissions()` 返回动态列表，允许为空，不要固定为两个权限或在公共契约中枚举平台权限种类。
 
-当前 Linux / Windows 返回空列表，macOS 仅声明 `macos.location` 与 `macos.keychain`。已声明权限的 `status()` / `request()` 返回 `NotImplemented`，未知标识返回错误。占位实现不请求授权、不报告已授权，也未接入登录或安装流程。实际授权能力应作为独立功能实现，并保留“不支持 / 未实现”和“已授权”的区别。
+Linux / Windows 返回空列表。macOS 的 `macos.location` 对接签名 Wi-Fi 宿主中的 Core Location；`macos.keychain` 查询本范围的自有条目；查询禁用 UI，申请仅在前台允许 UI。用户与系统 Keychain 共用串行访问器，避免进程级交互开关竞态。诊断区分 Missing / NeedsInteraction / Denied / Unavailable；失败不得删除原条目。未知标识返回错误，保留“不支持 / 未实现”和“已授权”的区别。权限在前台操作需要时自动申请，不增加权限子命令。后台不触发授权弹窗。
+
+包内外 CLI 共用参数解析，无参数不得隐式启动 Wi-Fi 宿主。宿主由前台操作或服务通过明确的内部参数启动。Keychain 保存、删除及 ACL 授权仅查找条目引用，不取密码数据；已有条目直接更新，仅明确不存在时创建，查询或更新失败不得尝试创建替代条目。新条目通过 `SecKeychainItemCreateFromContent` 在创建时传入初始访问控制，包含当前程序及已存在的目标程序。安装已明确要求刷新凭据时，直接进入登录准备，避免预检查重复读取钥匙串。
+
+macOS Wi-Fi 宿主使用有长度限制的 IPC 帧、协议版本和请求 ID；客户端通过 socket 内核审计令牌验证对端签名与 UID，系统范围还检查活动控制台用户。宿主只提供网络状态，不接收校园网凭据。系统宿主在控制台用户改变后退出；启动、请求、空闲存活时间都有界限。交互申请启动不使用 `open -g`；GUI 宿主和用户后台 daemon 保持 AppKit 主线程事件循环，使前台状态能够刷新。Core Location 对象和 delegate 始终位于同一 RunLoop 工作线程；在该线程确认 `NSRunningApplication.isActive` 后才调用授权请求，激活和权限决定分别有超时。已有决定、后台查询及非交互操作均不得申请权限。
+
+安装前后及完整应用包回滚的凭据检查由实际目标程序执行，禁用交互且仅输出带版本的权限状态；仅在回滚时兼容上版检查器以成功退出码证明静默读取、无标准输出的格式。先静默检查；已授权不得改 ACL；锁定时先解锁并重新检查；缺失、不可用、未知或子进程检查失败不得尝试重写。只有确需授权时才复制现有 `SecAccess`，扩展一条仅含 decrypt 的 ACL；无此条目则新增仅含 decrypt 的 ACL，不修改混合权限 ACL、所有者、partition ACL 或其他条目。再次静默检查成功才能继续安装或恢复原服务；未完成回滚保留恢复目录。launchd 定义必须包含 `AssociatedBundleIdentifiers` 与固定应用 ID，关联后台活动归属，继续保持 `open -W` 的生命周期语义。每次重新启动产生新的 Wi-Fi 会话标识，原生查询有超时。
 
 ### 错误与日志
 
@@ -85,7 +93,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 通过 `context` / `with_context` 保留错误来源；门户错误由 `infra/error/portal.rs` 转换为英文、安全的摘要，同时保留供重试分类使用的原始错误类型。当前协议库只在本地化错误文本中提供返回码，应用边界仅识别已知的标准说明与返回码组合，并用静态英文模板输出；无法识别时退回通用摘要。维护映射时用真实 API 加 loopback 响应验证，不要依赖任意门户文本。不要把门户原始响应、URL 查询参数或凭据写入日志。
 
-日志使用 `tracing`，事件文本采用英文句式；使用 `error`、`scope`、`retry_after_secs` 等结构化字段。成功事件用 `info`，可恢复故障用 `warn`，终止或需人工处理的故障用 `error`，跳过检查等诊断用 `debug`。时间和格式由 `infra/logging.rs` 统一处理，业务模块不自行拼时间戳。中文 CLI / TUI 文案留在前端。
+日志使用 `tracing`，事件文本采用英文句式；使用 `error`、`scope`、`retry_after_secs` 等结构化字段。成功事件用 `info`，可恢复故障用 `warn`，终止或需人工处理的故障用 `error`，重复的跳过检查等诊断用 `debug`。daemon 的 `check.rs` 返回检查结果，由 `runtime.rs` 在首次检查、结果变化或错误恢复时用 `info` 输出 `outcome` 和 `next_check_secs`，并记录重试开始，避免静默跳过被误判为定时器失效。macOS 不能用同样受定位权限限制的 BSSID 判断 SSID 不可读时是否断网；已连接但名称不可读必须返回错误，保留重试及凭据保护。时间和格式由 `infra/logging.rs` 统一处理，业务模块不自行拼时间戳。中文 CLI / TUI 文案留在前端。
 
 ## 测试与验证
 

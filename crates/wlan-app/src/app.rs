@@ -24,6 +24,24 @@ pub(crate) fn run() -> std::process::ExitCode {
     }
     match tokio::runtime::Runtime::new() {
         Ok(runtime) => {
+            #[cfg(target_os = "macos")]
+            let gui = unsafe { libc::geteuid() } != 0
+                && (matches!(args.command, cli::Command::MacosHost { .. })
+                    || (matches!(
+                        args.command,
+                        cli::Command::Daemon {
+                            command: None,
+                            background: true,
+                            ..
+                        }
+                    ) && std::env::var_os("WLANLOGIN_MANAGED").is_some_and(|v| v == "1")));
+            #[cfg(target_os = "macos")]
+            let result = if gui {
+                crate::system::macos::host::run_gui(&runtime, entry(args))
+            } else {
+                runtime.block_on(entry(args))
+            };
+            #[cfg(not(target_os = "macos"))]
             let result = runtime.block_on(entry(args));
             runtime.shutdown_timeout(shutdown::RUNTIME_GRACE);
             result
@@ -40,6 +58,17 @@ async fn entry(args: cli::Cli) -> std::process::ExitCode {
     let selected =
         scope::elevated().map(|elevated| scope::Scope::select(args.user, args.system, elevated));
     let paths = selected.and_then(config::Paths::new);
+    #[cfg(target_os = "macos")]
+    if let Ok(paths) = &paths {
+        crate::system::macos::host::configure(paths.scope);
+        use std::io::IsTerminal;
+        let interactive = match &args.command {
+            cli::Command::Login(args) | cli::Command::Install(args) => !args.non_interactive,
+            cli::Command::Logout { .. } | cli::Command::Uninstall { .. } => true,
+            _ => false,
+        } && std::io::stderr().is_terminal();
+        crate::system::macos::credentials::access::configure_interaction(interactive);
+    }
     let log = if matches!(
         args.command,
         cli::Command::Daemon {

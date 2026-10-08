@@ -1,5 +1,6 @@
 [workspace]
-members = ["crates/wlan-api", "crates/wlan-app"]
+members = ["crates/wlan-api", "crates/wlan-app", "xtask"]
+default-members = ["crates/wlan-api", "crates/wlan-app"]
 resolver = "3"
 
 [profile.release]
@@ -8,6 +9,7 @@ strip = "symbols"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [workspace.dependencies]
 wlanlogin-lib = { path = "crates/wlan-api" }

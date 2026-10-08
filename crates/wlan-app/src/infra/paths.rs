@@ -1,6 +1,8 @@
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
-use crate::infra::identity::{APP_NAME, DAEMON_BINARY, ORGANIZATION};
+#[cfg(not(target_os = "macos"))]
+use crate::infra::identity::DAEMON_BINARY;
+use crate::infra::identity::{APP_NAME, ORGANIZATION};
 use directories::ProjectDirs;
 use std::path::{Path, PathBuf};
 
@@ -14,7 +16,24 @@ pub fn project_dirs() -> Option<ProjectDirs> {
     ProjectDirs::from_path(app_dir(""))
 }
 
+#[cfg(target_os = "macos")]
+pub fn macos_bundle(scope: crate::infra::scope::Scope) -> Result<PathBuf> {
+    let root = match scope {
+        crate::infra::scope::Scope::User => project_dirs()
+            .context(Message::FailedToDetermineInstallationDirectory)?
+            .data_local_dir()
+            .to_owned(),
+        crate::infra::scope::Scope::System => app_dir("/Library/Application Support"),
+    };
+    Ok(root.join(crate::infra::identity::APP_BUNDLE))
+}
+
 pub fn user_daemon_executable() -> Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    return Ok(macos_bundle(crate::infra::scope::Scope::User)?
+        .join("Contents/MacOS")
+        .join(APP_NAME));
+    #[cfg(not(target_os = "macos"))]
     Ok(project_dirs()
         .context(Message::FailedToDetermineInstallationDirectory)?
         .data_local_dir()
@@ -29,9 +48,9 @@ pub fn system_daemon_executable() -> Result<PathBuf> {
     }
     #[cfg(target_os = "macos")]
     {
-        Ok(app_dir("/Library/Application Support")
-            .join("bin")
-            .join(DAEMON_BINARY))
+        Ok(macos_bundle(crate::infra::scope::Scope::System)?
+            .join("Contents/MacOS")
+            .join(APP_NAME))
     }
     #[cfg(windows)]
     {
@@ -146,6 +165,12 @@ mod tests {
         assert_eq!(user.config, config);
         assert_eq!(user.runtime, config);
         assert_eq!(user.secrets, config);
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            user_daemon_executable()?,
+            data.join("wlanlogin.app/Contents/MacOS/wlanlogin")
+        );
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(
             user_daemon_executable()?,
             data.join("bin").join(DAEMON_BINARY)
