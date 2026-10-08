@@ -88,7 +88,7 @@ Preserve these behavioral boundaries:
 - Keep shutdown listeners alive and continuously drain NetworkManager D-Bus events.
 - Bound native calls and credential reads; keep at most one background credential read in flight.
 - Keep user and system scope separate, including credential cleanup and daemon wake/reset.
-- Retain operation locks, service transaction rollback, and stop-before-cleanup ordering. macOS installs whole signed bundles, validates installed credential access in the installed process, and retains recovery directories after incomplete rollback. Keep launchd wrapper and application lifetimes distinct: bootout before authenticated managed-stop IPC; never signal an unverified PID. Bundle cleanup accepts only the exact xtask member inventory and rejects symlinks or unknown files.
+- Retain operation locks, service transaction rollback, and stop-before-cleanup ordering. macOS installs whole signed bundles, validates installed credential access in the installed process, and retains recovery directories after incomplete rollback. Native jobs use SMAppService with signed, bundle-contained definitions and BundleProgram; never rewrite these definitions during installation. Stop preserves native registration; replacement and uninstall wait for native unregistration completion before removing the bundle. Background approval is separate from liveness and must not block uninstall. Retain legacy launchd migration and rollback: bootout before authenticated managed-stop IPC; never signal an unverified PID. The managed startup guard checks actual launchd loading, not merely persistent SMAppService registration. Bundle cleanup accepts only the exact xtask member inventory and rejects symlinks or unknown files.
 
 ## Delivery
 

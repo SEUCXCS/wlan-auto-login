@@ -2,6 +2,20 @@
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)] // Some messages are used only by other compilation targets.
 pub enum Message {
+    #[error("Invalid SMAppService response")]
+    MacosServiceProtocol,
+    #[error("SMAppService must run inside the installed signed application bundle")]
+    MacosServiceBundleIdentity,
+    #[error("Bundle service definition is missing; rebuild with cargo xtask bundle macos")]
+    MacosServiceDefinitionMissing,
+    #[error("SMAppService {action} failed: {error}")]
+    MacosServiceOperationFailed { action: String, error: String },
+    #[error("Timed out waiting for SMAppService unregistration; application files retained")]
+    MacosServiceUnregisterTimedOut,
+    #[error(
+        "Background service is registered but needs approval; allow WLAN Login in System Settings > General > Login Items, then run daemon start in the same scope"
+    )]
+    MacosBackgroundApprovalRequired,
     #[error("Failed to configure Keychain interaction: {status}")]
     KeychainInteractionFailed { status: i32 },
     #[error("Failed to delete Keychain credential: {status}")]

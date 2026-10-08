@@ -303,7 +303,7 @@ wlanlogin --user daemon status
 | 平台 | Wi-Fi 识别 | 用户服务 / 系统服务 | 用户凭据 / 系统凭据 |
 | --- | --- | --- | --- |
 | Linux | NetworkManager、D-Bus | systemd user / systemd system | Secret Service / systemd 加密凭据 |
-| macOS | CoreWLAN、SystemConfiguration | LaunchAgent / LaunchDaemon | 用户 Keychain / System Keychain |
+| macOS | CoreWLAN、SystemConfiguration | SMAppService LaunchAgent / LaunchDaemon | 用户 Keychain / System Keychain |
 | Windows | Native Wi-Fi API | Task Scheduler / Service Control Manager | Credential Manager / 机器 DPAPI |
 
 Linux 旧系统可显式改用受文件权限保护的明文凭据：
@@ -315,6 +315,10 @@ sudo wlanlogin --system install --credential-store protected-file
 该模式仅适用于 Linux 系统范围，凭据以**明文**保存在仅管理员可读的文件中。默认加密模式失败时不会自动降级；macOS 和 Windows 不支持此选项。
 
 macOS 安装会校验完整应用包，替换旧副本后检查实际安装程序的凭据读取与 Wi-Fi 能力，再注册、启动服务。失败时尝试恢复旧安装；回滚未完成时会保留恢复目录并报告位置。系统服务仍从当前活动桌面用户的授权宿主获取 Wi-Fi 状态；尚无桌面用户、用户切换或定位未授权时，会等待有效状态。无桌面会话的非交互系统安装，需要以后在登录用户的终端中通过 `sudo wlanlogin --system login` 完成定位授权。
+
+macOS 后台服务通过 `SMAppService` 关联签名应用身份，直接启动应用包内的程序。首次注册或此前关闭过后台活动时，系统可能要求在“系统设置 → 通用 → 登录项”允许 WLAN Login；系统范围的后台服务需要管理员批准。此时 `install` 会明确提示等待批准，保留安装和凭据；允许后执行同一范围的 `daemon start`。定位权限与后台活动批准相互独立，已有的定位授权不会因为卸载、重装或移动同一签名应用而自动重置。
+
+Apple SDK 将包含原生 LaunchDaemon 的应用公证列为要求；本地自签名包不能据此保证系统范围可用。原生注册被系统拒绝时，安装会报告错误并尝试回滚。
 
 ### 登录、修改账号与保存凭据
 
@@ -412,11 +416,15 @@ sudo wlanlogin --system uninstall --purge  # Linux / macOS 系统范围
 
 Windows 系统范围在管理员终端执行 `wlanlogin --system uninstall --purge`。macOS 服务停止、重启及卸载会等待托管应用退出，单独手动运行的前台 daemon 不受 `daemon stop` 影响；卸载完整包前也会停止 Wi-Fi 宿主。
 
+macOS `daemon stop` 只停止当前会话的服务，保留原生注册及后续自动启动；`uninstall` 会注销后台服务并等待注销完成，再删除安装副本。系统设置的后台列表可能需要重新进入页面后更新。`--purge` 额外删除所选范围的凭据和应用数据，不重置系统定位授权。
+
 原始下载的 CLI、手动复制到 Applications 的应用包及 PATH 符号链接需要自行移除。`--purge` 保留其他文件、共享的 `cxcs-tools` 父目录及同级工具；系统服务审计记录由操作系统保留策略管理。macOS 包内存在未知文件或符号链接时会报错并保留它们。
 
 ### 升级
 
 同名新版使用新二进制或新应用包重新执行同一范围的 `install`。macOS 应先用原来的固定证书签名，再更新 Applications 中的源应用并安装；ad-hoc 签名或更换证书可能需要重新授权。
+
+macOS 使用新应用包重新 `install` 时，会自动迁移同一应用 ID 的旧 LaunchAgent / LaunchDaemon，停止旧进程、移除外部启动定义并改用原生注册；迁移失败会尝试恢复旧应用和注册。新包必须通过 `cargo xtask bundle macos` 构建，包含签名内的启动定义。
 
 从旧命令 `cxxy-wlanlogin-cli` 升级时，服务、配置和凭据不会自动迁移，也不提供旧命令或旧环境变量别名。保留旧版程序，先按原安装范围卸载：
 

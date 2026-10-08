@@ -67,7 +67,24 @@ async fn uninstall_plan(
     #[cfg(target_os = "macos")]
     let must_stop = must_stop || (bundle.is_some() && state.registered);
     if must_stop {
+        #[cfg(target_os = "macos")]
+        if matches!(plan.manager, Manager::MacosAppService { .. }) {
+            // Native registration can persist while the job is unloaded or
+            // waiting for approval. Boot out only an actually loaded job.
+            plan.manager
+                .manage(
+                    plan,
+                    crate::system::define::services::Action::Stop,
+                    crate::system::define::services::ServiceState::absent(),
+                    runner,
+                )
+                .await?;
+        }
         for command in &plan.stop {
+            #[cfg(target_os = "macos")]
+            if matches!(plan.manager, Manager::MacosAppService { .. }) {
+                continue;
+            }
             #[cfg(target_os = "macos")]
             if bundle.is_some() {
                 let mut required = command.clone();
@@ -94,7 +111,15 @@ async fn uninstall_plan(
         }
     }
     remove_enable_link(plan)?;
-    cleanup::remove_file(&plan.definition)?;
+    #[cfg(target_os = "macos")]
+    let bundled_definition = matches!(plan.manager, Manager::MacosAppService { .. });
+    #[cfg(not(target_os = "macos"))]
+    let bundled_definition = false;
+    // Keep a signed bundle intact if credential deletion later fails. Its
+    // packaged definition is removed together with the payload, after unregister.
+    if !bundled_definition {
+        cleanup::remove_file(&plan.definition)?;
+    }
     for command in &plan.reload {
         execute(runner, command).await?;
     }

@@ -11,6 +11,12 @@ pub(crate) enum Manager {
     Systemd { system: bool },
     #[cfg(any(target_os = "macos", test))]
     Launchd { domain: String, target: String },
+    #[cfg(any(target_os = "macos", test))]
+    MacosAppService {
+        domain: String,
+        target: String,
+        executable: PathBuf,
+    },
     #[cfg(any(target_os = "windows", test))]
     TaskScheduler { name: String },
     #[cfg(any(windows, test))]

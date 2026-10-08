@@ -43,7 +43,7 @@ pub async fn run(paths: &Paths, discover: bool) -> Result<Vec<InstallationReport
                 state.running = actual.is_some();
                 state.pid = actual;
                 if wrapper_running && !state.running {
-                    state.state = "waiting for Launch Services application".into();
+                    state.state = "waiting for managed daemon readiness".into();
                     state.pending = true;
                 }
             }

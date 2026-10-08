@@ -1,22 +1,28 @@
-//! Control the actual Launch Services app after removing launchd's wrapper.
+//! Control managed processes after removing their launchd job.
 use crate::infra::{
     command::Runner,
     control,
     error::{Context, Message, Result, ensure},
     paths::Paths,
 };
-use crate::system::define::services::{Action, Plan, ServiceManager, ServiceState};
+use crate::system::define::services::{Action, Manager, Plan, ServiceManager, ServiceState};
 use std::time::Duration;
 
-/// Acquire before consulting launchd. After bootout, a delayed Launch Services
-/// child must fail this check before creating a host or a daemon endpoint.
+/// Acquire before consulting launchd. After bootout, a delayed managed process
+/// must fail this check before creating a host or a daemon endpoint.
 pub async fn guard(paths: &Paths) -> Result<std::fs::File> {
     let guard = control::managed_lock(paths)?;
     let plan = super::definition::plan(paths)?;
-    let state = plan
-        .manager
-        .query(&crate::infra::command::SystemRunner)
-        .await?;
+    let state = match &plan.manager {
+        Manager::MacosAppService { domain, target, .. } => {
+            super::manager::query(domain, target, &crate::infra::command::SystemRunner).await?
+        }
+        _ => {
+            plan.manager
+                .query(&crate::infra::command::SystemRunner)
+                .await?
+        }
+    };
     ensure!(state.registered, Message::ServiceNotRegistered);
     Ok(guard)
 }
@@ -44,6 +50,14 @@ pub async fn manage(
 }
 
 pub async fn wait_ready(paths: &Paths, plan: &Plan) -> Result<()> {
+    let state = plan
+        .manager
+        .query(&crate::infra::command::SystemRunner)
+        .await?;
+    ensure!(
+        state.enabled != Some(false),
+        Message::MacosBackgroundApprovalRequired
+    );
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             if control::managed_running(paths).await {
@@ -54,7 +68,7 @@ pub async fn wait_ready(paths: &Paths, plan: &Plan) -> Result<()> {
     })
     .await
     .context(Message::ManagedAppNotReady)??;
-    // User service startup creates its signed host before publishing control IPC.
+    // User daemon startup creates its signed host before publishing control IPC.
     // A root service is ready even before GUI login: SSID must then wait for a user.
     ensure!(plan.executable.is_file(), Message::InstallationIncomplete);
     Ok(())

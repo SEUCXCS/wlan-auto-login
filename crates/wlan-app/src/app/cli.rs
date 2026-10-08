@@ -34,6 +34,9 @@ pub struct Cli {
 pub enum Command {
     #[cfg(target_os = "macos")]
     #[command(hide = true)]
+    MacosService { action: MacosServiceAction },
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
     MacosCredentialCheck,
     #[cfg(target_os = "macos")]
     #[command(hide = true)]
@@ -67,6 +70,14 @@ pub enum Command {
         #[arg(long)]
         purge: bool,
     },
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum MacosServiceAction {
+    Status,
+    Register,
+    Unregister,
 }
 
 #[derive(Subcommand, Debug, PartialEq, Eq)]
@@ -137,9 +148,33 @@ pub(super) async fn dispatch(
             ..
         }
     ) {
-        paths.scope.require_access()?;
+        #[cfg(target_os = "macos")]
+        let read_only = matches!(
+            args.command,
+            Command::MacosService {
+                action: MacosServiceAction::Status
+            }
+        );
+        #[cfg(not(target_os = "macos"))]
+        let read_only = false;
+        if !read_only {
+            paths.scope.require_access()?;
+        }
     }
     match args.command {
+        #[cfg(target_os = "macos")]
+        Command::MacosService { action } => {
+            let action = match action {
+                MacosServiceAction::Status => "status",
+                MacosServiceAction::Register => "register",
+                MacosServiceAction::Unregister => "unregister",
+            };
+            println!(
+                "{}",
+                crate::system::macos::services::app_service::perform(paths.scope, action)?
+            );
+            Ok(())
+        }
         #[cfg(target_os = "macos")]
         Command::MacosCredentialCheck => {
             let status =

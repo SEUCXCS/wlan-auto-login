@@ -17,16 +17,19 @@ use crate::system::{
 };
 use std::{fs, future::Future, path::Path};
 
-pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
+pub async fn install(paths: &Paths, previous_plan: Plan) -> Result<()> {
     crate::infra::error::ensure!(
-        paths.scope == plan.scope,
+        paths.scope == previous_plan.scope,
         crate::infra::error::Message::ServicePlanDoesNotMatchTheSelected
     );
+    let plan = super::definition::native_plan(paths)?;
+    let legacy_plan = super::definition::legacy_plan(paths)?;
     if paths.scope == Scope::System {
         prepare_system_directories()?;
     }
     let _lock = control::service_lock(paths)?;
     crate::system::shared::services::artifacts::assert_owned(&plan.definition)?;
+    crate::system::shared::services::artifacts::assert_owned(&legacy_plan.definition)?;
     cleanup::validate_directory(
         plan.definition
             .parent()
@@ -34,6 +37,18 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
     )?;
     let source = bundle::source()?;
     payload::validate(&source).await?;
+    for system in [false, true] {
+        let definition = source.join(crate::infra::identity::macos_service_path(system));
+        let expected = if system == (paths.scope == Scope::System) {
+            plan.content.clone()
+        } else {
+            crate::infra::identity::macos_service_plist(system)
+        };
+        crate::infra::error::ensure!(
+            fs::read_to_string(&definition).ok().as_deref() == Some(expected.as_str()),
+            Message::MacosServiceDefinitionMissing
+        );
+    }
     let destination = paths::macos_bundle(paths.scope)?;
     let mut transaction = Payload::stage(&source, &destination)?;
     payload::validate(&transaction.staged()).await?;
@@ -45,7 +60,7 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
         .context(Message::InstallationPathHasNoParentDirectory)?
         .join("bin")
         .join(crate::infra::identity::DAEMON_BINARY);
-    let previous = match fs::read(&plan.definition) {
+    let previous = match fs::read(&legacy_plan.definition) {
         Ok(bytes) => Some(bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e.into()),
@@ -58,13 +73,8 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
     if let Some(bytes) = &previous {
         fs::write(transaction.recovery_path("old.plist"), bytes)?;
     }
-    fs::create_dir_all(
-        plan.definition
-            .parent()
-            .context(Message::ServiceDefinitionHasNoParentDirectory)?,
-    )?;
-    let state = plan.manager.query(&SystemRunner).await?;
-    stop(paths, &plan).await?;
+    let state = previous_plan.manager.query(&SystemRunner).await?;
+    stop(paths, &previous_plan).await?;
     let outcome = async {
         host::stop_helpers(
             paths.scope,
@@ -75,6 +85,10 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
             },
         )
         .await?;
+        // Unregister using the old signed bundle before replacing it. A raw
+        // bootout alone preserves native registration for future logins.
+        unregister(&previous_plan).await?;
+        cleanup::remove_file(&legacy_plan.definition)?;
         transaction.publish()?;
         // Application root is public code, while state/secrets stay private.
         if paths.scope == Scope::System {
@@ -91,15 +105,16 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
                 tracing::warn!(%error, "System service will wait for an authorized GUI-session Wi-Fi host");
             } else { return Err(error); }
         }
-        crate::system::shared::services::install::write_definition(
-            &plan.definition,
-            plan.content.as_bytes(),
-        )?;
+        // Packaged definitions were signed by xtask. Installation never rewrites them.
         for command in &plan.start {
             command.run().await?;
         }
+        let registered = plan.manager.query(&SystemRunner).await?;
+        if registered.registered && registered.enabled == Some(false) {
+            return Ok::<_, crate::infra::error::Error>(false);
+        }
         super::runtime::wait_ready(paths, &plan).await?;
-        Ok::<_, crate::infra::error::Error>(())
+        Ok(true)
     }
     .await;
     if let Err(error) = outcome {
@@ -114,16 +129,21 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
         {
             failures.push(e.to_string());
         }
+        if failures.is_empty()
+            && let Err(e) = unregister(&plan).await
+        {
+            failures.push(e.to_string());
+        }
         if failures.is_empty() {
             if let Err(e) = transaction.restore() {
                 failures.push(e.to_string());
             }
             let restored = match &previous {
                 Some(bytes) => crate::system::shared::services::install::write_definition(
-                    &plan.definition,
+                    &legacy_plan.definition,
                     bytes,
                 ),
-                None => cleanup::remove_file(&plan.definition),
+                None => cleanup::remove_file(&legacy_plan.definition),
             };
             if let Err(e) = restored {
                 failures.push(e.to_string());
@@ -150,10 +170,23 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
                 }
             }
             if failures.is_empty() && state.registered {
-                for command in &plan.start {
+                for command in &previous_plan.start {
                     if let Err(e) = command.run().await {
                         failures.push(e.to_string());
                     }
+                }
+                // Native registration survives a session-only stop. Restore
+                // that registration without resuming a previously stopped job.
+                if failures.is_empty()
+                    && !state.running
+                    && !state.pending
+                    && matches!(
+                        previous_plan.manager,
+                        crate::system::define::services::Manager::MacosAppService { .. }
+                    )
+                    && let Err(e) = stop(paths, &previous_plan).await
+                {
+                    failures.push(e.to_string());
                 }
             }
         }
@@ -166,6 +199,7 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
         }
         return Err(error).context(Message::BundleInstallationRestored);
     }
+    let ready = outcome?;
     transaction.commit();
     // Remove only the same-ID legacy loose executable identified by the old plist.
     if legacy_owned {
@@ -176,10 +210,31 @@ pub async fn install(paths: &Paths, plan: Plan) -> Result<()> {
                 .context(Message::InstallationPathHasNoParentDirectory)?,
         )?;
     }
-    tracing::info!(
-        scope = paths.scope.label(),
-        "Signed application installed and managed daemon ready"
-    );
+    if ready {
+        tracing::info!(
+            scope = paths.scope.label(),
+            "Signed application installed and managed daemon ready"
+        );
+    } else {
+        tracing::warn!(
+            scope = paths.scope.label(),
+            "{}",
+            Message::MacosBackgroundApprovalRequired
+        );
+    }
+    Ok(())
+}
+
+async fn unregister(plan: &Plan) -> Result<()> {
+    if matches!(
+        plan.manager,
+        crate::system::define::services::Manager::MacosAppService { .. }
+    ) && plan.definition.try_exists()?
+    {
+        for command in &plan.remove {
+            command.run().await?;
+        }
+    }
     Ok(())
 }
 

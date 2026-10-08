@@ -92,6 +92,13 @@ fn bundle(options: &Bundle) -> Result<()> {
     fs::copy(&binary, contents.join("MacOS").join(identity::APP_NAME))?;
     fs::write(contents.join("Info.plist"), plist())?;
     fs::write(contents.join("PkgInfo"), b"APPL????")?;
+    for system in [false, true] {
+        let definition = app.join(identity::macos_service_path(system));
+        fs::write(&definition, identity::macos_service_plist(system))?;
+        run(Command::new("/usr/bin/plutil")
+            .arg("-lint")
+            .arg(&definition))?;
+    }
     run(Command::new("/usr/bin/plutil")
         .arg("-lint")
         .arg(contents.join("Info.plist")))?;
@@ -233,6 +240,19 @@ fn publish(app: &Path, destination: &Path, staging: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_jobs_are_in_the_signed_inventory_and_have_no_installation_paths() {
+        for system in [false, true] {
+            assert!(identity::MACOS_BUNDLE_FILES.contains(&identity::macos_service_path(system)));
+            let job = identity::macos_service_plist(system);
+            assert!(!job.contains('@'));
+            assert!(job.contains("<key>BundleProgram</key>"));
+            assert!(job.contains(identity::APP_ID));
+            assert!(!job.contains("/usr/bin/open") && !job.contains("/Users/"));
+            assert!(job.contains(if system { "--system" } else { "--user" }));
+        }
+        assert!(plist().contains("<key>CFBundleName</key><string>WLAN Login</string>"));
+    }
 
     #[test]
     fn artifacts_use_cargos_actual_path_and_ignore_other_binaries() -> Result<()> {

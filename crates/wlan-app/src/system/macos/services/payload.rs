@@ -240,6 +240,40 @@ pub fn remove(app: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rollback_restores_packaged_service_definitions_byte_for_byte() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source.app");
+        let destination = root.path().join("installed.app");
+        fixture(&source, "new")?;
+        fixture(&destination, "old")?;
+        for system in [false, true] {
+            let relative = crate::infra::identity::macos_service_path(system);
+            fs::write(
+                source.join(relative),
+                crate::infra::identity::macos_service_plist(system),
+            )?;
+            fs::write(destination.join(relative), "previous signed definition")?;
+        }
+        let mut tx = Payload::stage(&source, &destination)?;
+        tx.publish()?;
+        for system in [false, true] {
+            assert_eq!(
+                fs::read(destination.join(crate::infra::identity::macos_service_path(system)))?,
+                fs::read(source.join(crate::infra::identity::macos_service_path(system)))?
+            );
+        }
+        tx.restore()?;
+        for system in [false, true] {
+            assert_eq!(
+                fs::read_to_string(
+                    destination.join(crate::infra::identity::macos_service_path(system))
+                )?,
+                "previous signed definition"
+            );
+        }
+        Ok(())
+    }
     fn fixture(app: &Path, value: &str) -> Result<()> {
         for directory in DIRECTORIES {
             fs::create_dir_all(app.join(directory))?;
