@@ -1,14 +1,12 @@
-# WLAN Auto Login _(wlan-auto-login)_
+# WLAN Auto Login
 
 `wlanlogin` 是东南大学成贤学院 `Student_CX` 校园 Wi-Fi 的自动登录工具，可在 Linux、macOS 和 Windows 上运行。程序提供命令行界面（CLI）和终端交互界面（TUI），用于登录、注销和保存凭据。后台服务在连接校园 Wi-Fi 后检查认证状态，并在门户确认离线时重新登录。
-
-账号和密码保存在所选安装范围的凭据存储中。用户范围与系统范围分别保存配置、凭据和运行状态。程序可在未连接校园 Wi-Fi 时保存凭据，也提供自动重试、日志查看和卸载清理。
 
 [下载 Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) · [提交问题](https://github.com/SEUCXCS/wlan-auto-login/issues)
 
 ## 目录
 
-- [WLAN Auto Login _(wlan-auto-login)_](#wlan-auto-login-wlan-auto-login)
+- [WLAN Auto Login](#wlan-auto-login)
   - [目录](#目录)
   - [安装](#安装)
     - [依赖](#依赖)
@@ -43,7 +41,7 @@
 
 ## 安装
 
-如果 [Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) 提供预构建附件，Linux 和 Windows 可直接使用。没有对应附件时，按[构建](#构建)获取程序。macOS 使用完整的 `wlanlogin.app`，并在本机完成签名。可用平台和附件以发布内容为准。
+[Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) 提供预构建附件，Linux 和 Windows 可直接使用，macOS 需要对下载的 `wlanlogin.app` 完成签名（具体详见下方安装教程）。当然，你也可以自行[构建](#构建)程序。
 
 ### 依赖
 
@@ -57,7 +55,7 @@
 
 Linux 用户范围保存凭据时，Secret Service 应已启动并解锁。Linux 系统范围默认使用 `systemd-creds`，所用 systemd 应提供这个命令。
 
-macOS 应用声明的最低系统版本为 macOS 13.0。预构建附件的兼容范围以发布说明为准。裸二进制文件不能替代完整应用包来完成 Wi-Fi 定位授权。
+macOS 最低系统版本为 macOS 13.0。
 
 源码构建还使用以下工具。安装方法见[构建](#构建)。
 
@@ -67,8 +65,6 @@ macOS 应用声明的最低系统版本为 macOS 13.0。预构建附件的兼容
 - Windows：与 Rust target 对应的 MSVC 或 GNU 构建工具。
 
 ### 安装范围
-
-选择一个安装范围：
 
 | 范围 | 启动时机 | 安装方式 |
 | --- | --- | --- |
@@ -85,9 +81,7 @@ macOS 应用声明的最低系统版本为 macOS 13.0。预构建附件的兼容
 
 ### Linux
 
-1. 下载与 CPU 架构匹配的 Linux 附件并解压。
-
-   解压后的程序名为 `wlanlogin`。若没有对应附件，先[从源码构建](#build-linux)。
+1. 下载与 CPU 架构匹配的 Linux 附件并解压或[从源码构建](#build-linux)。二进制产物名为 `wlanlogin`。
 
 2. 在程序所在目录安装命令。
 
@@ -129,7 +123,8 @@ sudo "$HOME/.local/bin/wlanlogin" --system daemon status
 
 旧版 Linux 系统可显式选择 `protected-file` 凭据存储。
 
-**警告：** 仅在接受明文存储时选择 `protected-file`。账号和密码会保存在仅管理员可读的文件中。
+> [!WARNING]
+> 仅在接受明文存储时选择 `protected-file`。账号和密码会保存在仅管理员可读的文件中。
 
 ```sh
 sudo "$HOME/.local/bin/wlanlogin" --system install --credential-store protected-file
@@ -143,21 +138,15 @@ sudo "$HOME/.local/bin/wlanlogin" --system install --credential-store protected-
 
 #### 获取应用包
 
-1. 获取完整的 `wlanlogin.app`。
+1. 从 [Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) 下载并解压完整的 `wlanlogin.app`。在 Finder 中将应用包放入用户应用目录 `~/Applications`，目录不存在时先创建。也可按 [macOS 应用打包](#build-macos)构建并复制到同一目录。
 
-   若 Releases 提供对应附件，下载并解压。否则，按 [macOS 应用打包](#build-macos)构建。
-
-2. 设置应用包路径。
-
-   下载的应用包位于 `~/Downloads/` 时执行：
+2. 在终端设置已安装的应用包路径。
 
    ```sh
-   export WLANLOGIN_APP="$HOME/Downloads/wlanlogin.app"
+   export WLANLOGIN_APP="$HOME/Applications/wlanlogin.app"
    ```
 
-   源码打包时，使用打包章节给出的路径。
-
-预构建应用可能未签名，也可能使用 ad-hoc 签名。两者均可用下文的 `codesign --force` 在本机重新签名，不必重新编译 Rust。
+预构建应用可能未签名，也可能使用 ad-hoc 签名。两者均可用下文的 `codesign --force` 在本机进行签名。
 
 <a id='macos-signing'></a>
 
@@ -192,7 +181,7 @@ sudo "$HOME/.local/bin/wlanlogin" --system install --credential-store protected-
    xcode-select --install
    ```
 
-2. 确认 `WLANLOGIN_APP` 指向获取的完整应用包。
+2. 确认 `WLANLOGIN_APP` 指向已复制到 `~/Applications/wlanlogin.app` 的完整应用包。
 3. 使用固定证书签名。
 
    ```sh
@@ -216,29 +205,26 @@ sudo "$HOME/.local/bin/wlanlogin" --system install --credential-store protected-
 
 #### 安装命令入口
 
-先签名，再复制应用。复制后不修改包内文件。CLI 符号链接指向包内程序，使 CLI 和 Wi-Fi 授权宿主共用完整应用包。
+完成签名后，创建指向应用包内程序的 CLI 符号链接，使 CLI 和 Wi-Fi 授权宿主共用 `~/Applications/wlanlogin.app`。签名后不修改包内文件。
 
-1. 选择一个应用放置位置并复制应用。
-
-   仅供当前用户使用：
+1. 在 `~/.local/bin` 创建命令入口。
 
    ```sh
-   mkdir -p "$HOME/Applications" "$HOME/.local/bin"
-   ditto "$WLANLOGIN_APP" "$HOME/Applications/wlanlogin.app"
+   mkdir -p "$HOME/.local/bin"
    ln -sf "$HOME/Applications/wlanlogin.app/Contents/MacOS/wlanlogin" \
      "$HOME/.local/bin/wlanlogin"
    export PATH="$HOME/.local/bin:$PATH"
    ```
 
-   供本机用户使用：
-
-   ```sh
-   sudo ditto "$WLANLOGIN_APP" "/Applications/wlanlogin.app"
-   sudo mkdir -p /usr/local/bin
-   sudo ln -sf "/Applications/wlanlogin.app/Contents/MacOS/wlanlogin" \
-     /usr/local/bin/wlanlogin
-   export PATH="/usr/local/bin:$PATH"
-   ```
+> 如需供其他本机用户使用，可将已签名的应用包复制到 `/Applications`，并在 `/usr/local/bin` 创建命令入口：
+>
+> ```sh
+> sudo ditto "$WLANLOGIN_APP" "/Applications/wlanlogin.app"
+> sudo mkdir -p /usr/local/bin
+> sudo ln -sf "/Applications/wlanlogin.app/Contents/MacOS/wlanlogin" \
+>   /usr/local/bin/wlanlogin
+> export PATH="/usr/local/bin:$PATH"
+> ```
 
 2. 将所选 PATH 设置加入 `~/.zshrc`。
 3. 在已登录桌面的普通终端安装用户后台服务。
@@ -320,7 +306,7 @@ macOS 安装会校验完整应用包。替换旧副本后，程序检查凭据�
 
 1. 获取新版二进制文件或完整应用包。
 
-   macOS 使用原来的固定证书签名，再更新 Applications 中的源应用。ad-hoc 签名或更换证书可能要求重新授权。
+   macOS 按[安装教程](#quick-macos)将新版应用包复制到原来的 `~/Applications/wlanlogin.app`，并使用原来的固定证书签名。使用 `/Applications/wlanlogin.app` 的用户，再将已签名的新版应用包复制到该位置。保持符号链接的目标路径一致。ad-hoc 签名或更换证书可能要求重新授权。
 
 2. 在原安装范围重新执行 `install`。
 
@@ -340,44 +326,6 @@ systemctl --user restart dev.cxcs.tools.wlanlogin.service
 ```
 
 使用实际生成的软件包文件名。运行中的服务在重启后使用新程序。
-
-#### 从旧命令迁移
-
-旧命令 `cxxy-wlanlogin-cli` 的服务、配置和凭据不会自动迁移。新程序没有旧命令或旧环境变量别名。
-
-**警告：** 先记录仍要使用的账号、密码和线路。下面的 `--purge` 命令会删除原安装范围的凭据和应用数据。
-
-1. 保留旧版程序，按原范围卸载旧服务。
-
-   用户范围：
-
-   ```sh
-   cxxy-wlanlogin-cli --user uninstall --purge
-   ```
-
-   Linux 或 macOS 系统范围：
-
-   ```sh
-   sudo cxxy-wlanlogin-cli --system uninstall --purge
-   ```
-
-   Windows 在管理员终端执行系统范围命令。只清理实际使用的范围；没有服务但保存过旧凭据时，也可用旧程序清理。
-
-2. 使用新程序在同一范围保存凭据。
-
-   ```sh
-   wlanlogin --user login --interactive --remember-me
-   ```
-
-3. 安装新版后台服务。
-
-   ```sh
-   wlanlogin --user install
-   ```
-
-4. 更新自动化脚本中的命令和环境变量。
-
-   使用 `wlanlogin`、`WLANLOGIN_USERNAME`、`WLANLOGIN_PASSWORD` 和 `WLANLOGIN_LINE`。系统安装使用 `--system` 和管理员权限。
 
 ## 使用
 
@@ -608,10 +556,17 @@ pacman 保留用户配置和凭据。如要删除凭据，在移除软件包前�
 
    ```sh
    cargo xtask bundle macos --codesign-identity=-
-   export WLANLOGIN_APP="$PWD/target/release/bundle/wlanlogin.app"
    ```
 
-5. 按[创建签名证书](#macos-signing)完成本地签名和安装。
+5. 将完整应用包复制到用户应用目录，并设置后续使用的路径。
+
+   ```sh
+   mkdir -p "$HOME/Applications"
+   ditto "$PWD/target/release/bundle/wlanlogin.app" "$HOME/Applications/wlanlogin.app"
+   export WLANLOGIN_APP="$HOME/Applications/wlanlogin.app"
+   ```
+
+6. 按[创建签名证书](#macos-signing)及后续步骤完成签名、命令入口和后台服务安装。
 
 `cargo xtask bundle macos` 构建应用，生成 plist，组装并验证应用包。`cargo build` 只生成可执行文件，不能替代应用打包。
 
@@ -621,7 +576,10 @@ pacman 保留用户配置和凭据。如要删除凭据，在移除软件包前�
 rustup target add aarch64-apple-darwin
 cargo xtask bundle macos --codesign-identity=- \
   --profile dev --target aarch64-apple-darwin
-export WLANLOGIN_APP="$PWD/target/aarch64-apple-darwin/debug/bundle/wlanlogin.app"
+mkdir -p "$HOME/Applications"
+ditto "$PWD/target/aarch64-apple-darwin/debug/bundle/wlanlogin.app" \
+  "$HOME/Applications/wlanlogin.app"
+export WLANLOGIN_APP="$HOME/Applications/wlanlogin.app"
 ```
 
 Apple Silicon 的 target 为 `aarch64-apple-darwin`，Intel 为 `x86_64-apple-darwin`。指定 target 后，产物路径增加 target 层级。`dev` 配置对应 `debug` 目录。`--target-dir` 或 `CARGO_TARGET_DIR` 可指定输出根目录；以 xtask 输出的 `Bundle:` 路径为准。
