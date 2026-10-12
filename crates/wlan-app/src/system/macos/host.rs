@@ -419,11 +419,18 @@ async fn connect(session: &Session, scope: Scope, app: &Path) -> Result<Option<U
     Ok(None)
 }
 
+#[derive(Clone, Copy)]
+enum HostEntry {
+    Daemon,
+    Legacy,
+}
+
 fn host_launch(
     app: &Path,
     scope: Scope,
     uid: u32,
     interactive: bool,
+    entry: HostEntry,
 ) -> crate::infra::command::Invocation {
     use crate::infra::command::Invocation;
     use std::ffi::OsString;
@@ -431,12 +438,11 @@ fn host_launch(
     if !interactive {
         args.push("-g".into());
     }
-    args.extend([
-        "-a".into(),
-        app.as_os_str().to_owned(),
-        "--args".into(),
-        "macos-host".into(),
-    ]);
+    args.extend(["-a".into(), app.as_os_str().to_owned(), "--args".into()]);
+    match entry {
+        HostEntry::Daemon => args.extend(["daemon".into(), "--internal-wifi-host".into()]),
+        HostEntry::Legacy => args.push("macos-host".into()),
+    }
     if scope == Scope::System {
         args.push("--system-helper".into());
         let mut command: Vec<OsString> = vec![
@@ -455,7 +461,37 @@ fn host_launch(
 }
 
 async fn launch_host(app: &Path, scope: Scope, uid: u32, interactive: bool) -> Result<()> {
-    host_launch(app, scope, uid, interactive).run().await
+    launch(
+        app,
+        scope,
+        uid,
+        interactive,
+        &crate::infra::command::SystemRunner,
+    )
+    .await
+}
+
+async fn launch(
+    app: &Path,
+    scope: Scope,
+    uid: u32,
+    interactive: bool,
+    runner: &impl crate::infra::command::Runner,
+) -> Result<()> {
+    use crate::infra::command::Invocation;
+    let executable = bundle::executable(app);
+    // Probe only help at execution time: upgrades and rollback can replace the
+    // selected bundle. Never discover its protocol by starting a daemon or host.
+    let probe = Invocation::new(&executable, ["daemon", "--internal-wifi-host", "--help"]);
+    let entry = if runner.output(&probe).await?.success {
+        HostEntry::Daemon
+    } else {
+        let legacy = Invocation::new(&executable, ["macos-host", "--help"]);
+        runner.output(&legacy).await?.check(&legacy)?;
+        HostEntry::Legacy
+    };
+    let command = host_launch(app, scope, uid, interactive, entry);
+    runner.output(&command).await?.check(&command)
 }
 
 /// AppKit activation properties update on the main run loop. Keep it running for
@@ -568,17 +604,86 @@ mod tests {
     #[test]
     fn only_interactive_authorization_launches_in_the_foreground() {
         for scope in [Scope::User, Scope::System] {
-            let foreground = host_launch(Path::new("/Applications/Test.app"), scope, 501, true);
-            let background = host_launch(Path::new("/Applications/Test.app"), scope, 501, false);
+            let foreground = host_launch(
+                Path::new("/Applications/Test.app"),
+                scope,
+                501,
+                true,
+                HostEntry::Daemon,
+            );
+            let background = host_launch(
+                Path::new("/Applications/Test.app"),
+                scope,
+                501,
+                false,
+                HostEntry::Daemon,
+            );
             assert!(!foreground.args.iter().any(|arg| arg == "-g"));
             assert!(background.args.iter().any(|arg| arg == "-g"));
-            assert!(foreground.args.iter().any(|arg| arg == "macos-host"));
+            assert!(
+                foreground
+                    .args
+                    .windows(3)
+                    .any(|args| { args == ["--args", "daemon", "--internal-wifi-host"] })
+            );
+            assert!(!foreground.args.iter().any(|arg| arg == "macos-host"));
             if scope == Scope::System {
                 assert_eq!(foreground.program, "/bin/launchctl");
                 assert!(foreground.args.iter().any(|arg| arg == "#501"));
                 assert!(foreground.args.iter().any(|arg| arg == "--system-helper"));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn host_launch_probes_current_and_previous_bundles_without_starting_a_daemon()
+    -> Result<()> {
+        use crate::infra::command::tests::FakeRunner;
+        let app = Path::new("/Applications/Test.app");
+        for scope in [Scope::User, Scope::System] {
+            for current in [true, false] {
+                let outputs = if current {
+                    vec![(true, "daemon help"), (true, "")]
+                } else {
+                    vec![(false, "unknown argument"), (true, "host help"), (true, "")]
+                };
+                let runner = FakeRunner::new(outputs);
+                launch(app, scope, 501, false, &runner).await?;
+                let calls = runner.calls.borrow();
+                assert_eq!(calls[0].program, bundle::executable(app));
+                assert_eq!(calls[0].args, ["daemon", "--internal-wifi-host", "--help"]);
+                let expected = if current {
+                    HostEntry::Daemon
+                } else {
+                    HostEntry::Legacy
+                };
+                if !current {
+                    assert_eq!(calls[1].program, bundle::executable(app));
+                    assert_eq!(calls[1].args, ["macos-host", "--help"]);
+                }
+                assert_eq!(calls.len(), if current { 2 } else { 3 });
+                let actual = &calls[calls.len() - 1];
+                let expected = host_launch(app, scope, 501, false, expected);
+                assert_eq!(actual.program, expected.program);
+                assert_eq!(actual.args, expected.args);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unsupported_protocol_or_failed_launch_never_starts_another_host() -> Result<()> {
+        use crate::infra::command::tests::FakeRunner;
+        let app = Path::new("/Applications/Test.app");
+        for outputs in [
+            vec![(false, "invalid option"), (false, "invalid command")],
+            vec![(true, "daemon help"), (false, "launch failed")],
+        ] {
+            let runner = FakeRunner::new(outputs);
+            assert!(launch(app, Scope::User, 501, false, &runner).await.is_err());
+            assert_eq!(runner.calls.borrow().len(), 2);
+        }
+        Ok(())
     }
     #[tokio::test]
     async fn ipc_rejects_oversized_frames_without_allocating_the_payload() -> Result<()> {

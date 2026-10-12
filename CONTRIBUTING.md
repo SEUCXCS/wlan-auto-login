@@ -87,7 +87,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 Linux / Windows 返回空列表。macOS 的 `macos.location` 对接签名 Wi-Fi 宿主中的 Core Location；`macos.keychain` 查询本范围的自有条目；查询禁用 UI，申请仅在前台允许 UI。用户与系统 Keychain 共用串行访问器，避免进程级交互开关竞态。诊断区分 Missing / NeedsInteraction / Denied / Unavailable；失败不得删除原条目。未知标识返回错误，保留“不支持 / 未实现”和“已授权”的区别。`permission list/check/get` 在所有平台编译并显示，由运行时 provider 决定支持的权限；空实现的列表和全部查询返回空集合，显式 ID 仍需校验。查询不申请授权，`get` 仅在 stdin 和 stderr 均为终端时请求指定权限。逐项保留诊断，某一权限失败不能丢失其他结果。状态 JSON 使用带版本、范围和权限 ID 的 `PermissionReport`，安装端严格检查版本、范围、ID、条目数及错误字段。后台不触发授权弹窗。
 
-包内外 CLI 共用参数解析，无参数不得隐式启动 Wi-Fi 宿主。宿主由前台操作或服务通过明确的内部参数启动。Keychain 保存、删除及 ACL 授权仅查找条目引用，不取密码数据；已有条目直接更新，仅明确不存在时创建，查询或更新失败不得尝试创建替代条目。新条目通过 `SecKeychainItemCreateFromContent` 在创建时传入初始访问控制，包含当前程序及已存在的目标程序。安装已明确要求刷新凭据时，直接进入登录准备，避免预检查重复读取钥匙串。
+包内外 CLI 共用参数解析，无参数不得隐式启动 Wi-Fi 宿主。macOS 宿主使用隐藏的 `daemon --internal-wifi-host`，仅运行 Wi-Fi／定位宿主，不进入自动登录循环；隐藏的 `--system-helper` 仅能与该模式组合，选择服务于系统客户端的桌面用户宿主。宿主模式与旧 `--background` / `--service` 参数互斥，字段上方保留用途注释。macOS bootstrap 在构造门户依赖之前处理此模式并保持 AppKit 主线程循环。启动所选包前通过 `--help` 探测新参数，旧安装／回滚副本继续使用原 `macos-host` 协议；探测或实际启动失败时不尝试另一种宿主启动。Keychain 保存、删除及 ACL 授权仅查找条目引用，不取密码数据；已有条目直接更新，仅明确不存在时创建，查询或更新失败不得尝试创建替代条目。新条目通过 `SecKeychainItemCreateFromContent` 在创建时传入初始访问控制，包含当前程序及已存在的目标程序。安装已明确要求刷新凭据时，直接进入登录准备，避免预检查重复读取钥匙串。
 
 macOS Wi-Fi 宿主使用有长度限制的 IPC 帧、协议版本和请求 ID；客户端通过 socket 内核审计令牌验证对端签名与 UID，系统范围还检查活动控制台用户。宿主只提供网络状态，不接收校园网凭据。系统宿主在控制台用户改变后退出；启动、请求、空闲存活时间都有界限。交互申请启动不使用 `open -g`；GUI 宿主和用户后台 daemon 保持 AppKit 主线程事件循环，使前台状态能够刷新。Core Location 对象和 delegate 始终位于同一 RunLoop 工作线程；在该线程确认 `NSRunningApplication.isActive` 后才调用授权请求，激活和权限决定分别有超时。已有决定、后台查询及非交互操作均不得申请权限。
 

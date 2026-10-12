@@ -33,12 +33,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    #[cfg(target_os = "macos")]
-    #[command(hide = true)]
-    MacosHost {
-        #[arg(long)]
-        system_helper: bool,
-    },
     /// 登录校园网；不在 Student_CX 时仅保存凭据，凭据不足时打开交互界面
     Login(LoginArgs),
     /// 注销当前校园网会话
@@ -49,6 +43,15 @@ pub enum Command {
     },
     /// 在当前进程运行自动登录循环
     Daemon {
+        // Internal macOS mode that runs only the Wi-Fi/Location host in the desktop
+        // user session. Used by foreground commands and system services; skips login.
+        #[cfg(target_os = "macos")]
+        #[arg(long, hide = true, conflicts_with_all = ["background", "service"])]
+        internal_wifi_host: bool,
+        // Select the desktop-user host serving system-scope clients, without root.
+        #[cfg(target_os = "macos")]
+        #[arg(long, hide = true, requires = "internal_wifi_host")]
+        system_helper: bool,
         // Compatibility with already installed service definitions.
         #[arg(long, hide = true)]
         background: bool,
@@ -189,6 +192,7 @@ pub(super) async fn dispatch(
         Command::Daemon {
             background,
             service,
+            ..
         } => {
             crate::infra::error::ensure!(
                 !service,
@@ -232,10 +236,6 @@ pub(super) async fn dispatch(
         },
         Command::Permission(_) => {
             unreachable!("permission entry is handled by bootstrap")
-        }
-        #[cfg(target_os = "macos")]
-        Command::MacosHost { .. } => {
-            unreachable!("platform entry is handled by bootstrap")
         }
     }
 }
@@ -304,6 +304,7 @@ mod tests {
             "uninstall",
             "macos-service",
             "macos-credential-check",
+            "macos-host",
         ] {
             assert!(Cli::try_parse_from(["app", old]).is_err());
         }
@@ -331,6 +332,13 @@ mod tests {
         let help = command.render_help().to_string();
         assert!(help.contains("service"));
         assert!(!help.contains("macos-host"));
+        let daemon = command.find_subcommand_mut("daemon");
+        assert!(daemon.is_some());
+        if let Some(daemon) = daemon {
+            let help = daemon.render_help().to_string();
+            assert!(!help.contains("--internal-wifi-host"));
+            assert!(!help.contains("--system-helper"));
+        }
         let service = command.find_subcommand_mut("service");
         assert!(service.is_some());
         if let Some(service) = service {
@@ -372,6 +380,54 @@ mod tests {
             vec!["app", "--user", "service", "native", "register"],
         ] {
             assert!(Cli::try_parse_from(args).is_ok());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn internal_wifi_host_selects_a_separate_daemon_mode() {
+        for system_helper in [false, true] {
+            let mut args = vec!["app", "daemon", "--internal-wifi-host"];
+            if system_helper {
+                args.push("--system-helper");
+            }
+            assert!(matches!(
+                Cli::try_parse_from(args),
+                Ok(Cli {
+                    command: Command::Daemon {
+                        internal_wifi_host: true,
+                        system_helper: actual,
+                        background: false,
+                        service: false,
+                    },
+                    ..
+                }) if actual == system_helper
+            ));
+        }
+        assert!(Cli::try_parse_from(["app", "daemon", "--system-helper"]).is_err());
+        for legacy in ["--background", "--service"] {
+            assert!(
+                Cli::try_parse_from(["app", "daemon", "--internal-wifi-host", legacy]).is_err()
+            );
+            assert!(
+                Cli::try_parse_from(["app", "daemon", legacy, "--internal-wifi-host"]).is_err()
+            );
+        }
+        assert!(matches!(
+            Cli::try_parse_from(["app", "daemon", "--internal-wifi-host", "--help"]),
+            Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["app", "daemon", "--unsupported-host-option", "--help"]),
+            Err(error) if error.kind() == clap::error::ErrorKind::UnknownArgument
+        ));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn internal_wifi_host_is_not_available_on_other_platforms() {
+        for option in ["--internal-wifi-host", "--system-helper"] {
+            assert!(Cli::try_parse_from(["app", "daemon", option]).is_err());
         }
     }
 

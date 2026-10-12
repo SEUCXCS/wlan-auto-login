@@ -8,8 +8,13 @@ pub(in crate::app) fn boot(args: Cli) -> ExitCode {
     super::run_with_runtime(|runtime| {
         // SAFETY: geteuid only reads the current process's effective user ID.
         let gui = unsafe { libc::geteuid() } != 0
-            && (matches!(args.command, Command::MacosHost { .. })
-                || matches!(args.command, Command::Service(ServiceCommand::Run))
+            && (matches!(
+                args.command,
+                Command::Daemon {
+                    internal_wifi_host: true,
+                    ..
+                }
+            ) || matches!(args.command, Command::Service(ServiceCommand::Run))
                 || (matches!(
                     args.command,
                     Command::Daemon {
@@ -47,7 +52,11 @@ pub(super) async fn dispatch(
             .await??;
             println!("{result}");
         }
-        Command::MacosHost { system_helper } => {
+        Command::Daemon {
+            internal_wifi_host: true,
+            system_helper,
+            ..
+        } => {
             paths.scope.require_access()?;
             let host = host::Host::start(if system_helper {
                 host::Role::System
