@@ -347,9 +347,11 @@ wlanlogin login --interactive --remember-me
 
 自动化时优先将密码通过标准输入传入，并选择 `--non-interactive`。`--password` 可能将密码留在 shell 历史或进程参数列表中。macOS 的非交互操作和后台服务不会主动请求系统授权，首次使用前应完成交互式授权。
 
-### 权限查询与获取（macOS）
+### 权限查询与获取
 
-`permission` 当前只在 macOS 显示，支持所选范围的定位和钥匙串访问诊断：
+`permission` 在所有平台提供统一入口，实际支持的权限由平台决定。Linux 和 Windows 当前没有权限实现，`list` 返回空列表，未指定 ID 的 `check` 返回空结果，不触发系统授权；指定不支持的权限 ID 时返回错误。
+
+macOS 支持所选范围的定位和钥匙串访问诊断：
 
 ```sh
 wlanlogin permission list

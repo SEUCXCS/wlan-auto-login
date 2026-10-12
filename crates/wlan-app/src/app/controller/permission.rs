@@ -92,6 +92,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn empty_platforms_report_no_permissions_and_reject_explicit_ids() -> Result<()> {
+        async fn check(provider: &impl PermissionProvider) -> Result<()> {
+            for scope in [Scope::User, Scope::System] {
+                let result = report(provider, scope, None, false, false).await?;
+                assert_eq!(result.scope, scope.label());
+                assert!(result.permissions.is_empty());
+                for request in [false, true] {
+                    assert!(
+                        report(provider, scope, Some("macos.location"), request, true)
+                            .await
+                            .is_err()
+                    );
+                }
+            }
+            Ok(())
+        }
+        check(&crate::system::linux::permission::Permissions).await?;
+        check(&crate::system::windows::permission::Permissions).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn check_keeps_independent_results_and_never_requests_permission() -> Result<()> {
         let provider = Provider::default();
         let report = report(&provider, Scope::System, None, false, true).await?;

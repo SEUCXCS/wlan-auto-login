@@ -58,12 +58,6 @@ pub(super) async fn dispatch(
             let mut shutdown = crate::infra::shutdown::Shutdown::new()?;
             crate::infra::shutdown::until_stopped(host.wait(), shutdown.wait()).await?;
         }
-        Command::Permission(command) => {
-            if !matches!(command, crate::app::cli::PermissionCommand::List { .. }) {
-                paths.scope.require_access()?;
-            }
-            crate::app::cli::permission::run(command, paths.scope).await?;
-        }
         command => return Ok(Some(command)),
     }
     Ok(None)

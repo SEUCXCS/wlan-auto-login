@@ -82,21 +82,28 @@ async fn entry(args: cli::Cli) -> ExitCode {
 }
 
 async fn dispatch(args: cli::Cli, paths: config::Paths) -> crate::infra::error::Result<()> {
-    #[cfg(target_os = "macos")]
-    let args = {
-        let cli::Cli {
-            user,
-            system,
-            command,
-        } = args;
-        let Some(command) = macos::dispatch(command, &paths).await? else {
-            return Ok(());
-        };
-        cli::Cli {
-            user,
-            system,
-            command,
+    let cli::Cli {
+        user,
+        system,
+        command,
+    } = args;
+    let command = match command {
+        cli::Command::Permission(command) => {
+            if !matches!(command, cli::PermissionCommand::List { .. }) {
+                paths.scope.require_access()?;
+            }
+            return cli::permission::run(command, paths.scope).await;
         }
+        command => command,
+    };
+    #[cfg(target_os = "macos")]
+    let Some(command) = macos::dispatch(command, &paths).await? else {
+        return Ok(());
+    };
+    let args = cli::Cli {
+        user,
+        system,
+        command,
     };
     let context = context::Context::new(paths)?;
     if matches!(

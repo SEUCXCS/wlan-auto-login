@@ -1,6 +1,5 @@
 mod login;
 mod output;
-#[cfg(target_os = "macos")]
 pub(super) mod permission;
 use crate::system::define::credentials::CredentialMode;
 use clap::{Args, Parser, Subcommand};
@@ -60,7 +59,6 @@ pub enum Command {
     #[command(subcommand)]
     Service(ServiceCommand),
     /// 查询或获取当前平台的权限
-    #[cfg(target_os = "macos")]
     #[command(subcommand)]
     Permission(PermissionCommand),
 }
@@ -100,7 +98,6 @@ pub enum NativeServiceCommand {
     Unregister,
 }
 
-#[cfg(target_os = "macos")]
 #[derive(Subcommand)]
 pub enum PermissionCommand {
     /// 列出当前平台支持的权限
@@ -233,8 +230,11 @@ pub(super) async fn dispatch(
                 unreachable!("native service entry is handled by bootstrap")
             }
         },
+        Command::Permission(_) => {
+            unreachable!("permission entry is handled by bootstrap")
+        }
         #[cfg(target_os = "macos")]
-        Command::Permission(_) | Command::MacosHost { .. } => {
+        Command::MacosHost { .. } => {
             unreachable!("platform entry is handled by bootstrap")
         }
     }
@@ -338,21 +338,16 @@ mod tests {
             assert!(help.contains("install") && help.contains("status"));
             assert!(!help.contains("native") && !help.contains("  run"));
         }
-        #[cfg(target_os = "macos")]
         assert!(help.contains("permission"));
-        #[cfg(not(target_os = "macos"))]
-        {
-            assert!(!help.contains("permission"));
-            assert!(Cli::try_parse_from(["app", "permission", "list"]).is_err());
-        }
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
-    fn permission_and_native_service_arguments_are_explicit() {
+    fn permission_arguments_are_available_on_every_platform() {
         for args in [
             vec!["app", "permission", "list"],
+            vec!["app", "permission", "list", "--json"],
             vec!["app", "permission", "check"],
+            vec!["app", "permission", "check", "--json"],
             vec![
                 "app",
                 "--system",
@@ -362,12 +357,22 @@ mod tests {
                 "--json",
             ],
             vec!["app", "permission", "get", "macos.location"],
+            vec!["app", "permission", "get", "custom.permission", "--json"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        assert!(Cli::try_parse_from(["app", "permission", "get"]).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_service_arguments_are_explicit() {
+        for args in [
             vec!["app", "service", "native", "status"],
             vec!["app", "--user", "service", "native", "register"],
         ] {
             assert!(Cli::try_parse_from(args).is_ok());
         }
-        assert!(Cli::try_parse_from(["app", "permission", "get"]).is_err());
     }
 
     #[test]
