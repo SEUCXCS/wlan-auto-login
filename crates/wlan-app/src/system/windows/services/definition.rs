@@ -10,7 +10,7 @@ use std::{ffi::OsStr, path::PathBuf};
 
 pub(crate) fn windows_system_plan(executable: PathBuf, definition: PathBuf) -> Result<Plan> {
     let binary = format!(
-        "\"{}\" --system daemon --service",
+        "\"{}\" --system service run",
         executable
             .to_str()
             .context(Message::InstallationPathMustBeUTF8)?
@@ -86,7 +86,7 @@ pub(crate) fn windows_plan(executable: PathBuf, definition: PathBuf, sid: &str) 
 <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{sid}</UserId></LogonTrigger></Triggers>
 <Principals><Principal id="User"><UserId>{sid}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
 <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable><AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><Hidden>true</Hidden><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings>
-<Actions Context="User"><Exec><Command>{exe}</Command><Arguments>daemon --background</Arguments></Exec></Actions>
+<Actions Context="User"><Exec><Command>{exe}</Command><Arguments>--user service run</Arguments></Exec></Actions>
 </Task>
 "#
     );

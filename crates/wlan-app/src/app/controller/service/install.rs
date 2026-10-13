@@ -1,5 +1,5 @@
 //! Credential prerequisites and installation, independent of input presentation.
-use super::login::LoginRequest;
+use crate::app::controller::login::LoginRequest;
 use crate::infra::{
     error::{Message, Result},
     paths::Paths,

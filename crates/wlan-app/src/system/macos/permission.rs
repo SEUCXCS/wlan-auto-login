@@ -4,10 +4,13 @@ use crate::system::define::permission::{PermissionDescriptor, PermissionProvider
 pub struct Permissions;
 impl PermissionProvider for Permissions {
     fn permissions(&self) -> Vec<PermissionDescriptor> {
-        vec![
-            PermissionDescriptor::new("macos.location", "Location"),
-            PermissionDescriptor::new("macos.keychain", "Keychain"),
-        ]
+        let mut location = PermissionDescriptor::new("macos.location", "Location");
+        location.description =
+            Some("允许图形会话中的应用读取 Wi-Fi 名称；需要完整签名应用包。".into());
+        let mut keychain = PermissionDescriptor::new("macos.keychain", "Keychain");
+        keychain.description =
+            Some("检查当前程序读取所选范围的已保存凭据的能力；Missing 表示尚未保存凭据。".into());
+        vec![location, keychain]
     }
 
     #[cfg(target_os = "macos")]

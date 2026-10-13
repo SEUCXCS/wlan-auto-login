@@ -107,7 +107,7 @@ pub async fn install(paths: &Paths, previous_plan: Plan) -> Result<()> {
         }
         // Packaged definitions were signed by xtask. Installation never rewrites them.
         for command in &plan.start {
-            command.run().await?;
+            super::app_service::output(command, &SystemRunner).await?;
         }
         let registered = plan.manager.query(&SystemRunner).await?;
         if registered.registered && registered.enabled == Some(false) {
@@ -171,7 +171,7 @@ pub async fn install(paths: &Paths, previous_plan: Plan) -> Result<()> {
             }
             if failures.is_empty() && state.registered {
                 for command in &previous_plan.start {
-                    if let Err(e) = command.run().await {
+                    if let Err(e) = super::app_service::output(command, &SystemRunner).await {
                         failures.push(e.to_string());
                     }
                 }
@@ -232,7 +232,7 @@ async fn unregister(plan: &Plan) -> Result<()> {
     ) && plan.definition.try_exists()?
     {
         for command in &plan.remove {
-            command.run().await?;
+            super::app_service::output(command, &SystemRunner).await?;
         }
     }
     Ok(())
@@ -322,17 +322,21 @@ async fn credential_status(
     runner: &impl Runner,
     format: CheckFormat,
 ) -> Result<PermissionStatus> {
-    let command = Invocation::new(
-        executable,
-        [
-            if scope == Scope::System {
-                "--system"
-            } else {
-                "--user"
-            },
-            "macos-credential-check",
-        ],
-    );
+    let current = format == CheckFormat::Current
+        || super::app_service::current_protocol(executable, scope == Scope::System)?;
+    let flag = if scope == Scope::System {
+        "--system"
+    } else {
+        "--user"
+    };
+    let command = if current {
+        Invocation::new(
+            executable,
+            [flag, "permission", "check", "macos.keychain", "--json"],
+        )
+    } else {
+        Invocation::new(executable, [flag, "macos-credential-check"])
+    };
     let output = runner
         .output(&command)
         .await
@@ -342,12 +346,28 @@ async fn credential_status(
         .context(Message::InstalledCredentialCheckFailed)?;
     // The previous installed checker reported success only after a silent read,
     // using its exit status with no stdout. Accept that proof during rollback.
-    if format == CheckFormat::Previous && output.stdout.trim().is_empty() {
+    if !current && format == CheckFormat::Previous && output.stdout.trim().is_empty() {
         return Ok(PermissionStatus::Granted);
     }
-    serde_json::from_str::<access::CredentialCheck>(&output.stdout)
-        .context(Message::InstalledCredentialCheckProtocol)?
-        .into_status()
+    if current {
+        serde_json::from_str::<crate::system::define::permission::PermissionReport>(&output.stdout)
+            .context(Message::InstalledCredentialCheckProtocol)?
+            .into_status(scope.label(), "macos.keychain")
+    } else {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct PreviousCheck {
+            version: u32,
+            status: PermissionStatus,
+        }
+        let result = serde_json::from_str::<PreviousCheck>(&output.stdout)
+            .context(Message::InstalledCredentialCheckProtocol)?;
+        crate::infra::error::ensure!(
+            result.version == 1,
+            Message::InstalledCredentialCheckProtocol
+        );
+        Ok(result.status)
+    }
 }
 async fn stop(paths: &Paths, plan: &Plan) -> Result<()> {
     let state = plan.manager.query(&SystemRunner).await?;
@@ -512,7 +532,10 @@ mod tests {
                 .is_err()
             );
         }
-        let runner = FakeRunner::new([(true, r#"{"version":1,"status":"Granted"}"#)]);
+        let runner = FakeRunner::new([(
+            true,
+            r#"{"version":1,"scope":"system","permissions":[{"id":"macos.keychain","status":"Granted","error":null}]}"#,
+        )]);
         assert_eq!(
             credential_status(
                 Scope::System,
@@ -525,7 +548,13 @@ mod tests {
         );
         assert_eq!(
             runner.calls.borrow()[0].args,
-            ["--system", "macos-credential-check"]
+            [
+                "--system",
+                "permission",
+                "check",
+                "macos.keychain",
+                "--json"
+            ]
         );
         Ok(())
     }

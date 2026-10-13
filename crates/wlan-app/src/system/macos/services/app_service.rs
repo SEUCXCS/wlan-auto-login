@@ -1,6 +1,6 @@
 //! Register signed, bundle-contained jobs and keep approval separate from launchd liveness.
 use crate::infra::{
-    command::{Invocation, Runner},
+    command::{CommandOutput, Invocation, Runner},
     error::{Context, Message, Result, ensure},
     identity::APP_ID,
 };
@@ -34,10 +34,52 @@ pub(crate) fn command(executable: &Path, domain: &str, action: &str) -> Invocati
             } else {
                 "--user"
             },
-            "macos-service",
+            "service",
+            "native",
             action,
         ],
     )
+}
+
+/// The signed job's arguments identify the CLI protocol of this bundle.
+/// Inspect at execution time: installation may have replaced the bundle since planning.
+pub(crate) fn current_protocol(executable: &Path, system: bool) -> Result<bool> {
+    let Some(definition) = super::definition::bundle_definition(executable, system) else {
+        return Ok(false);
+    };
+    match std::fs::read_to_string(definition) {
+        Ok(content) => Ok(content.contains("<string>service</string>")
+            && content.contains("<string>run</string>")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Execute new plans against either newly published or restored older signed bundles.
+pub(crate) async fn output(invocation: &Invocation, runner: &impl Runner) -> Result<CommandOutput> {
+    let selected = if invocation.args.len() == 4
+        && invocation.args[1] == "service"
+        && invocation.args[2] == "native"
+        && !current_protocol(
+            Path::new(&invocation.program),
+            invocation.args[0] == "--system",
+        )? {
+        Invocation::new(
+            &invocation.program,
+            [
+                &invocation.args[0],
+                &"macos-service".into(),
+                &invocation.args[3],
+            ],
+        )
+    } else {
+        invocation.clone()
+    };
+    let output = runner.output(&selected).await?;
+    if !selected.optional {
+        output.check(&selected)?;
+    }
+    Ok(output)
 }
 
 fn decode(text: &str, domain: &str) -> Result<Registration> {
@@ -62,7 +104,7 @@ pub(crate) async fn query(
     // job until installation migrates it.
     let registration = if definition.is_some_and(|p| p.is_file()) {
         let invocation = command(executable, domain, "status");
-        let output = runner.output(&invocation).await?;
+        let output = output(&invocation, runner).await?;
         output.check(&invocation)?;
         Some(decode(&output.stdout, domain)?)
     } else {
@@ -118,7 +160,7 @@ pub(crate) async fn manage(
     }
     if !matches!(action, Action::Stop) {
         let invocation = command(executable, domain, "register");
-        let output = runner.output(&invocation).await?;
+        let output = output(&invocation, runner).await?;
         output.check(&invocation)?;
         ensure!(
             decode(&output.stdout, domain)? == Registration::Enabled,
@@ -255,6 +297,42 @@ mod tests {
             false,
             501,
         )
+    }
+
+    #[tokio::test]
+    async fn commands_follow_the_bundle_protocol_after_replacement_and_rollback() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let plan = plan(dir.path())?;
+        std::fs::create_dir_all(
+            plan.definition
+                .parent()
+                .context(Message::MacosServiceDefinitionMissing)?,
+        )?;
+        let invocation = command(&plan.executable, "gui/501", "unregister");
+        for current in [true, false, true] {
+            std::fs::write(
+                &plan.definition,
+                if current {
+                    plan.content.as_str()
+                } else {
+                    "<string>daemon</string><string>--background</string>"
+                },
+            )?;
+            let runner = FakeRunner::new([(true, ENABLED)]);
+            output(&invocation, &runner).await?;
+            let calls = runner.calls.borrow();
+            assert_eq!(calls.len(), 1);
+            if current {
+                assert_eq!(calls[0].args, ["--user", "service", "native", "unregister"]);
+            } else {
+                assert_eq!(calls[0].args, ["--user", "macos-service", "unregister"]);
+            }
+        }
+        std::fs::write(&plan.definition, &plan.content)?;
+        let runner = FakeRunner::new([(false, "registration failed")]);
+        assert!(output(&invocation, &runner).await.is_err());
+        assert_eq!(runner.calls.borrow().len(), 1);
+        Ok(())
     }
 
     #[tokio::test]

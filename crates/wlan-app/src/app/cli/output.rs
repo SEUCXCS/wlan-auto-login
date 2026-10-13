@@ -19,7 +19,7 @@ pub fn login(result: &LoginResult) {
     }
 }
 
-use crate::app::controller::daemon::status::InstallationReport;
+use crate::app::controller::service::status::InstallationReport;
 pub fn status(reports: &[InstallationReport]) -> String {
     if reports.is_empty() {
         "🔴 安装状态：未安装".into()
@@ -36,7 +36,7 @@ fn format_report(report: &InstallationReport) -> String {
         return "🔴 安装状态：未安装".into();
     }
     let installed = if !report.files.complete() || report.registration_missing {
-        "🔴 安装状态：安装不完整，请重新执行 install"
+        "🔴 安装状态：安装不完整，请重新执行 service install"
     } else if matches!(&report.state, Some(Err(_))) {
         "🔴 安装状态：无法确认"
     } else {
@@ -101,7 +101,7 @@ fn format_report(report: &InstallationReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::controller::daemon::status::inspect;
+    use crate::app::controller::service::status::inspect;
     use crate::infra::{
         command::Runner,
         error::{Error, Result},
@@ -128,9 +128,9 @@ mod tests {
         fs::write(&plan.definition, &plan.content)?;
         let runner = FakeRunner::new([(true, RUNNING)]);
         let (text, _) = report(&plan, &runner).await?;
-        assert!(
-            text.starts_with("🔴 安装状态：安装不完整，请重新执行 install\n安装范围：system\n")
-        );
+        assert!(text.starts_with(
+            "🔴 安装状态：安装不完整，请重新执行 service install\n安装范围：system\n"
+        ));
         assert!(!text.contains("安装位置："));
         assert!(!text.contains("已安装版本："));
         fs::write(&plan.executable, "mock executable, never run")?;

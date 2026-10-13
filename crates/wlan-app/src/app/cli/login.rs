@@ -3,8 +3,8 @@ use super::{LoginArgs, output};
 use crate::app::{
     context::Context,
     controller::{
-        install,
         login::{self, LoginRequest},
+        service::install,
     },
     tui,
 };
