@@ -46,17 +46,12 @@ pub enum Command {
         // Internal macOS mode that runs only the Wi-Fi/Location host in the desktop
         // user session. Used by foreground commands and system services; skips login.
         #[cfg(target_os = "macos")]
-        #[arg(long, hide = true, conflicts_with_all = ["background", "service"])]
+        #[arg(long, hide = true)]
         internal_wifi_host: bool,
         // Select the desktop-user host serving system-scope clients, without root.
         #[cfg(target_os = "macos")]
         #[arg(long, hide = true, requires = "internal_wifi_host")]
         system_helper: bool,
-        // Compatibility with already installed service definitions.
-        #[arg(long, hide = true)]
-        background: bool,
-        #[arg(long, hide = true)]
-        service: bool,
     },
     /// 管理用户或系统范围的后台服务
     #[command(subcommand)]
@@ -86,6 +81,12 @@ pub enum ServiceCommand {
     Status,
     /// 查看服务日志
     Logs(LogsArgs),
+    /// 图形会话就绪后同步激活环境并通知 daemon（Linux 用户范围）
+    #[cfg(target_os = "linux")]
+    SessionReady,
+    /// 注销前撤销当前图形会话的就绪通知（Linux 用户范围）
+    #[cfg(target_os = "linux")]
+    SessionEnd,
     #[command(hide = true)]
     Run,
     #[cfg(target_os = "macos")]
@@ -182,26 +183,15 @@ pub(super) async fn dispatch(
             {
                 use std::io::IsTerminal;
                 if let Err(error) =
-                    crate::system::macos::host::prepare(std::io::stderr().is_terminal()).await
+                    crate::system::macos::runtime::host::prepare(std::io::stderr().is_terminal())
+                        .await
                 {
                     tracing::warn!(%error, "Wi-Fi authorization unavailable during logout");
                 }
             }
             controller::logout::run(&context.client, paths, forget).await
         }
-        Command::Daemon {
-            background,
-            service,
-            ..
-        } => {
-            crate::infra::error::ensure!(
-                !service,
-                crate::infra::error::Message::ServiceIsOnlySupportedByWindowsService
-            );
-            let managed =
-                background && std::env::var_os("WLANLOGIN_MANAGED").is_some_and(|v| v == "1");
-            controller::daemon::run(context, background, managed).await
-        }
+        Command::Daemon { .. } => controller::daemon::run(context, false).await,
         Command::Service(command) => match command {
             ServiceCommand::Install(args) => login::run(context, args, true).await,
             ServiceCommand::Uninstall { purge } => {
@@ -227,6 +217,10 @@ pub(super) async fn dispatch(
                     tokio::signal::ctrl_c(),
                 )
                 .await
+            }
+            #[cfg(target_os = "linux")]
+            ServiceCommand::SessionReady | ServiceCommand::SessionEnd => {
+                unreachable!("session hooks are handled by bootstrap")
             }
             ServiceCommand::Run => unreachable!("service process entry is handled by bootstrap"),
             #[cfg(target_os = "macos")]
@@ -283,18 +277,15 @@ mod tests {
 
     #[test]
     fn daemon_runs_only_the_loop_and_service_controls_are_separate() {
-        for args in [
-            vec!["app", "daemon"],
-            vec!["app", "daemon", "--background"],
-            vec!["app", "daemon", "--service"],
-        ] {
-            assert!(matches!(
-                Cli::try_parse_from(args),
-                Ok(Cli {
-                    command: Command::Daemon { .. },
-                    ..
-                })
-            ));
+        assert!(matches!(
+            Cli::try_parse_from(["app", "daemon"]),
+            Ok(Cli {
+                command: Command::Daemon { .. },
+                ..
+            })
+        ));
+        for option in ["--background", "--service"] {
+            assert!(Cli::try_parse_from(["app", "daemon", option]).is_err());
         }
         for action in ["start", "stop", "restart", "status", "logs"] {
             assert!(Cli::try_parse_from(["app", "daemon", action]).is_err());
@@ -397,8 +388,6 @@ mod tests {
                     command: Command::Daemon {
                         internal_wifi_host: true,
                         system_helper: actual,
-                        background: false,
-                        service: false,
                     },
                     ..
                 }) if actual == system_helper

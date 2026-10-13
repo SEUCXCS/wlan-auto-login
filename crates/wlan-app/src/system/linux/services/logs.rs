@@ -115,6 +115,37 @@ pub(crate) async fn follow_journal(
     Ok(())
 }
 
+/// Linux selects between the application file and the native journal reader.
+#[cfg(target_os = "linux")]
+pub(crate) struct Backend;
+#[cfg(target_os = "linux")]
+impl crate::system::define::services::LogBackend for Backend {
+    fn source(&self, paths: &Paths, plan: &Plan, options: LogOptions) -> Result<LogSource> {
+        source(paths, plan, options)
+    }
+    async fn read(
+        &self,
+        source: LogSource,
+        options: LogOptions,
+        output: &mut impl Write,
+        stop: impl std::future::Future<Output = std::io::Result<()>>,
+    ) -> Result<()> {
+        match source {
+            LogSource::Journal(command) if options.follow => {
+                follow_journal(&command, output, stop).await
+            }
+            LogSource::Journal(command) => {
+                journal_snapshot(&command, &crate::infra::command::SystemRunner, output).await
+            }
+            file => {
+                crate::system::shared::services::logs::FileBackend
+                    .read(file, options, output, stop)
+                    .await
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

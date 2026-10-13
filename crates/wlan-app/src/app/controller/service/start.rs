@@ -1,5 +1,6 @@
+//! Request the normalized start workflow for the selected platform.
 use crate::infra::{error::Result, paths::Paths};
-use crate::system::shared::services::{self, Action};
+
 pub async fn run(paths: &Paths) -> Result<()> {
-    services::manage(paths, Action::Start).await
+    crate::system::flow::start::run(paths).await
 }

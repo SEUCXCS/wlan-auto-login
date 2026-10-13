@@ -8,9 +8,13 @@ use crate::infra::paths::Paths;
 use crate::system::define::services::{LABEL, Manager, Plan};
 #[cfg(target_os = "macos")]
 use crate::system::shared::services::artifacts::original_user_home;
+#[cfg(test)]
 use crate::system::shared::services::artifacts::xml;
-use std::{ffi::OsStr, path::PathBuf};
+#[cfg(test)]
+use std::ffi::OsStr;
+use std::path::PathBuf;
 
+#[cfg(test)]
 pub(crate) fn macos_system_plan(
     executable: PathBuf,
     definition: PathBuf,
@@ -39,6 +43,7 @@ pub(crate) fn macos_system_plan(
     Ok(plan)
 }
 
+#[cfg(test)]
 pub(crate) fn macos_plan(
     executable: PathBuf,
     definition: PathBuf,
@@ -50,7 +55,7 @@ pub(crate) fn macos_plan(
         .context(Message::InstallationPathMustBeUTF8)?);
     let arguments = if uid == 0 {
         format!(
-            "<string>{exe}</string><string>--system</string><string>daemon</string><string>--background</string>"
+            "<string>{exe}</string><string>--system</string><string>service</string><string>run</string>"
         )
     } else {
         // Launch Services supplies the bundle identity used by TCC. -W keeps
@@ -62,7 +67,7 @@ pub(crate) fn macos_plan(
             .context(Message::MacosBundleRequired)?;
         let app = xml(app.to_str().context(Message::InstallationPathMustBeUTF8)?);
         format!(
-            "<string>/usr/bin/open</string><string>-W</string><string>-n</string><string>-g</string><string>-a</string><string>{app}</string><string>--env</string><string>WLANLOGIN_MANAGED=1</string><string>--args</string><string>--user</string><string>daemon</string><string>--background</string>"
+            "<string>/usr/bin/open</string><string>-W</string><string>-n</string><string>-g</string><string>-a</string><string>{app}</string><string>--env</string><string>WLANLOGIN_MANAGED=1</string><string>--args</string><string>--user</string><string>service</string><string>run</string>"
         )
     };
     let log = xml(log.to_str().context(Message::LogPathMustBeUTF8)?);
@@ -115,26 +120,21 @@ pub(crate) fn macos_plan(
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn legacy_plan(paths: &Paths) -> Result<Plan> {
-    if paths.scope == crate::infra::scope::Scope::System {
-        return system_plan(paths);
-    }
-    let executable = crate::infra::paths::user_daemon_executable()?;
-
-    {
-        let base =
-            directories::BaseDirs::new().context(Message::FailedToDetermineUserServiceDirectory)?;
-        let uid = unsafe { libc::geteuid() };
-        let log = paths.config.join("daemon.log");
-        macos_plan(
-            executable,
-            base.home_dir()
-                .join("Library/LaunchAgents")
-                .join(LAUNCHD_PLIST),
-            log,
-            uid,
-        )
-    }
+fn reject_loose_install(paths: &Paths) -> Result<()> {
+    let definition = if paths.scope == crate::infra::scope::Scope::System {
+        PathBuf::from("/Library/LaunchDaemons").join(LAUNCHD_PLIST)
+    } else {
+        directories::BaseDirs::new()
+            .context(Message::FailedToDetermineUserServiceDirectory)?
+            .home_dir()
+            .join("Library/LaunchAgents")
+            .join(LAUNCHD_PLIST)
+    };
+    crate::infra::error::ensure!(
+        !definition.try_exists()?,
+        Message::UnsupportedInstalledProtocol
+    );
+    Ok(())
 }
 
 pub(crate) fn bundle_definition(executable: &std::path::Path, system: bool) -> Option<PathBuf> {
@@ -199,29 +199,21 @@ pub(crate) fn native_plan(paths: &Paths) -> Result<Plan> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn plan(paths: &Paths) -> Result<Plan> {
-    let native = native_plan(paths)?;
-    let legacy = legacy_plan(paths)?;
-    // Preserve control and uninstallation of installations made by old binaries.
-    if !native.definition.try_exists()? && legacy.definition.try_exists()? {
-        return Ok(legacy);
+    reject_loose_install(paths)?;
+    let plan = native_plan(paths)?;
+    if plan.definition.try_exists()? {
+        super::app_service::require_current(
+            &plan.executable,
+            paths.scope == crate::infra::scope::Scope::System,
+        )?;
     }
-    Ok(native)
-}
-#[cfg(target_os = "macos")]
-fn system_plan(paths: &Paths) -> Result<Plan> {
-    {
-        macos_system_plan(
-            crate::infra::paths::system_daemon_executable()?,
-            PathBuf::from("/Library/LaunchDaemons").join(LAUNCHD_PLIST),
-            paths.config.join("daemon.log"),
-        )
-    }
+    Ok(plan)
 }
 #[cfg(target_os = "macos")]
 pub(crate) fn conflicting_definition(paths: &Paths) -> Result<Option<PathBuf>> {
     use crate::infra::scope::Scope;
     let other = match paths.scope {
-        Scope::User => system_plan(&Paths::new(Scope::System)?)?.definition,
+        Scope::User => PathBuf::from("/Library/LaunchDaemons").join(LAUNCHD_PLIST),
         Scope::System => {
             if let Some(home) = original_user_home()? {
                 home.join("Library/LaunchAgents").join(LAUNCHD_PLIST)
@@ -289,15 +281,17 @@ mod tests {
                 .contains("<string>/usr/bin/open</string><string>-W</string>")
         );
         assert!(user.content.contains("Test &amp; Tool.app</string>"));
-        assert!(user.content.contains(
-            "<string>--user</string><string>daemon</string><string>--background</string>"
-        ));
+        assert!(
+            user.content
+                .contains("<string>--user</string><string>service</string><string>run</string>")
+        );
         assert!(user.content.contains("WLANLOGIN_MANAGED=1"));
         let root = macos_system_plan(exe, "/tmp/job".into(), "/tmp/log".into())?;
         assert!(!root.content.contains("/usr/bin/open"));
-        assert!(root.content.contains(
-            "<string>--system</string><string>daemon</string><string>--background</string>"
-        ));
+        assert!(
+            root.content
+                .contains("<string>--system</string><string>service</string><string>run</string>")
+        );
         assert!(root.content.contains("<key>WLANLOGIN_MANAGED</key>"));
         for plan in [&user, &root] {
             assert!(plan.content.contains("<key>AssociatedBundleIdentifiers</key><array><string>dev.cxcs.tools.wlanlogin</string></array>"));

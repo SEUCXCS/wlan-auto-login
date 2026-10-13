@@ -5,7 +5,7 @@ use crate::infra::{
     error::{Context, Message, Result, ensure},
     identity::APP_ID,
 };
-use crate::system::macos::bundle;
+use crate::system::macos::services::bundle;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -159,9 +159,6 @@ impl Payload {
     }
     fn directory(&self) -> &Path {
         &self.directory
-    }
-    pub fn recovery_path(&self, name: &str) -> PathBuf {
-        self.directory().join(name)
     }
     pub fn staged(&self) -> PathBuf {
         self.directory().join("new.app")

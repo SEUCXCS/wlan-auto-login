@@ -72,7 +72,7 @@ pub(crate) fn assert_owned(path: &Path) -> Result<()> {
         Err(e) => Err(e.into()),
     }
 }
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn xml(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -82,36 +82,26 @@ pub(crate) fn xml(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-pub(crate) struct Artifacts {
-    pub definition: bool,
-    pub executable: bool,
-}
+pub(crate) use crate::system::define::services::Artifacts;
 
 impl Artifacts {
     pub fn read(plan: &Plan) -> Result<Self> {
         assert_owned(&plan.definition)?;
         let executable = is_file(&plan.executable)?;
         #[cfg(target_os = "macos")]
-        let executable =
-            if let Some(app) = crate::system::macos::bundle::enclosing(&plan.executable) {
-                executable
-                    && is_file(&app.join("Contents/Info.plist"))?
-                    && is_file(&app.join("Contents/_CodeSignature/CodeResources"))?
-            } else {
-                executable
-            };
+        let executable = if let Some(app) =
+            crate::system::macos::services::bundle::enclosing(&plan.executable)
+        {
+            executable
+                && is_file(&app.join("Contents/Info.plist"))?
+                && is_file(&app.join("Contents/_CodeSignature/CodeResources"))?
+        } else {
+            executable
+        };
         Ok(Self {
             definition: is_file(&plan.definition)?,
             executable,
         })
-    }
-
-    pub fn complete(&self) -> bool {
-        self.definition && self.executable
-    }
-
-    pub(crate) fn any(&self) -> bool {
-        self.definition || self.executable
     }
 }
 
@@ -214,7 +204,9 @@ mod tests {
         for plan in &plans {
             assert!(
                 plan.content.contains("service run")
-                    || plan.content.contains("<string>daemon</string>")
+                    || plan
+                        .content
+                        .contains("<string>service</string><string>run</string>")
             );
             assert!(!plan.content.contains("--password"));
             assert!(!plan.content.contains("WLANLOGIN_PASSWORD"));

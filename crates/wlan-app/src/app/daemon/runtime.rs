@@ -9,19 +9,41 @@ use crate::infra::{
     error::{Context, Message, Result, bail},
     paths::Paths,
 };
-use crate::system::wifi::Monitor;
 use std::time::Duration;
 use tokio::time::Instant;
 use wlanlogin_lib::Client;
 const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(test)]
 pub(super) async fn control_stop(
     commands: &mut tokio::sync::mpsc::Receiver<control::Signal>,
     wake: &tokio::sync::Notify,
+) -> Result<()> {
+    let (session, _) =
+        tokio::sync::watch::channel(crate::system::define::credentials::SessionState::default());
+    control_stop_with_session(commands, wake, &session).await
+}
+
+pub(super) async fn control_stop_with_session(
+    commands: &mut tokio::sync::mpsc::Receiver<control::Signal>,
+    wake: &tokio::sync::Notify,
+    session: &tokio::sync::watch::Sender<crate::system::define::credentials::SessionState>,
 ) -> Result<()> {
     while let Some(command) = commands.recv().await {
         match command {
             control::Signal::Stop => return Ok(()),
             control::Signal::Wake => wake.notify_one(),
+            control::Signal::SessionReady(id) => {
+                let mut next = session.borrow().clone();
+                next.update(Some(id))?;
+                session.send_replace(next);
+                wake.notify_one();
+            }
+            control::Signal::SessionEnd(ended) => {
+                let mut next = session.borrow().clone();
+                next.update(Some(format!("!{ended}")))?;
+                session.send_replace(next);
+                wake.notify_one();
+            }
         }
     }
     bail!(Message::LocalControlChannelClosed)
@@ -30,18 +52,12 @@ pub(super) async fn run_loop(
     client: &Client,
     paths: &Paths,
     wake: &tokio::sync::Notify,
+    mut session: tokio::sync::watch::Receiver<crate::system::define::credentials::SessionState>,
+    status: &std::sync::RwLock<control::RuntimeStatus>,
 ) -> Result<()> {
     let mut policy = Policy::default();
     let mut store = credentials::BackgroundReader::new(paths)?;
-    // NoEntry is different from a locked/unavailable keyring: the latter may
-    // become available after the desktop session finishes unlocking.
-    match store.load().await {
-        Ok(None) => {
-            bail!(Message::DaemonCredentialsMissing)
-        }
-        Ok(Some(_)) => {}
-        Err(e) => tracing::warn!(error = %e, "{}", Message::CredentialsUnavailable),
-    }
+    let mut credential_events: Option<CredentialEvents> = None;
     let mut monitor = None;
     let mut scheduled = true;
     let mut last_outcome = None;
@@ -53,8 +69,23 @@ pub(super) async fn run_loop(
     );
     loop {
         ensure_scope(paths)?;
+        // Session hints remain ephemeral; the native reader validates them live.
+        session.borrow_and_update();
+        store.session_changed(session.clone());
+        #[cfg(target_os = "linux")]
+        if paths.scope == crate::infra::scope::Scope::User && credential_events.is_none() {
+            // Event subscription is bounded and never requests credential activation.
+            credential_events = tokio::time::timeout(
+                Duration::from_secs(5),
+                crate::system::linux::runtime::credentials::Events::new(),
+            )
+            .await
+            .ok()
+            .and_then(std::result::Result::ok);
+        }
+
         if monitor.is_none() {
-            match Monitor::new().await {
+            match crate::system::flow::wifi::monitor::run().await {
                 Ok(value) => {
                     monitor = Some(value);
                     policy.monitor_restarted();
@@ -65,9 +96,23 @@ pub(super) async fn run_loop(
             }
         }
         if let Some(monitor) = &monitor {
+            let current = session.clone();
             let result = tokio::time::timeout(
                 CHECK_TIMEOUT,
-                tick(client, paths, monitor, store.load(), &mut policy, scheduled),
+                tick(
+                    client,
+                    paths,
+                    monitor,
+                    store.load(),
+                    move |permit| async move {
+                        crate::system::flow::credentials::background::validate(
+                            paths, &permit, &current,
+                        )
+                        .await
+                    },
+                    &mut policy,
+                    scheduled,
+                ),
             )
             .await
             .context(Message::NetworkCheckTimedOut)
@@ -77,19 +122,34 @@ pub(super) async fn run_loop(
                 // result or repeat the same waiting message every poll interval.
                 Ok(Outcome::Unchanged | Outcome::WaitingForDeadline) => {}
                 Ok(outcome) => {
+                    if let Ok(mut status) = status.write() {
+                        status.outcome = Some(outcome.label().into());
+                        status.credentials = outcome.credentials_state();
+                        status.diagnostic = outcome.diagnostic();
+                    }
+
                     if last_outcome != Some(outcome) {
                         let now = Instant::now();
                         let delay = policy.next_deadline(now).saturating_duration_since(now);
-                        tracing::info!(
-                            outcome = outcome.label(),
-                            next_check_secs = delay.as_secs_f64().ceil() as u64,
-                            "{}",
-                            Message::NetworkCheckCompleted
-                        );
+                        if let Some(diagnostic) = outcome.diagnostic() {
+                            tracing::warn!(kind=?diagnostic.kind,stage=diagnostic.stage.label(),native_code=diagnostic.native_code,bus_code=?diagnostic.bus_code,retry_after_secs=delay.as_secs_f64().ceil() as u64,"{}",diagnostic);
+                        } else {
+                            tracing::info!(
+                                outcome = outcome.label(),
+                                next_check_secs = delay.as_secs_f64().ceil() as u64,
+                                "{}",
+                                Message::NetworkCheckCompleted
+                            );
+                        }
                     }
                     last_outcome = Some(outcome);
                 }
                 Err(e) => {
+                    if let Ok(mut status) = status.write() {
+                        status.outcome = Some("network_check_failed".into());
+                        status.credentials = control::CredentialState::NotChecked;
+                        status.diagnostic = None;
+                    }
                     last_outcome = None;
                     let transient_status = e
                         .downcast_ref::<wlanlogin_lib::Error>()
@@ -101,7 +161,15 @@ pub(super) async fn run_loop(
         }
         tokio::select! {
             _ = next_scheduled_check(&mut policy) => { scheduled = true; },
-            _ = wake.notified() => { scheduled = true; },
+            _ = wake.notified() => { scheduled = true; policy.credentials_changed(); },
+            _ = session.changed() => { scheduled = true; policy.credentials_changed(); },
+            event = credential_change(&mut credential_events) => {
+                #[cfg(target_os = "linux")]
+                if event.is_err() { credential_events = None; }
+                let _ = event;
+                policy.credentials_changed();
+                scheduled = true;
+            },
             event = async { match &mut monitor { Some(m) => m.changed().await, None => std::future::pending().await } } => {
                 if let Err(e) = event { tracing::warn!(error = %e, "{}", Message::MonitorDisconnected); monitor = None; }
                 scheduled = false;
@@ -111,6 +179,19 @@ pub(super) async fn run_loop(
         }
     }
 }
+#[cfg(target_os = "linux")]
+type CredentialEvents = crate::system::linux::runtime::credentials::Events;
+#[cfg(not(target_os = "linux"))]
+type CredentialEvents = ();
+async fn credential_change(events: &mut Option<CredentialEvents>) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    if let Some(events) = events {
+        return events.changed().await;
+    }
+    let _ = events;
+    std::future::pending().await
+}
+
 pub(super) async fn next_scheduled_check(policy: &mut Policy) {
     tokio::time::sleep_until(policy.next_deadline(Instant::now())).await;
     if policy.retry_deadline().is_some() {

@@ -32,7 +32,7 @@ async fn entry(args: cli::Cli) -> ExitCode {
     let paths = selected.and_then(config::Paths::new);
     #[cfg(target_os = "macos")]
     if let Ok(paths) = &paths {
-        crate::system::macos::host::configure(paths.scope);
+        crate::system::macos::runtime::host::configure(paths.scope);
         use std::io::IsTerminal;
         let interactive = match &args.command {
             cli::Command::Login(args)
@@ -48,10 +48,7 @@ async fn entry(args: cli::Cli) -> ExitCode {
     }
     let log = if matches!(
         args.command,
-        cli::Command::Daemon {
-            background: true,
-            ..
-        } | cli::Command::Service(cli::ServiceCommand::Run)
+        cli::Command::Service(cli::ServiceCommand::Run)
     ) {
         paths
             .as_ref()
@@ -87,6 +84,16 @@ async fn dispatch(args: cli::Cli, paths: config::Paths) -> crate::infra::error::
         system,
         command,
     } = args;
+    #[cfg(target_os = "linux")]
+    match &command {
+        cli::Command::Service(cli::ServiceCommand::SessionReady) => {
+            return crate::system::flow::session::ready(&paths).await;
+        }
+        cli::Command::Service(cli::ServiceCommand::SessionEnd) => {
+            return crate::system::flow::session::end(&paths).await;
+        }
+        _ => {}
+    }
     let command = match command {
         cli::Command::Permission(command) => {
             if !matches!(command, cli::PermissionCommand::List { .. }) {
@@ -111,7 +118,7 @@ async fn dispatch(args: cli::Cli, paths: config::Paths) -> crate::infra::error::
         cli::Command::Service(cli::ServiceCommand::Run)
     ) {
         context.paths.scope.require_access()?;
-        return crate::app::controller::daemon::run(&context, true, true).await;
+        return crate::app::controller::daemon::run(&context, true).await;
     }
     cli::dispatch(args, &context).await
 }

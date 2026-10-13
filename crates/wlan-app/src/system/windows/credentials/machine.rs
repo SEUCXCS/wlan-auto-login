@@ -75,7 +75,13 @@ impl MachineStore {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
                 Err(error) => return Err(error.into()),
             };
-            validate_private(&path)?;
+            validate_private(&path).map_err(|error| {
+                crate::system::shared::credentials::diagnostics::specific(
+                    error,
+                    crate::infra::error::credentials::Kind::UnsafeStorage,
+                    crate::infra::error::credentials::Stage::Inspect,
+                )
+            })?;
             let modified = metadata.modified()?;
             if background
                 && let Some((old, length, credentials)) = &*self.cache.lock().map_err(|_| {
@@ -93,7 +99,13 @@ impl MachineStore {
                     path == self.native_file(),
                     Message::PlaintextMachineCredentialsAreNotSupportedOn
                 );
-                decrypt(&fs::read(&path)?)?
+                decrypt(&fs::read(&path)?).map_err(|error| {
+                    crate::system::shared::credentials::diagnostics::specific(
+                        error,
+                        crate::infra::error::credentials::Kind::DecryptionFailed,
+                        crate::infra::error::credentials::Stage::Decrypt,
+                    )
+                })?
             };
             let credentials =
                 decode(std::str::from_utf8(&bytes).context(Message::SystemCredentialsAreNotUTF8)?)?;

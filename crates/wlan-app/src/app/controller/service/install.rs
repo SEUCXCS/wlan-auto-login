@@ -6,11 +6,10 @@ use crate::infra::{
 };
 use crate::system::{
     credentials::Store,
-    shared::services,
     wifi::{self, WifiConnection},
 };
 pub fn validate_scope(paths: &Paths) -> Result<()> {
-    services::ensure_no_conflicting_install(paths)
+    crate::system::flow::install::validate_scope(paths)
 }
 pub async fn prepare(
     request: &LoginRequest,
@@ -28,7 +27,9 @@ pub async fn prepare(
         || request.username.is_some()
         || request.password.is_some()
         || request.credential_store.is_some()
-        || store.load().await?.is_none();
+        || crate::system::flow::credentials::load::run(store)
+            .await?
+            .is_none();
     if required {
         tracing::warn!(
             "{}",
@@ -38,7 +39,7 @@ pub async fn prepare(
     Ok(required)
 }
 pub async fn run(paths: &Paths) -> Result<()> {
-    services::install(paths).await
+    crate::system::flow::install::run(paths).await
 }
 
 #[cfg(test)]

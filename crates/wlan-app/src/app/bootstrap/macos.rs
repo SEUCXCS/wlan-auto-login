@@ -1,7 +1,7 @@
 //! Keep AppKit on the main thread for GUI hosts and managed user daemons.
 use super::entry;
 use crate::app::cli::{Cli, Command, NativeServiceCommand, ServiceCommand};
-use crate::system::macos::host;
+use crate::system::macos::runtime::host;
 use std::process::ExitCode;
 
 pub(in crate::app) fn boot(args: Cli) -> ExitCode {
@@ -14,16 +14,9 @@ pub(in crate::app) fn boot(args: Cli) -> ExitCode {
                     internal_wifi_host: true,
                     ..
                 }
-            ) || matches!(args.command, Command::Service(ServiceCommand::Run))
-                || (matches!(
-                    args.command,
-                    Command::Daemon {
-                        background: true,
-                        ..
-                    }
-                ) && std::env::var_os("WLANLOGIN_MANAGED").is_some_and(|v| v == "1")));
+            ) || matches!(args.command, Command::Service(ServiceCommand::Run)));
         if gui {
-            host::run_gui(runtime, entry(args))
+            crate::system::macos::runtime::gui::run_gui(runtime, entry(args))
         } else {
             runtime.block_on(entry(args))
         }
