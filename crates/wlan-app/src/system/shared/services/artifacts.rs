@@ -142,16 +142,17 @@ mod tests {
         assert!(linux.content.contains("--system service run"));
         assert!(linux.content.contains("service run"));
         assert!(linux.content.contains("# ApplicationLog=daemon.log"));
-        assert!(linux.content.contains("WantedBy=multi-user.target"));
         assert!(
             linux
                 .content
-                .contains("StateDirectory=cxcs-tools/wlanlogin\n")
+                .contains("Description=CXCS WLAN Login — Student_CX automatic login\n")
         );
+        assert!(linux.content.contains("WantedBy=multi-user.target"));
+        assert!(linux.content.contains("StateDirectory=SEUCXCS/wlanlogin\n"));
         assert!(
             linux
                 .content
-                .contains("RuntimeDirectory=cxcs-tools/wlanlogin\n")
+                .contains("RuntimeDirectory=SEUCXCS/wlanlogin\n")
         );
         assert!(!linux.content.contains("--user"));
         let macos = macos_system_plan(exe.clone(), definition.clone(), "/tmp/log".into())?;
@@ -180,6 +181,15 @@ mod tests {
                 .any(|cmd| cmd.args.iter().any(|a| a == "auto"))
         );
         assert!(matches!(windows.manager, Manager::WindowsService));
+        for command in &windows.start[..2] {
+            assert!(
+                command
+                    .args
+                    .windows(2)
+                    .any(|args| { args[0] == "DisplayName=" && args[1] == "CXCS WLAN Login" })
+            );
+            assert_eq!(command.args[1], LABEL);
+        }
         for plan in [linux, macos, windows] {
             assert_eq!(plan.scope, crate::infra::scope::Scope::System);
             assert!(plan.content.contains(LABEL));
@@ -211,6 +221,16 @@ mod tests {
             assert!(plan.content.contains(LABEL));
         }
         assert!(plans[0].content.contains("WantedBy=default.target"));
+        assert!(
+            plans[0]
+                .content
+                .contains("Description=CXCS WLAN Login — Student_CX automatic login\n")
+        );
+        assert!(
+            plans[2].content.contains(
+                "<Description>CXCS WLAN Login — Student_CX automatic login</Description>"
+            )
+        );
         assert!(plans[0].content.contains("service run"));
         assert!(plans[1].content.contains("<key>RunAtLoad</key><true/>"));
         assert!(

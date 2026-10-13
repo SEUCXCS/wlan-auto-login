@@ -11,7 +11,7 @@ Work from the repository root. This is a Cargo workspace using Rust edition 2024
 
 The binary is `wlanlogin` (`.exe` on Windows). The release artifact is under `target/release/`. Keep `Cargo.lock` checked in and use `--locked` for validation. Do not update dependencies incidentally during a refactor.
 
-Native identifiers live in `infra/identity.rs`: the application ID is `dev.cxcs.tools.wlanlogin`. Application paths live in `infra/paths.rs` and use the two components `cxcs-tools/wlanlogin` (`ProjectDirs::from_path`, not `ProjectDirs::from`). Cleanup must preserve the shared `cxcs-tools` parent and sibling tools. The rename does not automatically migrate legacy services or credentials; README documents uninstalling with the old binary before installing the new one. The CLI package is `wlanlogin-cli`, its explicit binary target and tracing prefix are `wlanlogin`, and its environment variables use `WLANLOGIN_`.
+Native identifiers live in `infra/identity.rs`: the application ID is `dev.cxcs.tools.wlanlogin`. Application paths live in `infra/paths.rs` and use the two components `SEUCXCS/wlanlogin` (`ProjectDirs::from_path`, not `ProjectDirs::from`). Cleanup must preserve the shared `SEUCXCS` parent and sibling tools. The rename does not automatically migrate legacy services or credentials; README documents uninstalling with the old binary before installing the new one. The CLI package is `wlanlogin-cli`, its explicit binary target and tracing prefix are `wlanlogin`, and its environment variables use `WLANLOGIN_`.
 
 There is no pinned `rust-toolchain.toml` or declared MSRV. The architecture refactor was validated with Rust/Cargo `1.100.0-nightly`; this is an observed toolchain, not a nightly requirement or a minimum supported version. Check `rustc --version`, `cargo --version`, and installed targets before making toolchain claims. Rust edition support alone does not establish the minimum version of all dependencies.
 
@@ -28,6 +28,8 @@ NetworkManager, Secret Service, and native service managers are runtime dependen
 ## Commands
 
 macOS bundles are built with `cargo xtask bundle macos`, optionally using `--codesign-identity` or `CODESIGN_IDENTITY` (CLI takes precedence; default is ad-hoc `-`). `xtask/` shares `infra/identity.rs` and renders `packaging/macos/Info.plist`; it builds the explicit `wlanlogin` binary, validates the bundle, and publishes it only after successful signing. Ordinary compilation uses Cargo, not an xtask build subcommand. Bundle generation does not install or launch services.
+
+`APP_NAME` is the command, executable and directory name `wlanlogin`; `DISPLAY_NAME` is `CXCS WLAN Login` and may contain spaces. Keep these roles separate. The icon source is `assets/icon/icon.svg`; the pre-generated `packaging/macos/icon/icon.icns` is copied to `Contents/Resources/icon.icns` before signing. Keep packaged resources in the shared bundle member inventory so installation, rollback and cleanup accept them.
 
 Run relevant checks after each logical change and the complete set before delivery of an architectural change:
 

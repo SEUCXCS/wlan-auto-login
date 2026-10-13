@@ -23,7 +23,7 @@ pub enum Message {
     #[error("Timed out waiting for SMAppService unregistration; application files retained")]
     MacosServiceUnregisterTimedOut,
     #[error(
-        "Background service is registered but needs approval; allow WLAN Login in System Settings > General > Login Items, then run service start in the same scope"
+        "Background service is registered but needs approval; allow CXCS WLAN Login in System Settings > General > Login Items, then run service start in the same scope"
     )]
     MacosBackgroundApprovalRequired,
     #[error("Failed to configure Keychain interaction: {status}")]
@@ -58,7 +58,7 @@ pub enum Message {
     #[error("Failed to open user Keychain")]
     FailedToOpenUserKeychain,
     #[error(
-        "Saved credentials are inaccessible; unlock Keychain or allow WLAN Login during a foreground operation"
+        "Saved credentials are inaccessible; unlock Keychain or allow CXCS WLAN Login during a foreground operation"
     )]
     KeychainCredentialInaccessible,
     #[error("Cannot update the existing credential; the original item has been retained")]
@@ -84,7 +84,7 @@ pub enum Message {
     )]
     LocationActivationTimedOut,
     #[error(
-        "Location access was denied; enable WLAN Login in System Settings > Privacy & Security > Location Services"
+        "Location access was denied; enable CXCS WLAN Login in System Settings > Privacy & Security > Location Services"
     )]
     LocationDenied,
     #[error(
@@ -130,7 +130,7 @@ pub enum Message {
     #[error("Installation failed; previous bundle, definition and credential access restored")]
     BundleInstallationRestored,
     #[error(
-        "Location access is unavailable ({state}); allow WLAN Login in System Settings > Privacy & Security > Location Services"
+        "Location access is unavailable ({state}); allow CXCS WLAN Login in System Settings > Privacy & Security > Location Services"
     )]
     LocationUnavailable { state: String },
     #[error(

@@ -280,6 +280,7 @@ mod tests {
         }
         fs::write(bundle::executable(app), value)?;
         fs::write(app.join("Contents/Info.plist"), value)?;
+        fs::write(app.join("Contents/Resources/icon.icns"), value)?;
         Ok(())
     }
     #[test]
@@ -295,9 +296,17 @@ mod tests {
             let mut tx = Payload::stage(&source, &destination)?;
             tx.publish()?;
             assert_eq!(fs::read_to_string(bundle::executable(&destination))?, "new");
+            assert_eq!(
+                fs::read_to_string(destination.join("Contents/Resources/icon.icns"))?,
+                "new"
+            );
             tx.restore()?;
             if previous {
                 assert_eq!(fs::read_to_string(bundle::executable(&destination))?, "old");
+                assert_eq!(
+                    fs::read_to_string(destination.join("Contents/Resources/icon.icns"))?,
+                    "old"
+                );
                 assert_eq!(
                     fs::read_to_string(destination.join("Contents/Info.plist"))?,
                     "old"
@@ -328,16 +337,16 @@ mod tests {
     #[test]
     fn complete_bundle_cleanup_is_repeatable_and_preserves_sibling_tools() -> Result<()> {
         let root = tempfile::tempdir()?;
-        let application = root.path().join("cxcs-tools/wlanlogin");
+        let application = root.path().join("SEUCXCS/wlanlogin");
         let app = application.join("wlanlogin.app");
         fixture(&app, "old")?;
-        let sibling = root.path().join("cxcs-tools/another-tool");
+        let sibling = root.path().join("SEUCXCS/another-tool");
         fs::create_dir_all(&sibling)?;
         fs::write(sibling.join("settings"), "preserve")?;
         remove(&app)?;
         remove(&app)?;
         cleanup::prune_empty_directories(&application)?;
-        assert!(root.path().join("cxcs-tools").exists());
+        assert!(root.path().join("SEUCXCS").exists());
         assert_eq!(fs::read_to_string(sibling.join("settings"))?, "preserve");
         Ok(())
     }

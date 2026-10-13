@@ -158,8 +158,8 @@ mod tests {
     fn user_directories_preserve_both_components_on_every_platform() -> Result<()> {
         let base = directories::BaseDirs::new().context("base directories unavailable")?;
         let user = Paths::new(Scope::User)?;
-        let config = base.config_dir().join("cxcs-tools").join("wlanlogin");
-        let data = base.data_local_dir().join("cxcs-tools").join("wlanlogin");
+        let config = base.config_dir().join("SEUCXCS").join("wlanlogin");
+        let data = base.data_local_dir().join("SEUCXCS").join("wlanlogin");
         #[cfg(windows)]
         let (config, data) = (config.join("config"), data.join("data"));
         assert_eq!(user.config, config);

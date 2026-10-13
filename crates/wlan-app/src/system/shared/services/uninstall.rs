@@ -270,7 +270,7 @@ mod tests {
     use std::{cell::Cell, fs, path::Path};
 
     fn fixture(root: &Path, kind: usize) -> Result<(Paths, Plan)> {
-        let base = root.join("cxcs-tools/wlanlogin");
+        let base = root.join("SEUCXCS/wlanlogin");
         let mut paths = Paths::test(base.join("state"));
         paths.runtime = base.join("run");
         paths.secrets = base.join("secrets");
@@ -343,7 +343,7 @@ mod tests {
         for kind in 0..6 {
             let dir = tempfile::tempdir()?;
             let (paths, plan) = fixture(dir.path(), kind)?;
-            let sibling = dir.path().join("cxcs-tools/another-tool");
+            let sibling = dir.path().join("SEUCXCS/another-tool");
             fs::create_dir(&sibling)?;
             fs::write(sibling.join("settings.json"), "preserve")?;
             let runner = removal_runner(kind);
@@ -356,7 +356,7 @@ mod tests {
             assert!(deleted.get());
             assert!(!plan.definition.exists() && !plan.executable.exists());
             assert!(!paths.config.exists() && !paths.runtime.exists() && !paths.secrets.exists());
-            assert!(!dir.path().join("cxcs-tools/wlanlogin").exists());
+            assert!(!dir.path().join("SEUCXCS/wlanlogin").exists());
             assert_eq!(
                 fs::read_to_string(sibling.join("settings.json"))?,
                 "preserve"
@@ -506,7 +506,7 @@ mod tests {
         })
         .await?;
         assert!(!plan.executable.exists());
-        assert!(!dir.path().join("cxcs-tools/wlanlogin").exists());
+        assert!(!dir.path().join("SEUCXCS/wlanlogin").exists());
         Ok(())
     }
 

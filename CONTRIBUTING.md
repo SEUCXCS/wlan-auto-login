@@ -20,6 +20,10 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 `xtask/` 提供 `cargo xtask bundle macos`，负责调用 Cargo 构建、生成 plist、组装与验证签名应用包。名称复用 `infra/identity.rs`，版本来自 workspace；plist 模板位于 `packaging/macos/`。普通编译使用 Cargo。维护打包流程时验证参数覆盖环境变量、实际构建产物路径以及失败保留旧 bundle 的行为。
 
+图标源文件为 `assets/icon/icon.svg`。
+
+`APP_NAME` 是命令、二进制和目录名 `wlanlogin`；`DISPLAY_NAME` 是显示名称 `CXCS WLAN Login`。macOS 的 `CFBundleName` / `CFBundleDisplayName`、Windows 服务显示名及任务描述、Linux 的 systemd 描述使用后者。
+
 `main.rs` 只调用 `app::run()`。不要向入口增加认证、服务管理或平台分支。
 
 `app::run()` 只解析参数并调用编译期选中的平台 `boot()`。平台启动编排归 `app/bootstrap/`，包括 Windows SCM 应用回调和 macOS AppKit 主线程循环的选择；共享的作用域、日志、应用依赖装配和命令分发由 `app/bootstrap.rs` 的 `entry()` 负责。
@@ -77,9 +81,9 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 新增平台后更新 `system.rs`、目标依赖、构建检查和 README。将运行验证与交叉编译结果分开记录。
 
-应用 ID 固定为 `dev.cxcs.tools.wlanlogin`，目录采用 `cxcs-tools/wlanlogin` 两级结构；名称常量集中在 `infra/identity.rs`，路径通过 `infra/paths.rs` 构造。不要使用 `ProjectDirs::from` 推导这个布局：Linux 会忽略组织参数，macOS 会拼成点分名称；用户目录使用 `ProjectDirs::from_path`。macOS 的 Keychain 授权和服务安装必须共用包内程序路径。完整包的事务安装位于 `system/macos/services/`；严格限制可清理的包成员，新增打包资源时同步更新成员列表。用户与系统服务通过 `SMAppService` 注册，启动定义位于包内 `Contents/Library/LaunchAgents` / `LaunchDaemons`，使用 `BundleProgram`。定义在 xtask 签名前生成，安装期间不得改写签名包。原生 API 由安装副本中的隐藏 `service native status/register/unregister` 调用，检查主 bundle 身份，返回带版本、作用域和应用 ID 的状态；不依赖外部 CLI 的位置。停止先 bootout，再通过带令牌的托管模式 IPC 等待进程退出；停止保留原生注册，卸载及替换签名包前需等待原生注销完成。等待用户后台批准不能报告为运行中，也不能阻塞卸载。保留旧外部 plist 的识别、迁移和失败恢复。手动前台 daemon 不接受托管停止指令；托管启动持锁后再次检查实际 launchd 注册。Windows 服务的创建、查询、启停和 SCM 回调注册使用同一个 ID，用户计划任务追加 SID。
+应用 ID 固定为 `dev.cxcs.tools.wlanlogin`，目录采用 `SEUCXCS/wlanlogin` 两级结构；名称常量集中在 `infra/identity.rs`，路径通过 `infra/paths.rs` 构造。不要使用 `ProjectDirs::from` 推导这个布局：Linux 会忽略组织参数，macOS 会拼成点分名称；用户目录使用 `ProjectDirs::from_path`。macOS 的 Keychain 授权和服务安装必须共用包内程序路径。完整包的事务安装位于 `system/macos/services/`；严格限制可清理的包成员，新增打包资源时同步更新成员列表。用户与系统服务通过 `SMAppService` 注册，启动定义位于包内 `Contents/Library/LaunchAgents` / `LaunchDaemons`，使用 `BundleProgram`。定义在 xtask 签名前生成，安装期间不得改写签名包。原生 API 由安装副本中的隐藏 `service native status/register/unregister` 调用，检查主 bundle 身份，返回带版本、作用域和应用 ID 的状态；不依赖外部 CLI 的位置。停止先 bootout，再通过带令牌的托管模式 IPC 等待进程退出；停止保留原生注册，卸载及替换签名包前需等待原生注销完成。等待用户后台批准不能报告为运行中，也不能阻塞卸载。保留旧外部 plist 的识别、迁移和失败恢复。手动前台 daemon 不接受托管停止指令；托管启动持锁后再次检查实际 launchd 注册。Windows 服务的创建、查询、启停和 SCM 回调注册使用同一个 ID，用户计划任务追加 SID。
 
-改名不自动迁移旧安装，升级步骤见 README。清理只能删除应用自己的文件和清空后的 `wlanlogin` 目录，必须保留 `cxcs-tools` 父目录和同级工具；验证组织目录与应用目录的符号链接／reparse point 边界。Cargo 包为 `wlanlogin-cli` / `wlanlogin-lib`，可执行文件通过 `[[bin]]` 命名为 `wlanlogin`，日志 target 前缀也为 `wlanlogin`。
+改名不自动迁移旧安装，升级步骤见 README。清理只能删除应用自己的文件和清空后的 `wlanlogin` 目录，必须保留 `SEUCXCS` 父目录和同级工具；验证组织目录与应用目录的符号链接／reparse point 边界。Cargo 包为 `wlanlogin-cli` / `wlanlogin-lib`，可执行文件通过 `[[bin]]` 命名为 `wlanlogin`，日志 target 前缀也为 `wlanlogin`。
 
 ### 权限接口
 

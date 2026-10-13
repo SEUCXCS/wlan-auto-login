@@ -2,9 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
     <key>CFBundleIdentifier</key><string>@APP_ID@</string>
-    <key>CFBundleName</key><string>WLAN Login</string>
-    <key>CFBundleDisplayName</key><string>WLAN Login</string>
+    <key>CFBundleName</key><string>@DISPLAY_NAME@</string>
+    <key>CFBundleDisplayName</key><string>@DISPLAY_NAME@</string>
     <key>CFBundleExecutable</key><string>@APP_NAME@</string>
+    <key>CFBundleIconFile</key><string>icon.icns</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleShortVersionString</key><string>@VERSION@</string>
@@ -12,7 +13,7 @@
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSLocationUsageDescription</key>
-    <string>WLAN Login 需要读取当前 Wi-Fi 名称，仅在连接 Student_CX 时进行校园网认证。</string>
+    <string>@DISPLAY_NAME@ 需要读取当前 Wi-Fi 名称，仅在连接 Student_CX 时进行校园网认证。</string>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>WLAN Login 需要读取当前 Wi-Fi 名称，仅在连接 Student_CX 时进行校园网认证。</string>
+    <string>@DISPLAY_NAME@ 需要读取当前 Wi-Fi 名称，仅在连接 Student_CX 时进行校园网认证。</string>
 </dict></plist>

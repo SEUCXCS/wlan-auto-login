@@ -86,15 +86,9 @@ fn bundle(options: &Bundle) -> Result<()> {
     let app_name = format!("{}.app", identity::APP_NAME);
     let app = staging.path().join(&app_name);
     let contents = app.join("Contents");
-    for directory in identity::MACOS_BUNDLE_DIRECTORIES {
-        fs::create_dir_all(app.join(directory))?;
-    }
-    fs::copy(&binary, contents.join("MacOS").join(identity::APP_NAME))?;
-    fs::write(contents.join("Info.plist"), plist())?;
-    fs::write(contents.join("PkgInfo"), b"APPL????")?;
+    assemble(root, &binary, &app)?;
     for system in [false, true] {
         let definition = app.join(identity::macos_service_path(system));
-        fs::write(&definition, identity::macos_service_plist(system))?;
         run(Command::new("/usr/bin/plutil")
             .arg("-lint")
             .arg(&definition))?;
@@ -128,6 +122,28 @@ fn bundle(options: &Bundle) -> Result<()> {
     println!("Signing identity: {}", options.codesign_identity);
     if options.codesign_identity == "-" {
         println!("Ad-hoc builds may need fresh Location and Keychain approval after rebuilding.");
+    }
+    Ok(())
+}
+
+fn assemble(root: &Path, binary: &Path, app: &Path) -> Result<()> {
+    for directory in identity::MACOS_BUNDLE_DIRECTORIES {
+        fs::create_dir_all(app.join(directory))?;
+    }
+    let contents = app.join("Contents");
+    fs::copy(binary, contents.join("MacOS").join(identity::APP_NAME))?;
+    fs::copy(
+        root.join("packaging/macos/icon/icon.icns"),
+        contents.join("Resources/icon.icns"),
+    )
+    .context("Failed to copy the macOS application icon")?;
+    fs::write(contents.join("Info.plist"), plist())?;
+    fs::write(contents.join("PkgInfo"), b"APPL????")?;
+    for system in [false, true] {
+        fs::write(
+            app.join(identity::macos_service_path(system)),
+            identity::macos_service_plist(system),
+        )?;
     }
     Ok(())
 }
@@ -187,6 +203,7 @@ fn plist() -> String {
     include_str!("../../packaging/macos/Info.plist")
         .replace("@APP_ID@", identity::APP_ID)
         .replace("@APP_NAME@", identity::APP_NAME)
+        .replace("@DISPLAY_NAME@", identity::DISPLAY_NAME)
         .replace("@VERSION@", env!("CARGO_PKG_VERSION"))
 }
 
@@ -251,7 +268,35 @@ mod tests {
             assert!(!job.contains("/usr/bin/open") && !job.contains("/Users/"));
             assert!(job.contains(if system { "--system" } else { "--user" }));
         }
-        assert!(plist().contains("<key>CFBundleName</key><string>WLAN Login</string>"));
+        assert!(plist().contains("<key>CFBundleName</key><string>CXCS WLAN Login</string>"));
+    }
+
+    #[test]
+    fn assembly_includes_the_icon_and_display_name_without_renaming_the_executable() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .context("Workspace root is missing")?;
+        let staging = tempfile::tempdir()?;
+        let binary = staging.path().join("wlanlogin");
+        fs::write(&binary, b"test executable")?;
+        let app = staging.path().join("wlanlogin.app");
+        assemble(root, &binary, &app)?;
+        let icon = fs::read(app.join("Contents/Resources/icon.icns"))?;
+        assert_eq!(icon, fs::read(root.join("packaging/macos/icon/icon.icns"))?);
+        assert!(icon.starts_with(b"icns"));
+        assert!(identity::MACOS_BUNDLE_FILES.contains(&"Contents/Resources/icon.icns"));
+        let metadata = fs::read_to_string(app.join("Contents/Info.plist"))?;
+        assert!(!metadata.contains('@'));
+        assert!(metadata.contains("<key>CFBundleIconFile</key><string>icon.icns</string>"));
+        assert!(
+            metadata.contains("<key>CFBundleDisplayName</key><string>CXCS WLAN Login</string>")
+        );
+        assert!(metadata.contains("<key>CFBundleExecutable</key><string>wlanlogin</string>"));
+        assert_eq!(
+            fs::read(app.join("Contents/MacOS/wlanlogin"))?,
+            b"test executable"
+        );
+        Ok(())
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Scoped Keychain operations. Serialize the process-wide interaction switch.
 use crate::infra::{
     error::{Context, Message, Result, ensure},
-    identity::{APP_ID, CREDENTIAL_ENTRY, SYSTEM_CREDENTIAL_SERVICE},
+    identity::{APP_ID, CREDENTIAL_ENTRY, DISPLAY_NAME, SYSTEM_CREDENTIAL_SERVICE},
     scope::Scope,
 };
 use crate::system::{
@@ -284,7 +284,7 @@ fn trusted_applications(binary: Option<&Path>) -> Result<Vec<CFType>> {
 
 fn initial_access(binary: Option<&Path>) -> Result<CFType> {
     let applications = CFArray::from_CFTypes(&trusted_applications(binary)?);
-    let description = CFString::new("WLAN Login saved campus credentials");
+    let description = CFString::new(&format!("{DISPLAY_NAME} saved campus credentials"));
     unsafe {
         let mut access = std::ptr::null_mut();
         let code = SecAccessCreate(
@@ -424,7 +424,7 @@ fn extend_read_access(access: &CFType, applications: &[CFType]) -> Result<bool> 
         }
         // No decrypt-only entry: add one without changing mixed ACLs or owner.
         let apps = CFArray::from_CFTypes(applications);
-        let description = CFString::new("WLAN Login saved campus credentials");
+        let description = CFString::new(&format!("{DISPLAY_NAME} saved campus credentials"));
         let mut acl = std::ptr::null();
         let code = SecACLCreateWithSimpleContents(
             access,

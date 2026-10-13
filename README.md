@@ -237,9 +237,9 @@ sudo "$HOME/.local/bin/wlanlogin" --system service install --credential-store pr
 4. 按提示填写账号、密码和线路。
 5. 按提示完成系统授权。
 
-   - 定位服务：允许 WLAN Login 的授权宿主读取 Wi-Fi 名称。
+   - 定位服务：允许 CXCS WLAN Login 的授权宿主读取 Wi-Fi 名称。
    - 钥匙串访问：核对请求来自 `wlanlogin` 后允许访问；可选择“始终允许”。
-   - 后台活动：允许 WLAN Login 在后台运行；设置位置随系统版本变化。
+   - 后台活动：允许 CXCS WLAN Login 在后台运行；设置位置随系统版本变化。
 
 6. 查看服务状态。
 
@@ -261,7 +261,7 @@ macOS 安装会校验完整应用包。替换旧副本后，程序检查凭据�
 
 系统服务仍从当前活动桌面用户的授权宿主获取 Wi-Fi 状态。没有桌面用户、用户切换或定位未授权时，服务等待有效状态。无桌面会话的非交互安装之后，应在登录用户的终端执行 `sudo wlanlogin --system login`，完成定位授权。
 
-首次注册或此前关闭后台活动时，系统可能要求在“系统设置 → 通用 → 登录项”允许 WLAN Login。系统范围的后台服务要求管理员批准。`service install` 会保留安装和凭据，并提示等待批准。批准后，在同一范围执行 `service start`。
+首次注册或此前关闭后台活动时，系统可能要求在“系统设置 → 通用 → 登录项”允许 CXCS WLAN Login。系统范围的后台服务要求管理员批准。`service install` 会保留安装和凭据，并提示等待批准。批准后，在同一范围执行 `service start`。
 
 定位权限与后台活动批准相互独立。卸载、重装或移动同一签名应用不会自动重置定位授权。Apple 软件开发工具包（SDK）将包含原生 LaunchDaemon 的应用公证列为要求。本地自签名包不能保证系统范围可用；原生注册被拒绝时，程序报告错误并尝试回滚。
 
@@ -509,7 +509,7 @@ macOS 的停止、重启和卸载会等待托管应用退出。`service stop` �
 
 macOS `service uninstall` 注销后台服务，等待注销完成，再删除安装副本。卸载完整应用包前，程序也会停止 Wi-Fi 宿主。`--purge` 不重置系统定位授权。系统设置中的后台列表可能在重新打开页面后才更新。
 
-原始下载文件、手动复制到 Applications 的应用包和 PATH 符号链接应自行移除。清理保留共享的 `cxcs-tools` 父目录及同级工具。系统服务审计记录按操作系统策略保留。macOS 包内存在未知文件或符号链接时，程序报错并保留这些文件。
+原始下载文件、手动复制到 Applications 的应用包和 PATH 符号链接应自行移除。清理保留共享的 `SEUCXCS` 父目录及同级工具。系统服务审计记录按操作系统策略保留。macOS 包内存在未知文件或符号链接时，程序报错并保留这些文件。
 
 Arch 软件包按下面的顺序卸载：
 
@@ -612,8 +612,6 @@ pacman 保留用户配置和凭据。如要删除凭据，在移除软件包前�
 
 6. 按[创建签名证书](#macos-signing)及后续步骤完成签名、命令入口和后台服务安装。
 
-`cargo xtask bundle macos` 构建应用，生成 plist，组装并验证应用包。`cargo build` 只生成可执行文件，不能替代应用打包。
-
 可指定构建配置、架构和输出目录：
 
 ```sh
@@ -715,7 +713,7 @@ RUST_LOG=wlanlogin=debug wlanlogin --user daemon
 定位权限恢复步骤：
 
 1. 打开“系统设置 → 隐私与安全性 → 定位服务”。
-2. 开启全局定位服务并启用 WLAN Login。
+2. 开启全局定位服务并启用 CXCS WLAN Login。
 3. 如果列表中没有应用，在桌面终端触发交互式授权。
 
    ```sh
@@ -757,21 +755,21 @@ RUST_LOG=wlanlogin=debug wlanlogin --user daemon
 
 ## 数据与安装目录
 
-应用 ID 为 `dev.cxcs.tools.wlanlogin`。应用目录使用 `cxcs-tools/wlanlogin` 两级结构。Linux 用户路径遵循 XDG 环境变量；Windows 路径使用系统 Known Folder。
+应用 ID 为 `dev.cxcs.tools.wlanlogin`。应用目录使用 `SEUCXCS/wlanlogin` 两级结构。Linux 用户路径遵循 XDG 环境变量；Windows 路径使用系统 Known Folder。
 
 | 平台 | 用户配置、日志与运行文件 | 系统配置与运行文件 |
 | --- | --- | --- |
-| Linux | `~/.config/cxcs-tools/wlanlogin/` | `/var/lib/cxcs-tools/wlanlogin/`、`/run/cxcs-tools/wlanlogin/`；凭据位于 `/etc/cxcs-tools/wlanlogin/` |
-| macOS | `~/Library/Application Support/cxcs-tools/wlanlogin/` | `/Library/Application Support/cxcs-tools/wlanlogin/state/`、`/var/run/cxcs-tools/wlanlogin/`；凭据在 System Keychain |
-| Windows | `%APPDATA%\cxcs-tools\wlanlogin\config\` | `%ProgramData%\cxcs-tools\wlanlogin\` 下的 `state`、`run`、`secrets` |
+| Linux | `~/.config/SEUCXCS/wlanlogin/` | `/var/lib/SEUCXCS/wlanlogin/`、`/run/SEUCXCS/wlanlogin/`；凭据位于 `/etc/SEUCXCS/wlanlogin/` |
+| macOS | `~/Library/Application Support/SEUCXCS/wlanlogin/` | `/Library/Application Support/SEUCXCS/wlanlogin/state/`、`/var/run/SEUCXCS/wlanlogin/`；凭据在 System Keychain |
+| Windows | `%APPDATA%\SEUCXCS\wlanlogin\config\` | `%ProgramData%\SEUCXCS\wlanlogin\` 下的 `state`、`run`、`secrets` |
 
 程序自行安装的后台副本路径如下：
 
 | 平台 | 用户后台副本 | 系统后台副本 |
 | --- | --- | --- |
-| Linux | `~/.local/share/cxcs-tools/wlanlogin/bin/wlanlogin-daemon` | `/usr/local/libexec/cxcs-tools/wlanlogin/wlanlogin-daemon` |
-| macOS | `~/Library/Application Support/cxcs-tools/wlanlogin/wlanlogin.app` | `/Library/Application Support/cxcs-tools/wlanlogin/wlanlogin.app` |
-| Windows | `%LOCALAPPDATA%\cxcs-tools\wlanlogin\data\bin\wlanlogin-daemon.exe` | `%ProgramFiles%\cxcs-tools\wlanlogin\wlanlogin-daemon.exe` |
+| Linux | `~/.local/share/SEUCXCS/wlanlogin/bin/wlanlogin-daemon` | `/usr/local/libexec/SEUCXCS/wlanlogin/wlanlogin-daemon` |
+| macOS | `~/Library/Application Support/SEUCXCS/wlanlogin/wlanlogin.app` | `/Library/Application Support/SEUCXCS/wlanlogin/wlanlogin.app` |
+| Windows | `%LOCALAPPDATA%\SEUCXCS\wlanlogin\data\bin\wlanlogin-daemon.exe` | `%ProgramFiles%\SEUCXCS\wlanlogin\wlanlogin-daemon.exe` |
 
 macOS 后台程序位于对应应用包的 `Contents/MacOS/wlanlogin`。钥匙串访问控制授权这个实际安装路径。
 
