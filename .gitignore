@@ -1,3 +1,7 @@
 /target/
+
 .env
 *.log
+
+# macOS
+.DS_Store
