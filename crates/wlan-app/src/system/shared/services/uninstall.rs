@@ -287,9 +287,9 @@ mod tests {
         };
         paths.scope = plan.scope;
         for path in [
-            &paths.config,
-            &paths.runtime,
-            &paths.secrets,
+            paths.config.as_path(),
+            paths.runtime.as_path(),
+            paths.secrets.as_path(),
             plan.executable.parent().context("binary parent")?,
             plan.definition.parent().context("service parent")?,
         ] {
