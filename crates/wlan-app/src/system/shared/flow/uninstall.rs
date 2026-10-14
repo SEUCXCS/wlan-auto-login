@@ -68,7 +68,7 @@ async fn uninstall_plan(
         purge,
         runner,
         delete_credentials,
-        &crate::system::shared::services::hooks::DefaultHooks,
+        &tests::FixtureHooks,
     )
     .await
 }
@@ -240,6 +240,33 @@ mod tests {
     use crate::system::shared::services::artifacts as definition;
     use std::{cell::Cell, fs, path::Path};
 
+    const MAC_USER_ENABLED: &str =
+        r#"{"version":1,"service":"dev.cxcs.tools.wlanlogin","scope":"user","status":"enabled"}"#;
+    const MAC_SYSTEM_ENABLED: &str =
+        r#"{"version":1,"service":"dev.cxcs.tools.wlanlogin","scope":"system","status":"enabled"}"#;
+    const MAC_USER_REMOVED: &str = r#"{"version":1,"service":"dev.cxcs.tools.wlanlogin","scope":"user","status":"not_registered"}"#;
+    const MAC_SYSTEM_REMOVED: &str = r#"{"version":1,"service":"dev.cxcs.tools.wlanlogin","scope":"system","status":"not_registered"}"#;
+
+    pub(super) struct FixtureHooks;
+    impl crate::system::shared::services::hooks::UninstallHooks for FixtureHooks {
+        fn packaged_definition(&self, plan: &Plan) -> bool {
+            matches!(plan.manager, Manager::MacosAppService { .. })
+        }
+        fn remove_payload(&self, plan: &Plan) -> Result<()> {
+            cleanup::remove_file(&plan.executable)?;
+            if matches!(plan.manager, Manager::MacosAppService { .. }) {
+                cleanup::remove_file(&plan.definition)?;
+                cleanup::prune_empty_directories(
+                    plan.definition.parent().context("definition parent")?,
+                )?;
+                cleanup::prune_empty_directories(
+                    plan.executable.parent().context("executable parent")?,
+                )?;
+            }
+            Ok(())
+        }
+    }
+
     fn fixture(root: &Path, kind: usize) -> Result<(Paths, Plan)> {
         let base = root.join("SEUCXCS/wlanlogin");
         let mut paths = Paths::test(base.join("state"));
@@ -247,12 +274,14 @@ mod tests {
         paths.secrets = base.join("secrets");
         let executable = base.join("bin/daemon");
         let definition = root.join("shared-services/service");
-        let log = paths.config.join("daemon.log");
         let plan = match kind {
             0 => definition::linux_plan(executable, definition)?,
             1 => definition::linux_system_plan(executable, definition)?,
-            2 => definition::macos_plan(executable, definition, log, 501)?,
-            3 => definition::macos_system_plan(executable, definition, log)?,
+            2 | 3 => definition::app_service_plan(
+                base.join("wlanlogin.app/Contents/MacOS/wlanlogin"),
+                kind == 3,
+                501,
+            )?,
             4 => definition::windows_plan(executable, definition, "S-1-5-21-123")?,
             _ => definition::windows_system_plan(executable, definition)?,
         };
@@ -275,6 +304,7 @@ mod tests {
             fs::write(paths.runtime.join(name), "test data")?;
         }
         fs::write(paths.secrets.join("login.cred"), "encrypted test secret")?;
+        fs::create_dir_all(root.join("shared-services"))?;
         fs::write(root.join("shared-services/another-service"), "preserve")?;
         fs::write(root.join("original-cli"), "preserve")?;
         Ok((paths, plan))
@@ -289,8 +319,24 @@ mod tests {
                 (true, "LoadState=not-found\n"),
             ],
             2 | 3 => vec![
+                (
+                    true,
+                    if kind == 3 {
+                        MAC_SYSTEM_ENABLED
+                    } else {
+                        MAC_USER_ENABLED
+                    },
+                ),
                 (true, "job = {\nstate = not running\n}\n"),
                 (true, ""),
+                (
+                    true,
+                    if kind == 3 {
+                        MAC_SYSTEM_REMOVED
+                    } else {
+                        MAC_USER_REMOVED
+                    },
+                ),
                 (false, "missing"),
                 (true, "domain = {}"),
             ],
@@ -363,7 +409,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_registration_is_removed_even_without_a_definition_file() -> Result<()> {
-        for kind in 0..6 {
+        for kind in [0, 1, 4, 5] {
             let dir = tempfile::tempdir()?;
             let (paths, plan) = fixture(dir.path(), kind)?;
             fs::remove_file(&plan.definition)?;

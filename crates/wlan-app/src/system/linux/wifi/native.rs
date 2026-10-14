@@ -211,7 +211,7 @@ mod tests {
                 boot: "test".into(),
             };
             // Deliberately do not call changed() until AFTER the query reply.
-            // The old inline consumer deadlocked once its 64-message queue filled.
+            // Continuous event draining must prevent a full signal queue from blocking replies.
             for _ in 0..256 {
                 server
                     .emit_signal(None::<&str>, ROOT, NM, "StateChanged", &(100u32,))

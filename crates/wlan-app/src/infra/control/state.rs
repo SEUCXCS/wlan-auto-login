@@ -9,7 +9,6 @@ pub struct State {
     pub paused: bool,
     pub session: Option<String>,
     pub revision: u64,
-    #[serde(default)]
     pub credential_generation: u64,
 }
 
@@ -88,14 +87,15 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn absent_generation_initializes_to_zero_and_exhaustion_never_wraps() -> Result<()> {
+    fn initial_state_requires_generation_and_exhaustion_never_wraps() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let paths = Paths::test(dir.path());
-        std::fs::write(
+        assert_eq!(State::load(&paths)?.credential_generation, 0);
+        fs::write(
             paths.config.join("control.json"),
             r#"{"paused":false,"session":null,"revision":0}"#,
         )?;
-        assert_eq!(State::load(&paths)?.credential_generation, 0);
+        assert!(State::load(&paths).is_err());
         State {
             credential_generation: u64::MAX,
             ..Default::default()

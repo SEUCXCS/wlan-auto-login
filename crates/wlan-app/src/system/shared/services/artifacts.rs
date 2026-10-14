@@ -8,7 +8,7 @@ pub(crate) use crate::system::define::services::Plan;
 #[cfg(test)]
 pub(crate) use crate::system::linux::services::definition::{linux_plan, linux_system_plan};
 #[cfg(test)]
-pub(crate) use crate::system::macos::services::definition::{macos_plan, macos_system_plan};
+pub(crate) use crate::system::macos::services::definition::app_service_plan;
 pub(crate) use crate::system::native::services::definition::plan;
 #[cfg(test)]
 pub(crate) use crate::system::windows::services::definition::{windows_plan, windows_system_plan};
@@ -131,7 +131,6 @@ mod tests {
         let linux = linux_system_plan(exe.clone(), definition.clone())?;
         assert!(linux.content.contains("--system service run"));
         assert!(linux.content.contains("service run"));
-        assert!(linux.content.contains("# ApplicationLog=daemon.log"));
         assert!(
             linux
                 .content
@@ -145,13 +144,17 @@ mod tests {
                 .contains("RuntimeDirectory=SEUCXCS/wlanlogin\n")
         );
         assert!(!linux.content.contains("--user"));
-        let macos = macos_system_plan(exe.clone(), definition.clone(), "/tmp/log".into())?;
+        let macos = app_service_plan(
+            "/Applications/wlanlogin.app/Contents/MacOS/wlanlogin".into(),
+            true,
+            0,
+        )?;
         assert!(macos.content.contains("<string>--system</string>"));
         assert!(
             macos
                 .start
                 .iter()
-                .any(|cmd| cmd.args.iter().any(|a| a == "system"))
+                .any(|cmd| cmd.args.iter().any(|a| a == "--system"))
         );
         assert!(!macos.start.iter().any(|cmd| {
             cmd.args
@@ -193,10 +196,9 @@ mod tests {
         let definition = PathBuf::from("/tmp/definition");
         let plans = [
             linux_plan(executable.clone(), definition.clone())?,
-            macos_plan(
-                executable.clone(),
-                definition.clone(),
-                "/tmp/daemon.log".into(),
+            app_service_plan(
+                "/Applications/wlanlogin.app/Contents/MacOS/wlanlogin".into(),
+                false,
                 501,
             )?,
             windows_plan(executable, definition, "S-1-5-21-123")?,

@@ -1,4 +1,4 @@
-//! Validate the current CLI entry before launching a signed desktop host.
+//! Launch the signed desktop host with the application's internal Wi-Fi entry.
 use super::*;
 pub(super) fn host_launch(
     app: &Path,
@@ -54,15 +54,6 @@ pub(super) async fn launch(
     interactive: bool,
     runner: &impl crate::infra::command::Runner,
 ) -> Result<()> {
-    use crate::infra::command::Invocation;
-    let executable = bundle::executable(app);
-    // Probe only help at execution time: upgrades and rollback can replace the
-    // selected bundle. Never discover its protocol by starting a daemon or host.
-    let probe = Invocation::new(&executable, ["daemon", "--internal-wifi-host", "--help"]);
-    ensure!(
-        runner.output(&probe).await?.success,
-        Message::UnsupportedInstalledProtocol
-    );
     let command = host_launch(app, scope, uid, interactive);
     runner.output(&command).await?.check(&command)
 }

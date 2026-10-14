@@ -15,8 +15,6 @@ impl LogBackend for FileBackend {
     ) -> Result<()> {
         match source {
             LogSource::File(path) => file_logs(&path, options, output, stop).await,
-            #[cfg(any(target_os = "linux", test))]
-            _ => crate::infra::error::bail!("File log adapter received a non-file source"),
         }
     }
 }

@@ -10,9 +10,6 @@ use std::{future::Future, path::PathBuf};
 pub(crate) enum Manager {
     #[cfg(any(target_os = "linux", test))]
     Systemd { system: bool },
-    // Fixture manager for launchd liveness tests; production uses signed SMAppService jobs.
-    #[cfg(test)]
-    Launchd { domain: String, target: String },
     #[cfg(any(target_os = "macos", test))]
     MacosAppService {
         domain: String,
@@ -85,8 +82,6 @@ pub(crate) trait ServiceManager {
 
 #[derive(Debug)]
 pub enum LogSource {
-    #[cfg(any(target_os = "linux", test))]
-    Journal(Invocation),
     File(PathBuf),
 }
 

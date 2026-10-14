@@ -163,8 +163,6 @@ pub enum Message {
     ServiceNotRegistered,
     #[error("Service registration was removed; run service install again")]
     ServiceRegistrationRemoved,
-    #[error("Failed to read journal; check journalctl availability and access permissions")]
-    FailedToReadJournalCheckJournalctlAvailabilityAnd,
     #[error("Failed to register Ctrl+C listener")]
     FailedToRegisterCtrlCListener,
     #[error("Installation path has no parent directory")]
@@ -355,12 +353,8 @@ pub enum Message {
     InstallationPathContainsControlCharacters,
     #[error("Installation path must be UTF-8")]
     InstallationPathMustBeUTF8,
-    #[error("Log path must be UTF-8")]
-    LogPathMustBeUTF8,
     #[error("Failed to determine service status: {value0}")]
     FailedToDetermineServiceStatus { value0: String },
-    #[error("journalctl failed: {status}")]
-    JournalctlFailedStatus { status: String },
     #[error("No service log entries available")]
     NoServiceLogEntriesAvailable,
     #[error("Service installed and started for scope {value0}; {value1}")]
@@ -415,8 +409,6 @@ pub enum Message {
     FailedToStopDaemonError { error: String },
     #[error("Not connected to Student_CX; deleting local credentials without portal logout")]
     NotConnectedToStudentCXDeletingLocal,
-    #[error("--service is only supported by Windows Service Control Manager")]
-    ServiceIsOnlySupportedByWindowsService,
     #[error("Credentials saved without authentication; credentials have not been verified")]
     CredentialsSavedOffline,
     #[error("Failed to read Wi-Fi SSID; check location permission: {code}")]
@@ -549,8 +541,6 @@ pub enum Message {
     SaveAuthenticatedCredentialsFailed,
     #[error("Failed to save offline credentials; service installation cannot continue")]
     SaveOfflineCredentialsFailed,
-    #[error("Service log output pipe is unavailable")]
-    LogOutputUnavailable,
     #[error("Service entry is not initialized")]
     ServiceEntryUnavailable,
     #[error("Not connected to Student_CX; credentials will be saved without authentication")]
@@ -563,8 +553,8 @@ pub enum Message {
     SessionNotReady,
     #[error("Unsupported control protocol; reinstall with the current binary")]
     ControlProtocol,
-    #[error("Unsupported installed protocol; uninstall with the old binary and reinstall")]
-    UnsupportedInstalledProtocol,
+    #[error("Invalid bundle service definition; rebuild with cargo xtask bundle macos")]
+    InvalidBundleServiceDefinition,
     #[error("Credential generation exhausted")]
     CredentialGenerationExhausted,
     #[error("Session generation exhausted")]

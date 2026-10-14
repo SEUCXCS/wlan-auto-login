@@ -18,10 +18,6 @@ impl ServiceManager for Manager {
                     "systemd --user"
                 }
             }
-            #[cfg(test)]
-            Self::Launchd { domain, .. } if domain == "system" => "launchd LaunchDaemon",
-            #[cfg(test)]
-            Self::Launchd { .. } => "launchd LaunchAgent",
             #[cfg(any(target_os = "macos", test))]
             Self::MacosAppService { domain, .. } if domain == "system" => {
                 "SMAppService LaunchDaemon"
@@ -39,8 +35,6 @@ impl ServiceManager for Manager {
         match self {
             #[cfg(any(target_os = "linux", test))]
             Self::Systemd { .. } => crate::infra::identity::SYSTEMD_UNIT,
-            #[cfg(test)]
-            Self::Launchd { target, .. } => target,
             #[cfg(any(target_os = "macos", test))]
             Self::MacosAppService { target, .. } => target,
             #[cfg(any(target_os = "windows", test))]
@@ -52,12 +46,6 @@ impl ServiceManager for Manager {
 
     fn installed(&self, state: &ServiceState) -> bool {
         match self {
-            // bootout stops this login session; the installed plist loads next login.
-            #[cfg(test)]
-            Self::Launchd { .. } => {
-                let _ = state;
-                true
-            }
             #[cfg(any(target_os = "macos", test))]
             Self::MacosAppService { .. } => state.registered,
             #[cfg(any(target_os = "linux", test))]
@@ -74,10 +62,6 @@ impl ServiceManager for Manager {
             #[cfg(any(target_os = "linux", test))]
             Self::Systemd { system } => {
                 crate::system::linux::services::manager::query(*system, self.name(), runner).await
-            }
-            #[cfg(test)]
-            Self::Launchd { domain, target } => {
-                crate::system::macos::services::manager::query(domain, target, runner).await
             }
             #[cfg(any(target_os = "macos", test))]
             Self::MacosAppService {
@@ -113,22 +97,15 @@ impl ServiceManager for Manager {
                 let _ = state;
                 crate::system::linux::services::manager::manage(*system, plan, action, runner).await
             }
-            #[cfg(test)]
-            Self::Launchd { domain, target } => {
-                crate::system::macos::services::manager::manage(
-                    domain, target, plan, action, state, runner,
-                )
-                .await
-            }
             #[cfg(any(target_os = "macos", test))]
             Self::MacosAppService {
                 domain,
                 target,
                 executable,
             } => {
-                let _ = state;
+                let _ = (plan, state);
                 crate::system::macos::services::app_service::manage(
-                    domain, target, executable, plan, action, runner,
+                    domain, target, executable, action, runner,
                 )
                 .await
             }

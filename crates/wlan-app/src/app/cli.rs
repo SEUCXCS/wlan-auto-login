@@ -284,21 +284,6 @@ mod tests {
                 ..
             })
         ));
-        for option in ["--background", "--service"] {
-            assert!(Cli::try_parse_from(["app", "daemon", option]).is_err());
-        }
-        for action in ["start", "stop", "restart", "status", "logs"] {
-            assert!(Cli::try_parse_from(["app", "daemon", action]).is_err());
-        }
-        for old in [
-            "install",
-            "uninstall",
-            "macos-service",
-            "macos-credential-check",
-            "macos-host",
-        ] {
-            assert!(Cli::try_parse_from(["app", old]).is_err());
-        }
     }
 
     #[test]
@@ -314,7 +299,7 @@ mod tests {
             })
         ));
         assert!(Cli::try_parse_from(["app", "service", "logs", "-n", "-1"]).is_err());
-        assert!(Cli::try_parse_from(["app", "service", "--background", "logs"]).is_err());
+        assert!(Cli::try_parse_from(["app", "service", "--unknown-option", "logs"]).is_err());
     }
 
     #[test]
@@ -322,7 +307,6 @@ mod tests {
         let mut command = Cli::command();
         let help = command.render_help().to_string();
         assert!(help.contains("service"));
-        assert!(!help.contains("macos-host"));
         let daemon = command.find_subcommand_mut("daemon");
         assert!(daemon.is_some());
         if let Some(daemon) = daemon {
@@ -394,14 +378,6 @@ mod tests {
             ));
         }
         assert!(Cli::try_parse_from(["app", "daemon", "--system-helper"]).is_err());
-        for legacy in ["--background", "--service"] {
-            assert!(
-                Cli::try_parse_from(["app", "daemon", "--internal-wifi-host", legacy]).is_err()
-            );
-            assert!(
-                Cli::try_parse_from(["app", "daemon", legacy, "--internal-wifi-host"]).is_err()
-            );
-        }
         assert!(matches!(
             Cli::try_parse_from(["app", "daemon", "--internal-wifi-host", "--help"]),
             Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp

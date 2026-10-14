@@ -70,6 +70,12 @@ mod tests {
     }
 
     fn installed(plan: &Plan) -> Result<()> {
+        for path in [&plan.definition, &plan.executable] {
+            fs::create_dir_all(
+                path.parent()
+                    .ok_or_else(|| crate::infra::error::error!("fixture parent"))?,
+            )?;
+        }
         fs::write(&plan.definition, &plan.content)?;
         fs::write(&plan.executable, "mock executable, never run")?;
         Ok(())
@@ -258,72 +264,83 @@ mod tests {
         Ok(())
     }
 
+    const MAC_ENABLED: &str =
+        r#"{"version":1,"service":"dev.cxcs.tools.wlanlogin","scope":"user","status":"enabled"}"#;
     const MAC_RUNNING: &str = "gui/501/dev.cxcs.tools.wlanlogin = {\nstate = running\npid = 123\n}";
     const MAC_DOMAIN: &str = "gui/501 = {\nservices = {\n}\n}";
 
     #[tokio::test]
-    async fn macos_stop_and_restart_keep_the_installed_plist() -> Result<()> {
+    async fn macos_stop_and_restart_preserve_the_signed_service_definition() -> Result<()> {
         for action in [Action::Stop, Action::Restart] {
-            let (dir, paths, _) = fixture()?;
-            let plan = crate::system::shared::services::artifacts::macos_plan(
-                dir.path().join("daemon"),
-                dir.path().join("service.plist"),
-                dir.path().join("log"),
+            let (dir, _, _) = fixture()?;
+            let plan = crate::system::shared::services::artifacts::app_service_plan(
+                dir.path().join("wlanlogin.app/Contents/MacOS/wlanlogin"),
+                false,
                 501,
             )?;
             installed(&plan)?;
-            let runner = FakeRunner::new([(true, MAC_RUNNING), (true, ""), (true, "")]);
-            manage_plan(&paths, &plan, action, &runner).await?;
+            let mut outputs = vec![
+                (true, MAC_ENABLED),
+                (true, MAC_RUNNING),
+                (true, MAC_RUNNING),
+                (true, ""),
+            ];
+            if matches!(action, Action::Restart) {
+                outputs.push((true, MAC_ENABLED));
+            }
+            let runner = FakeRunner::new(outputs);
+            let state = plan.manager.query(&runner).await?;
+            assert!(state.registered);
+            plan.manager.manage(&plan, action, state, &runner).await?;
             let calls = calls(&runner);
             assert_eq!(
-                calls[1],
+                calls[3],
                 ["launchctl", "bootout", "gui/501/dev.cxcs.tools.wlanlogin"]
             );
             if matches!(action, Action::Restart) {
-                assert_eq!(
-                    calls[2],
-                    [
-                        "launchctl",
-                        "bootstrap",
-                        "gui/501",
-                        plan.definition.to_str().unwrap_or_default()
-                    ]
-                );
+                assert_eq!(&calls[4][1..], ["--user", "service", "native", "register"]);
             } else {
-                assert_eq!(calls.len(), 2);
+                assert_eq!(calls.len(), 4);
             }
+            assert!(runner.outputs.borrow().is_empty());
             assert_eq!(fs::read_to_string(&plan.definition)?, plan.content);
+            assert!(plan.executable.exists());
         }
         Ok(())
     }
 
     #[tokio::test]
-    async fn macos_start_or_restart_after_stop_bootstraps_the_existing_plist() -> Result<()> {
+    async fn macos_start_or_restart_after_stop_uses_native_registration() -> Result<()> {
         for action in [Action::Start, Action::Restart, Action::Stop] {
-            let (dir, paths, _) = fixture()?;
-            let plan = crate::system::shared::services::artifacts::macos_plan(
-                dir.path().join("daemon"),
-                dir.path().join("service.plist"),
-                dir.path().join("log"),
+            let (dir, _, _) = fixture()?;
+            let plan = crate::system::shared::services::artifacts::app_service_plan(
+                dir.path().join("wlanlogin.app/Contents/MacOS/wlanlogin"),
+                false,
                 501,
             )?;
             installed(&plan)?;
-            let runner = FakeRunner::new([(false, "job absent"), (true, MAC_DOMAIN), (true, "")]);
-            manage_plan(&paths, &plan, action, &runner).await?;
+            let mut outputs = vec![
+                (true, MAC_ENABLED),
+                (false, "job absent"),
+                (true, MAC_DOMAIN),
+                (false, "job absent"),
+                (true, MAC_DOMAIN),
+            ];
+            if !matches!(action, Action::Stop) {
+                outputs.push((true, MAC_ENABLED));
+            }
+            let runner = FakeRunner::new(outputs);
+            let state = plan.manager.query(&runner).await?;
+            assert!(state.registered);
+            plan.manager.manage(&plan, action, state, &runner).await?;
             let calls = calls(&runner);
             if matches!(action, Action::Stop) {
-                assert_eq!(calls.len(), 2);
+                assert_eq!(calls.len(), 5);
             } else {
-                assert_eq!(
-                    calls[2],
-                    [
-                        "launchctl",
-                        "bootstrap",
-                        "gui/501",
-                        plan.definition.to_str().unwrap_or_default()
-                    ]
-                );
+                assert_eq!(&calls[5][1..], ["--user", "service", "native", "register"]);
             }
+            assert!(runner.outputs.borrow().is_empty());
+            assert_eq!(fs::read_to_string(&plan.definition)?, plan.content);
         }
         Ok(())
     }

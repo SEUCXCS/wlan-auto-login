@@ -4,7 +4,9 @@ use crate::infra::{
     error::{Context, Message, Result, ensure},
     identity::APP_ID,
 };
-use crate::system::define::services::{Action, Plan, ServiceState};
+#[cfg(test)]
+use crate::system::define::services::Plan;
+use crate::system::define::services::{Action, ServiceState};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -41,14 +43,14 @@ pub(crate) fn command(executable: &Path, domain: &str, action: &str) -> Invocati
     )
 }
 
-/// Reject unsupported signed definitions before executing any native mutation.
-pub(crate) fn require_current(executable: &Path, system: bool) -> Result<()> {
+/// Validate the signed service definition before executing native operations.
+pub(crate) fn validate_definition(executable: &Path, system: bool) -> Result<()> {
     let definition = super::definition::bundle_definition(executable, system)
-        .context(Message::UnsupportedInstalledProtocol)?;
+        .context(Message::InvalidBundleServiceDefinition)?;
     let content = std::fs::read_to_string(definition)?;
     ensure!(
         content == crate::infra::identity::macos_service_plist(system),
-        Message::UnsupportedInstalledProtocol
+        Message::InvalidBundleServiceDefinition
     );
     Ok(())
 }
@@ -58,7 +60,7 @@ pub(crate) async fn output(invocation: &Invocation, runner: &impl Runner) -> Res
         && invocation.args[1] == "service"
         && invocation.args[2] == "native"
     {
-        require_current(
+        validate_definition(
             Path::new(&invocation.program),
             invocation.args[0] == "--system",
         )?;
@@ -89,7 +91,7 @@ pub(crate) async fn query(
 ) -> Result<ServiceState> {
     let definition = super::definition::bundle_definition(executable, domain == "system");
     // A missing definition is reported as incomplete without executing a bundle.
-    // Existing unsupported definitions are rejected by output().
+    // Existing definitions are validated by output().
     let registration = if definition.is_some_and(|p| p.is_file()) {
         let invocation = command(executable, domain, "status");
         let output = output(&invocation, runner).await?;
@@ -136,15 +138,14 @@ pub(crate) async fn manage(
     domain: &str,
     target: &str,
     executable: &Path,
-    plan: &Plan,
     action: Action,
     runner: &impl Runner,
 ) -> Result<()> {
     let live = super::manager::query(domain, target, runner).await?;
     if matches!(action, Action::Stop | Action::Restart) {
-        super::manager::manage(domain, target, plan, Action::Stop, live, runner).await?;
+        super::manager::stop(target, live, runner).await?;
     } else if live.registered {
-        return super::manager::manage(domain, target, plan, action, live, runner).await;
+        return super::manager::start(target, runner).await;
     }
     if !matches!(action, Action::Stop) {
         let invocation = command(executable, domain, "register");
@@ -295,7 +296,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsupported_bundle_is_rejected_before_native_mutation() -> Result<()> {
+    async fn invalid_bundle_definition_is_rejected_before_native_mutation() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let plan = plan(dir.path())?;
         std::fs::create_dir_all(
@@ -306,7 +307,7 @@ mod tests {
         let invocation = command(&plan.executable, "gui/501", "unregister");
         std::fs::write(
             &plan.definition,
-            "<string>daemon</string><string>--background</string>",
+            "<plist><dict><key>Label</key><string>unrelated.app</string></dict></plist>",
         )?;
         let runner = FakeRunner::default();
         assert!(output(&invocation, &runner).await.is_err());
@@ -379,7 +380,6 @@ mod tests {
             "gui/501",
             "gui/501/dev.cxcs.tools.wlanlogin",
             &plan.executable,
-            &plan,
             Action::Stop,
             &runner,
         )
@@ -398,7 +398,6 @@ mod tests {
             "gui/501",
             "gui/501/dev.cxcs.tools.wlanlogin",
             &plan.executable,
-            &plan,
             Action::Restart,
             &runner,
         )
@@ -431,7 +430,6 @@ mod tests {
                 "gui/501",
                 "gui/501/dev.cxcs.tools.wlanlogin",
                 &plan.executable,
-                &plan,
                 Action::Start,
                 &runner
             )

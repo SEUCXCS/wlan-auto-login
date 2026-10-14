@@ -16,7 +16,7 @@ pub(crate) fn linux_system_plan(executable: PathBuf, definition: PathBuf) -> Res
         scope: crate::infra::scope::Scope::System,
         manager: Manager::Systemd { system: true },
         content: format!(
-            "# {LABEL}\n[Unit]\nDescription={DISPLAY_NAME} — Student_CX automatic login\nAfter=NetworkManager.service\nWants=NetworkManager.service\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart={quoted} --system service run\n# ApplicationLog=daemon.log\nRestart=on-failure\nRestartSec=30\nTimeoutStopSec=25\nStateDirectory={ORGANIZATION}/{APP_NAME}\nStateDirectoryMode=0700\nRuntimeDirectory={ORGANIZATION}/{APP_NAME}\nRuntimeDirectoryMode=0700\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=true\nProtectSystem=strict\n# CREDENTIALS\n\n[Install]\nWantedBy=multi-user.target\n"
+            "# {LABEL}\n[Unit]\nDescription={DISPLAY_NAME} — Student_CX automatic login\nAfter=NetworkManager.service\nWants=NetworkManager.service\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart={quoted} --system service run\nRestart=on-failure\nRestartSec=30\nTimeoutStopSec=25\nStateDirectory={ORGANIZATION}/{APP_NAME}\nStateDirectoryMode=0700\nRuntimeDirectory={ORGANIZATION}/{APP_NAME}\nRuntimeDirectoryMode=0700\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=true\nProtectSystem=strict\n# CREDENTIALS\n\n[Install]\nWantedBy=multi-user.target\n"
         ),
         executable,
         definition,
@@ -40,7 +40,7 @@ pub(crate) fn linux_system_plan(executable: PathBuf, definition: PathBuf) -> Res
 pub(crate) fn linux_plan(executable: PathBuf, definition: PathBuf) -> Result<Plan> {
     let quoted = systemd_quote(&executable)?;
     let content = format!(
-        "# {LABEL}\n[Unit]\nDescription={DISPLAY_NAME} — Student_CX automatic login\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart={quoted} --user service run\n# ApplicationLog=daemon.log\nRestart=on-failure\nRestartSec=30\nTimeoutStopSec=25\n\n[Install]\nWantedBy=default.target\n"
+        "# {LABEL}\n[Unit]\nDescription={DISPLAY_NAME} — Student_CX automatic login\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nExecStart={quoted} --user service run\nRestart=on-failure\nRestartSec=30\nTimeoutStopSec=25\n\n[Install]\nWantedBy=default.target\n"
     );
     let reload = || Invocation::new("systemctl", ["--user", "daemon-reload"]);
     Ok(Plan {

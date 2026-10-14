@@ -81,7 +81,7 @@ pub async fn write<T: Serialize>(stream: &mut (impl AsyncWrite + Unpin), value: 
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn frames_reject_oversize_and_old_unframed_bytes() -> Result<()> {
+    async fn frames_reject_invalid_lengths_and_unframed_bytes() -> Result<()> {
         for size in [0, u32::MAX] {
             let (mut writer, mut reader) = tokio::io::duplex(128);
             writer.write_u32(size).await?;
@@ -93,8 +93,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn current_status_carries_only_safe_credential_diagnostics_and_requires_the_new_schema()
-    -> Result<()> {
+    fn status_carries_only_safe_credential_diagnostics_and_requires_all_fields() -> Result<()> {
         use crate::infra::error::credentials::{Diagnostic, Kind, Stage};
         let status = RuntimeStatus {
             outcome: Some("credential_read_failed".into()),

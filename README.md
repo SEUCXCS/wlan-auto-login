@@ -20,7 +20,6 @@
     - [Windows](#windows)
     - [升级](#升级)
       - [更新当前命令](#更新当前命令)
-      - [从旧命令迁移](#从旧命令迁移)
   - [使用](#使用)
     - [命令行](#命令行)
     - [登录与保存凭据](#登录与保存凭据)
@@ -319,8 +318,6 @@ wlanlogin --user service session-ready
 
 ### 升级
 
-服务管理命令已从 `daemon start/stop/restart/status/logs` 和顶层 `install/uninstall` 迁到 `service` 下；`daemon` 专用于当前进程的自动登录循环。
-
 #### 更新当前命令
 
 1. 获取新版二进制文件或完整应用包。
@@ -334,37 +331,6 @@ wlanlogin --user service session-ready
    ```
 
    系统范围使用 `--system` 和管理员权限。
-
-当前控制 IPC 使用版本 3，新增安全诊断字段；版本 1、2 均不兼容。当前版本不兼容旧服务启动参数、旧 IPC、`macos-host` / `macos-service` / `macos-credential-check` 或旧 macOS 外部启动定义。保留旧程序，在原范围执行旧版本的卸载命令（保留凭据），再用新版本安装。macOS 检测到旧安装时会在修改之前报错；不自动迁移旧协议。已使用当前协议的安装仍支持失败回滚。新包应通过 `cargo xtask bundle macos` 构建，并包含签名内的启动定义。
-
-Arch 软件包通过 pacman 更新，随后重启用户服务：
-
-```sh
-sudo pacman -U ./wlanlogin-0.1.0-1-x86_64.pkg.tar.zst
-systemctl --user restart dev.cxcs.tools.wlanlogin.service
-```
-
-使用实际生成的软件包文件名。运行中的服务在重启后使用新程序。
-
-#### 从旧命令迁移
-
-从旧命令 `cxxy-wlanlogin-cli` 升级时，服务、配置和凭据不会自动迁移，也不提供旧命令或旧环境变量别名。保留旧版程序，先按原安装范围卸载：
-
-```sh
-cxxy-wlanlogin-cli --user uninstall --purge
-sudo cxxy-wlanlogin-cli --system uninstall --purge  # Linux / macOS 系统范围
-```
-
-Windows 原系统安装在管理员终端执行 `cxxy-wlanlogin-cli --system uninstall --purge`。仅选择实际安装范围；没有服务但保存过旧凭据时，也可用旧版在对应范围执行清理。
-
-然后在新程序的同一范围重新保存凭据并安装：
-
-```sh
-wlanlogin --user login --interactive --remember-me
-wlanlogin --user service install
-```
-
-系统安装使用 `--system` 并提供管理员权限。自动化脚本同步改用 `wlanlogin`、`WLANLOGIN_USERNAME`、`WLANLOGIN_PASSWORD` 和 `WLANLOGIN_LINE`。
 
 ## 使用
 
@@ -472,15 +438,6 @@ wlanlogin --user service restart
 
 直接运行 `wlanlogin --user daemon` 会在当前进程运行自动登录循环。启动前，先在同一范围保存凭据。macOS 的前台 daemon 也不会申请定位权限。
 
-Arch 软件包提供的服务使用 systemctl：
-
-```sh
-systemctl --user status dev.cxcs.tools.wlanlogin.service
-systemctl --user start dev.cxcs.tools.wlanlogin.service
-systemctl --user stop dev.cxcs.tools.wlanlogin.service
-systemctl --user restart dev.cxcs.tools.wlanlogin.service
-```
-
 后台服务只在连接 `Student_CX` 且门户确认离线时提交认证。门户状态未知时，服务不会自动登录。
 
 后台读取超时后会继续保留同一个读取任务；任务稍后完成时，程序会重新检查其许可，提交登录前再检查一次。Linux 用户范围的结果绑定 logind 会话 ID、启动时间及本地会话代数；注销、重新登录或会话变更后，旧结果会丢弃并等待重新读取。系统范围不依赖桌面会话；macOS 和 Windows 保持原生钥匙串／凭据管理器的后台访问规则。
@@ -514,7 +471,7 @@ wlanlogin logout --forget
 
 `logout --forget` 停止后台进程，但保留服务安装及线路配置。未连接校园网时，命令只清理本地凭据。门户注销失败或无法识别 Wi-Fi 时，命令仍尝试删除凭据，并以非零退出码报告注销未完成。凭据删除失败时，命令也报错，并保持自动登录暂停。
 
-恢复时，用 `login --remember-me` 保存新凭据，再启动同一范围的服务。Arch 软件包使用 `systemctl --user start`，程序自行安装的服务使用 `service start`。
+恢复时，用 `login --remember-me` 保存新凭据，再用 `service start` 启动同一范围的服务。
 
 **警告：** 先保存仍要保留的配置和凭据，再执行 `service uninstall --purge`。命令会删除所选范围的服务注册、后台副本、应用数据和凭据。
 
@@ -532,22 +489,6 @@ macOS 的停止、重启和卸载会等待托管应用退出。`service stop` �
 macOS `service uninstall` 注销后台服务，等待注销完成，再删除安装副本。卸载完整应用包前，程序也会停止 Wi-Fi 宿主。`--purge` 不重置系统定位授权。系统设置中的后台列表可能在重新打开页面后才更新。
 
 原始下载文件、手动复制到 Applications 的应用包和 PATH 符号链接应自行移除。清理保留共享的 `SEUCXCS` 父目录及同级工具。系统服务审计记录按操作系统策略保留。macOS 包内存在未知文件或符号链接时，程序报错并保留这些文件。
-
-Arch 软件包按下面的顺序卸载：
-
-1. 停止并禁用用户服务。
-
-   ```sh
-   systemctl --user disable --now dev.cxcs.tools.wlanlogin.service
-   ```
-
-2. 移除软件包。
-
-   ```sh
-   sudo pacman -Rns wlanlogin
-   ```
-
-pacman 保留用户配置和凭据。如要删除凭据，在移除软件包前执行 `wlanlogin --user logout --forget`。
 
 ## 构建
 
@@ -705,13 +646,7 @@ wlanlogin service logs -n 0 -f
 
 默认显示最近 100 行。`-f` 持续查看，Ctrl+C 退出。`-n 0 -f` 只查看新日志。
 
-日志来自所选范围配置目录中的 `daemon.log`。同一应用 ID 的旧 Linux 服务如果未配置应用日志，则读取 journal。服务停止后仍可查看已有日志，未安装时命令报错。系统范围日志可能要求 sudo 或管理员权限。
-
-Arch 软件包提供的服务使用 journal：
-
-```sh
-journalctl --user -u dev.cxcs.tools.wlanlogin.service -f
-```
+日志来自所选范围配置目录中的 `daemon.log`。服务停止后仍可查看已有日志，未安装时命令报错。系统范围日志可能要求 sudo 或管理员权限。
 
 日志使用英文事件文本、UTC RFC 3339 时间和结构化字段。默认级别为 `info`。前台诊断可使用：
 
@@ -770,7 +705,6 @@ RUST_LOG=wlanlogin=debug wlanlogin --user daemon
 | 凭据存储不可用或要求交互 | 解锁凭据存储，在同一范围完成前台授权 |
 | 已在线，但新账号未生效 | 先注销，再登录 |
 | 程序自行安装的服务不完整 | 在同一范围执行 `service status`，必要时重新 `service install` |
-| Arch 软件包服务无法启动 | 查看 `systemctl --user status` 和 journal；确认 Secret Service 已解锁 |
 | 显式登录后后台未恢复 | 确认登录和后台服务使用相同的 `--user` 或 `--system` 范围 |
 | 认证被拒绝后不再自动重试 | 用 `login --interactive --remember-me` 更新凭据 |
 | macOS 已连接 Wi-Fi，但无法读取 SSID | 修复定位授权后，重新安装或重启服务 |

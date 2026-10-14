@@ -57,7 +57,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 | `system.rs` | 编译期选择原生平台，暴露系统能力入口 |
 | `system/define/` | credentials、services、wifi、permission 的公共契约与数据模型，包括安装报告、文件状态和日志后端接口 |
 | `system/shared/credentials/`、`system/shared/wifi/` | 凭据作用域与编码、共用 keyring 访问、Wi-Fi 查询超时和工作线程 |
-| `system/shared/services/` | 归属检查实现、共用日志适配、服务步骤、卸载扩展点和回滚停止屏障 |
+| `system/shared/services/` | 归属检查实现、共用文件日志适配、服务步骤、卸载扩展点和回滚停止屏障 |
 | `system/{linux,macos,windows}/services/` | 原生服务定义、管理器状态解析、日志来源、签名包和就绪检查 |
 | `system/{linux,macos,windows}/credentials/` | 用户与系统凭据后端 |
 | `system/{linux,macos,windows}/wifi/` | 平台 SSID 查询、连接标识、网络事件订阅 |
@@ -75,7 +75,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 ### CLI 与业务操作
 
-在 `app/cli.rs` 声明参数，再将普通请求类型传给 `app/controller`。公开服务管理统一使用 `service install/uninstall/start/stop/restart/status/logs`；`daemon` 只运行当前进程的循环。各平台生成的服务定义使用隐藏 `service run`；Windows 系统范围由 bootstrap 接入 SCM，用户计划任务直接运行，macOS 用户范围保留 AppKit 事件循环。macOS bootstrap 处理 `service native` 和 Wi-Fi 宿主内部入口，共享 bootstrap 在构造门户客户端前处理跨平台权限入口。拒绝旧服务启动参数与旧协议，升级时用旧程序卸载，再安装当前版本。服务 controller 的生产操作统一调用 `system::flow`，不直接引用 shared 或某个原生平台；平台 flow 组合公共流程与原生适配器，前端负责交互及展示；返回结构化数据，或显式注入输出 writer、取消 future 等接口。服务状态查询不能靠日志文本判断成功与否。TUI 不直接调用门户或服务管理器。
+在 `app/cli.rs` 声明参数，再将普通请求类型传给 `app/controller`。公开服务管理统一使用 `service install/uninstall/start/stop/restart/status/logs`；`daemon` 只运行当前进程的循环。各平台生成的服务定义使用隐藏 `service run`；Windows 系统范围由 bootstrap 接入 SCM，用户计划任务直接运行，macOS 用户范围保留 AppKit 事件循环。macOS bootstrap 处理 `service native` 和 Wi-Fi 宿主内部入口，共享 bootstrap 在构造门户客户端前处理跨平台权限入口。服务 controller 的生产操作统一调用 `system::flow`，不直接引用 shared 或某个原生平台；平台 flow 组合公共流程与原生适配器，前端负责交互及展示；返回结构化数据，或显式注入输出 writer、取消 future 等接口。服务状态查询不能靠日志文本判断成功与否。TUI 不直接调用门户或服务管理器。
 
 新增 daemon 行为先明确 `policy.rs` 中的状态转换，再接入单次检查或调度循环。保留持久化停止监听器、请求超时和单个后台凭据任务；Linux D-Bus 事件流必须持续排空。`AuthState::Unknown` 不得触发自动登录，手动登录只恢复相同作用域的 daemon。
 
@@ -85,9 +85,9 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 新增平台后更新 `system.rs`、目标依赖、构建检查和 README。将运行验证与交叉编译结果分开记录。
 
-应用 ID 固定为 `dev.cxcs.tools.wlanlogin`，目录采用 `SEUCXCS/wlanlogin` 两级结构；名称常量集中在 `infra/identity.rs`，路径通过 `infra/paths.rs` 构造。不要使用 `ProjectDirs::from` 推导这个布局：Linux 会忽略组织参数，macOS 会拼成点分名称；用户目录使用 `ProjectDirs::from_path`。macOS 的 Keychain 授权和服务安装必须共用包内程序路径。完整包安装入口位于 `system/macos/flow/install.rs`，签名负载事务位于 `system/macos/services/payload.rs`；严格限制可清理的包成员，新增打包资源时同步更新成员列表。用户与系统服务通过 `SMAppService` 注册，启动定义位于包内 `Contents/Library/LaunchAgents` / `LaunchDaemons`，使用 `BundleProgram`。定义在 xtask 签名前生成，安装期间不得改写签名包。原生 API 由安装副本中的隐藏 `service native status/register/unregister` 调用，检查主 bundle 身份，返回带版本、作用域和应用 ID 的状态；不依赖外部 CLI 的位置。停止先 bootout，再通过带令牌的托管模式 IPC 等待进程退出；停止保留原生注册，卸载及替换签名包前需等待原生注销完成。等待用户后台批准不能报告为运行中，也不能阻塞卸载。旧外部 plist 和旧签名启动协议必须在修改之前报错，不自动迁移或回退；当前协议之间保留回滚。手动前台 daemon 不接受托管停止指令；托管启动持锁后再次检查实际 launchd 注册。Windows 服务的创建、查询、启停和 SCM 回调注册使用同一个 ID，用户计划任务追加 SID。
+应用 ID 固定为 `dev.cxcs.tools.wlanlogin`，目录采用 `SEUCXCS/wlanlogin` 两级结构；名称常量集中在 `infra/identity.rs`，路径通过 `infra/paths.rs` 构造。不要使用 `ProjectDirs::from` 推导这个布局：Linux 会忽略组织参数，macOS 会拼成点分名称；用户目录使用 `ProjectDirs::from_path`。macOS 的 Keychain 授权和服务安装必须共用包内程序路径。完整包安装入口位于 `system/macos/flow/install.rs`，签名负载事务位于 `system/macos/services/payload.rs`；严格限制可清理的包成员，新增打包资源时同步更新成员列表。用户与系统服务通过 `SMAppService` 注册，启动定义位于包内 `Contents/Library/LaunchAgents` / `LaunchDaemons`，使用 `BundleProgram`。定义在 xtask 签名前生成，安装期间不得改写签名包。原生 API 由安装副本中的隐藏 `service native status/register/unregister` 调用，检查主 bundle 身份，返回带版本、作用域和应用 ID 的状态；不依赖外部 CLI 的位置。停止先 bootout，再通过带令牌的托管模式 IPC 等待进程退出；停止保留原生注册，卸载及替换签名包前需等待原生注销完成。等待用户后台批准不能报告为运行中，也不能阻塞卸载。替换应用包失败时保留安装回滚。手动前台 daemon 不接受托管停止指令；托管启动持锁后再次检查实际 launchd 注册。Windows 服务的创建、查询、启停和 SCM 回调注册使用同一个 ID，用户计划任务追加 SID。
 
-改名不自动迁移旧安装，升级步骤见 README。清理只能删除应用自己的文件和清空后的 `wlanlogin` 目录，必须保留 `SEUCXCS` 父目录和同级工具；验证组织目录与应用目录的符号链接／reparse point 边界。Cargo 包为 `wlanlogin-cli` / `wlanlogin-lib`，可执行文件通过 `[[bin]]` 命名为 `wlanlogin`，日志 target 前缀也为 `wlanlogin`。
+清理只能删除应用自己的文件和清空后的 `wlanlogin` 目录，必须保留 `SEUCXCS` 父目录和同级工具；验证组织目录与应用目录的符号链接／reparse point 边界。Cargo 包为 `wlanlogin-cli` / `wlanlogin-lib`，可执行文件通过 `[[bin]]` 命名为 `wlanlogin`，日志 target 前缀也为 `wlanlogin`。
 
 ### 权限接口
 
@@ -95,11 +95,11 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 Linux / Windows 返回空列表。macOS 的 `macos.location` 对接签名 Wi-Fi 宿主中的 Core Location；`macos.keychain` 查询本范围的自有条目；查询禁用 UI，申请仅在前台允许 UI。用户与系统 Keychain 共用串行访问器，避免进程级交互开关竞态。诊断区分 Missing / NeedsInteraction / Denied / Unavailable；失败不得删除原条目。未知标识返回错误，保留“不支持 / 未实现”和“已授权”的区别。`permission list/check/get` 在所有平台编译并显示，由运行时 provider 决定支持的权限；空实现的列表和全部查询返回空集合，显式 ID 仍需校验。查询不申请授权，`get` 仅在 stdin 和 stderr 均为终端时请求指定权限。逐项保留诊断，某一权限失败不能丢失其他结果。状态 JSON 使用带版本、范围和权限 ID 的 `PermissionReport`，安装端严格检查版本、范围、ID、条目数及错误字段。后台不触发授权弹窗。
 
-包内外 CLI 共用参数解析，无参数不得隐式启动 Wi-Fi 宿主。macOS 宿主使用隐藏的 `daemon --internal-wifi-host`，仅运行 Wi-Fi／定位宿主，不进入自动登录循环；隐藏的 `--system-helper` 仅能与该模式组合，选择服务于系统客户端的桌面用户宿主。删除旧 `--background` / `--service` 参数，内部字段上方保留用途注释。macOS bootstrap 在构造门户依赖之前处理此模式并保持 AppKit 主线程循环。启动所选包前通过 `--help` 验证当前参数；验证失败时报不支持，实际启动失败不重试另一种协议。Keychain 保存、删除及 ACL 授权仅查找条目引用，不取密码数据；已有条目直接更新，仅明确不存在时创建，查询或更新失败不得尝试创建替代条目。新条目通过 `SecKeychainItemCreateFromContent` 在创建时传入初始访问控制，包含当前程序及已存在的目标程序。安装已明确要求刷新凭据时，直接进入登录准备，避免预检查重复读取钥匙串。
+包内外 CLI 共用参数解析，无参数不得隐式启动 Wi-Fi 宿主。macOS 宿主使用隐藏的 `daemon --internal-wifi-host`，仅运行 Wi-Fi／定位宿主，不进入自动登录循环；隐藏的 `--system-helper` 仅能与该模式组合，选择服务于系统客户端的桌面用户宿主。内部字段上方保留用途注释。macOS bootstrap 在构造门户依赖之前处理此模式并保持 AppKit 主线程循环。Keychain 保存、删除及 ACL 授权仅查找条目引用，不取密码数据；已有条目直接更新，仅明确不存在时创建，查询或更新失败不得尝试创建替代条目。新条目通过 `SecKeychainItemCreateFromContent` 在创建时传入初始访问控制，包含当前程序及已存在的目标程序。安装已明确要求刷新凭据时，直接进入登录准备，避免预检查重复读取钥匙串。
 
 macOS Wi-Fi 宿主使用有长度限制的 IPC 帧、协议版本和请求 ID；客户端通过 socket 内核审计令牌验证对端签名与 UID，系统范围还检查活动控制台用户。宿主只提供网络状态，不接收校园网凭据。系统宿主在控制台用户改变后退出；启动、请求、空闲存活时间都有界限。交互申请启动不使用 `open -g`；GUI 宿主和用户后台 daemon 保持 AppKit 主线程事件循环，使前台状态能够刷新。Core Location 对象和 delegate 始终位于同一 RunLoop 工作线程；在该线程确认 `NSRunningApplication.isActive` 后才调用授权请求，激活和权限决定分别有超时。已有决定、后台查询及非交互操作均不得申请权限。
 
-安装前后及当前协议应用包回滚的凭据检查均由实际目标程序执行 `permission check macos.keychain --json`；只接受当前带版本、范围和权限 ID 的报告，拒绝旧检查命令和空输出成功格式。先静默检查；已授权不得改 ACL；锁定时先解锁并重新检查；缺失、不可用、未知或子进程检查失败不得尝试重写。只有确需授权时才复制现有 `SecAccess`，扩展一条仅含 decrypt 的 ACL；无此条目则新增仅含 decrypt 的 ACL，不修改混合权限 ACL、所有者、partition ACL 或其他条目。再次静默检查成功才能继续安装或恢复原服务；未完成回滚保留恢复目录。launchd 定义必须包含 `AssociatedBundleIdentifiers` 与固定应用 ID，关联后台活动归属，服务生命周期由原生 SMAppService 托管。每次重新启动产生新的 Wi-Fi 会话标识，原生查询有超时。
+安装前后及应用包回滚的凭据检查均由实际目标程序执行 `permission check macos.keychain --json`；检查报告必须包含正确的版本、范围和权限 ID。先静默检查；已授权不得改 ACL；锁定时先解锁并重新检查；缺失、不可用、未知或子进程检查失败不得尝试重写。只有确需授权时才复制现有 `SecAccess`，扩展一条仅含 decrypt 的 ACL；无此条目则新增仅含 decrypt 的 ACL，不修改混合权限 ACL、所有者、partition ACL 或其他条目。再次静默检查成功才能继续安装或恢复原服务；未完成回滚保留恢复目录。launchd 定义必须包含 `AssociatedBundleIdentifiers` 与固定应用 ID，关联后台活动归属，服务生命周期由原生 SMAppService 托管。每次重新启动产生新的 Wi-Fi 会话标识，原生查询有超时。
 
 ### Linux 后台凭据时序
 
@@ -107,13 +107,13 @@ macOS Wi-Fi 宿主使用有长度限制的 IPC 帧、协议版本和请求 ID；
 
 daemon 不得在启动时预读。单次检查先验证目标 Wi-Fi、暂停、策略期限及门户 Offline，再读取凭据，提交前再次验证 Wi-Fi 会话。成功读取返回 `BackgroundCredentials`，包含不可输出的 `CredentialPermit`；所有完成结果（包括超时后缓存的结果）在消费时复检，Wi-Fi await 后再次复检，任一检查失败都不得调用门户登录。校验有独立超时，正常等待和校验失败不进入网络失败退避；提供者／解锁事件只唤醒等待，不解除门户凭据拒绝。保留单个在途原生读任务，超时、注销或许可失效不得另开第二个任务。
 
-`CredentialPermit` 绑定 scope、配置目录及 `control.json` 中独立的 `credential_generation`。`flow/credentials/save.rs` 和 `delete.rs` 在调用原生后端之前递增并原子保存代数，调用方继续持有现有 operation lock；写入失效记录失败必须阻止存储操作，原生操作失败也不得恢复旧代数。凭据代数不复用暂停／调度的 revision。缺失字段初始化为零；凭据格式及 IPC v3 不变，没有旧协议回退。
+`CredentialPermit` 绑定 scope、配置目录及 `control.json` 中独立的 `credential_generation`。`flow/credentials/save.rs` 和 `delete.rs` 在调用原生后端之前递增并原子保存代数，调用方继续持有现有 operation lock；写入失效记录失败必须阻止存储操作，原生操作失败也不得恢复旧代数。凭据代数不复用暂停／调度的 revision。`credential_generation` 是持久化状态中的必填字段；状态文件不存在时初始化为零。
 
 Linux 用户许可另外保存 logind 会话 ID、`TimestampMonotonic` 及内存中的会话提示／代数。每个消费检查点在实时查询前后验证会话代数及完整身份，避免注销、重新登录和提示恢复原值时使用旧结果。Linux 系统范围及 macOS／Windows 不增加图形会话门槛，继续按原生后台访问规则读取，只应用共同的存储新鲜度检查。
 
 Linux 用户后台先检查 logind 活动会话、显示 socket 和用户 systemd 环境，再同步真正的 D-Bus 激活环境，最后使用官方 `dbus-secret-service` 的 DH、零 prompt 超时连接标准 `org.freedesktop.secrets`。禁止启动时预读；已经运行的 provider 也经过同样门槛。就绪后允许标准 D-Bus 激活，不修改依赖源码、不固定唯一 owner、不猜测桌面或钱包实现。`default.target` 保持不变。session-ready/end 是自定义桌面的通用可选入口，提示只保存在内存并绑定实际会话；跨越注销／重新登录的读取结果不得用于提交。系统存储不依赖图形会话。
 
-凭据事件通过独立持续排空的 D-Bus 流合并，断开后重建，定时查询作为后备。控制 IPC 只接受版本 3 的有界 JSON 帧，验证范围与令牌并确认通知；状态包含安全的诊断类别、阶段、数值原生码和已知 D-Bus 错误码，不能包含凭据、原始错误自由文本或触发 Keyring。状态查询失败明确显示未知，不伪装成未读取。旧版本不回退。
+凭据事件通过独立持续排空的 D-Bus 流合并，断开后重建，定时查询作为后备。控制 IPC 只接受版本 3 的有界 JSON 帧，验证范围与令牌并确认通知；状态包含安全的诊断类别、阶段、数值原生码和已知 D-Bus 错误码，不能包含凭据、原始错误自由文本或触发 Keyring。状态查询失败明确显示未知，不伪装成未读取。
 
 类型化凭据错误定义于 `infra/error/credentials.rs`，保留错误链并使用安全的 Display/Debug；`shared/credentials/diagnostics.rs` 负责分类。正常锁定／前台交互／拒绝访问／缺少 provider 使用 Waiting，超时、格式、版本、重复条目、解密、存储校验及任务失败使用 Failed；未知错误保持中性类别。D-Bus NoReply 属于超时，会话查询失败保留 Session 阶段。仅在诊断变化或恢复时输出日志；凭据等待和失败都保持正常轮询，不进入门户网络失败退避或解除真实的凭据拒绝。
 

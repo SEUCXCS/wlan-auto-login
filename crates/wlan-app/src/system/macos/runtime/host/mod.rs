@@ -96,7 +96,6 @@ mod tests {
                     .windows(3)
                     .any(|args| { args == ["--args", "daemon", "--internal-wifi-host"] })
             );
-            assert!(!foreground.args.iter().any(|arg| arg == "macos-host"));
             if scope == Scope::System {
                 assert_eq!(foreground.program, "/bin/launchctl");
                 assert!(foreground.args.iter().any(|arg| arg == "#501"));
@@ -106,24 +105,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsupported_host_is_rejected_before_launch_and_failed_launch_is_not_retried()
-    -> Result<()> {
+    async fn host_launch_reports_failures_without_retrying() -> Result<()> {
         use crate::infra::command::tests::FakeRunner;
         let app = Path::new("/Applications/Test.app");
-        for (outputs, count) in [
-            (vec![(false, "unknown argument")], 1),
-            (vec![(true, "help"), (false, "launch failed")], 2),
-            (vec![(true, "help"), (true, "")], 2),
-        ] {
-            let success = outputs.last().is_some_and(|v| v.0);
-            let runner = FakeRunner::new(outputs);
+        for success in [false, true] {
+            let runner = FakeRunner::new([(success, "")]);
             assert_eq!(
                 launch(app, Scope::User, 501, false, &runner).await.is_ok(),
                 success
             );
             let calls = runner.calls.borrow();
-            assert_eq!(calls.len(), count);
-            assert_eq!(calls[0].args, ["daemon", "--internal-wifi-host", "--help"]);
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].program, "/usr/bin/open");
+            assert!(
+                calls[0]
+                    .args
+                    .windows(3)
+                    .any(|args| args == ["--args", "daemon", "--internal-wifi-host"])
+            );
         }
         Ok(())
     }

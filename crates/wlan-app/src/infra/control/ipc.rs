@@ -246,7 +246,7 @@ mod tests {
         assert!(commands.try_recv().is_err());
         let endpoint: Endpoint =
             serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json"))?)?;
-        for (version, scope) in [(1, "user"), (2, "user"), (VERSION, "system")] {
+        for (version, scope) in [(VERSION + 1, "user"), (VERSION, "system")] {
             let mut socket = transport::connect(&endpoint.address).await?;
             protocol::write(
                 &mut socket,

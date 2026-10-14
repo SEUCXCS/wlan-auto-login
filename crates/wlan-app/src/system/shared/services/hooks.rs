@@ -34,7 +34,7 @@ pub(crate) trait UninstallHooks {
         Vec::new()
     }
 }
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(not(target_os = "macos"))]
 pub(crate) struct DefaultHooks;
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(not(target_os = "macos"))]
 impl UninstallHooks for DefaultHooks {}

@@ -10,7 +10,6 @@ use crate::system::{
     shared::services::artifacts::plan,
 };
 
-#[cfg(not(target_os = "linux"))]
 pub(crate) async fn run(
     paths: &Paths,
     options: LogOptions,
@@ -80,11 +79,7 @@ fn fixture_source(paths: &Paths, plan: &Plan, options: LogOptions) -> Result<Sou
     match &plan.manager {
         #[cfg(any(target_os = "linux", test))]
         Manager::Systemd { .. } => {
-            crate::system::linux::services::logs::source(paths, plan, options)
-        }
-        #[cfg(test)]
-        Manager::Launchd { .. } => {
-            crate::system::macos::services::logs::source(paths, plan, options)
+            crate::system::shared::services::logs::FileBackend.source(paths, plan, options)
         }
         #[cfg(any(target_os = "macos", test))]
         Manager::MacosAppService { .. } => {
@@ -182,45 +177,17 @@ mod tests {
             };
             fs::write(&plan.definition, &plan.content)?;
             fs::write(&plan.executable, "mock, never run")?;
-            let Source::File(path) = fixture_source(&paths, &plan, options)? else {
-                crate::infra::error::bail!("new Linux service must use a removable application log")
-            };
+            let Source::File(path) = fixture_source(&paths, &plan, options)?;
             assert_eq!(path, paths.config.join("daemon.log"));
-            fs::write(
-                &plan.definition,
-                plan.content.replace("# ApplicationLog=daemon.log\n", ""),
-            )?;
-            let Source::Journal(command) = fixture_source(&paths, &plan, options)? else {
-                crate::infra::error::bail!("journal expected")
-            };
-            let arguments: Vec<_> = command
-                .args
-                .iter()
-                .map(|arg| arg.to_string_lossy())
-                .collect();
-            assert_eq!(command.program, "journalctl");
-            assert_eq!(
-                arguments,
-                [
-                    if scope == Scope::System {
-                        "--system"
-                    } else {
-                        "--user"
-                    },
-                    "--unit",
-                    "dev.cxcs.tools.wlanlogin.service",
-                    "--no-pager",
-                    "--output=cat",
-                    "--quiet",
-                    "--lines",
-                    "37",
-                    "--follow"
-                ]
-            );
             for manager in [
-                Manager::Launchd {
-                    domain: "system".into(),
+                Manager::MacosAppService {
+                    domain: if scope == Scope::System {
+                        "system".into()
+                    } else {
+                        "gui/501".into()
+                    },
                     target: "test".into(),
+                    executable: plan.executable.clone(),
                 },
                 Manager::TaskScheduler {
                     name: "test".into(),
@@ -228,9 +195,7 @@ mod tests {
                 Manager::WindowsService,
             ] {
                 plan.manager = manager;
-                let Source::File(path) = fixture_source(&paths, &plan, options)? else {
-                    crate::infra::error::bail!("file expected")
-                };
+                let Source::File(path) = fixture_source(&paths, &plan, options)?;
                 assert_eq!(path, paths.config.join("daemon.log"));
             }
             assert!(
