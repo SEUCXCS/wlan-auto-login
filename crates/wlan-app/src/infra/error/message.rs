@@ -2,6 +2,16 @@
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)] // Some messages are used only by other compilation targets.
 pub enum Message {
+    #[error(
+        "Permission was not granted; check the reported status and request authorization in an interactive terminal"
+    )]
+    PermissionNotGranted,
+    #[error("One or more permissions could not be checked")]
+    PermissionCheckFailed,
+    #[error("Timed out waiting for permission diagnostics or authorization")]
+    PermissionTimedOut,
+    #[error("Invalid permission response version, scope, identifier, or results")]
+    PermissionProtocol,
     #[error("Invalid SMAppService response")]
     MacosServiceProtocol,
     #[error("SMAppService must run inside the installed signed application bundle")]
@@ -13,7 +23,7 @@ pub enum Message {
     #[error("Timed out waiting for SMAppService unregistration; application files retained")]
     MacosServiceUnregisterTimedOut,
     #[error(
-        "Background service is registered but needs approval; allow WLAN Login in System Settings > General > Login Items, then run daemon start in the same scope"
+        "Background service is registered but needs approval; allow WLAN Login in System Settings > General > Login Items, then run service start in the same scope"
     )]
     MacosBackgroundApprovalRequired,
     #[error("Failed to configure Keychain interaction: {status}")]
@@ -145,13 +155,13 @@ pub enum Message {
     InstalledExecutableReturnedAnUnrecognizedVersion,
     #[error("Timed out waiting for service stop; no new start request submitted")]
     TimedOutWaitingForServiceStopNoNew,
-    #[error("Service is not installed; run install first")]
+    #[error("Service is not installed; run service install first")]
     ServiceNotInstalled,
-    #[error("Service installation is incomplete; run install again")]
+    #[error("Service installation is incomplete; run service install again")]
     InstallationIncomplete,
-    #[error("Service is not registered; run install first")]
+    #[error("Service is not registered; run service install first")]
     ServiceNotRegistered,
-    #[error("Service registration was removed; run install again")]
+    #[error("Service registration was removed; run service install again")]
     ServiceRegistrationRemoved,
     #[error("Failed to read journal; check journalctl availability and access permissions")]
     FailedToReadJournalCheckJournalctlAvailabilityAnd,
@@ -185,7 +195,7 @@ pub enum Message {
     SCMResponseIsMissingInstalled,
     #[error("Unknown SCM service state")]
     UnknownSCMServiceState,
-    #[error("Service uninstalled but credential deletion failed; retry uninstall --purge")]
+    #[error("Service uninstalled but credential deletion failed; retry service uninstall --purge")]
     ServiceUninstalledButCredentialDeletionFailedRetryUninstall,
     #[error(
         "Service uninstalled but installed executable could not be removed; close it before retrying"

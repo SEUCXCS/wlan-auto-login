@@ -30,17 +30,17 @@ install -m 0755 ./wlanlogin "$HOME/.local/bin/wlanlogin"
 export PATH="$HOME/.local/bin:$PATH"
 
 wlanlogin --version
-wlanlogin --user install
-wlanlogin --user daemon status
+wlanlogin --user service install
+wlanlogin --user service status
 ```
 
-`install` 会引导输入账号、密码和线路，保存凭据并安装、启动用户后台服务。未连接 `Student_CX` 时也可以提前配置。要在新终端中使用命令，将 `export PATH="$HOME/.local/bin:$PATH"` 加入所用 shell 的配置文件，例如 Bash 的 `~/.bashrc` 或 Zsh 的 `~/.zshrc`。
+`service install` 会引导输入账号、密码和线路，保存凭据并安装、启动用户后台服务。未连接 `Student_CX` 时也可以提前配置。要在新终端中使用命令，将 `export PATH="$HOME/.local/bin:$PATH"` 加入所用 shell 的配置文件，例如 Bash 的 `~/.bashrc` 或 Zsh 的 `~/.zshrc`。
 
 需要随开机启动的系统服务时，改用管理员权限执行；用户与系统两种安装范围选择一种即可：
 
 ```sh
-sudo "$HOME/.local/bin/wlanlogin" --system install
-sudo "$HOME/.local/bin/wlanlogin" --system daemon status
+sudo "$HOME/.local/bin/wlanlogin" --system service install
+sudo "$HOME/.local/bin/wlanlogin" --system service status
 ```
 
 安装范围、凭据存储和旧版 systemd 的替代方案见 [安装与后台自动登录](#安装与后台自动登录)。
@@ -139,8 +139,8 @@ export PATH="/usr/local/bin:$PATH"
 
 ```sh
 wlanlogin --version
-wlanlogin --user install
-wlanlogin --user daemon status
+wlanlogin --user service install
+wlanlogin --user service status
 ```
 
 按提示填写校园网账号、密码和线路，并完成授权：
@@ -149,17 +149,17 @@ wlanlogin --user daemon status
 - **钥匙串访问**：保存或读取凭据时，系统可能要求解锁钥匙串、输入 macOS 登录密码或确认访问。核对请求来自 `wlanlogin` 后允许；希望后台持续读取时，按弹窗提供的选项选择“始终允许”。
 - **后台活动**：如果系统提示后台项目，确认允许 WLAN Login 在后台运行；也可在系统设置中检查“登录项与扩展”中的后台活动设置，名称因 macOS 版本而异。
 
-应用包放在 `/Applications` 并不表示已安装系统服务。需要系统范围时，使用 `sudo wlanlogin --system install`；若命令仅链接到 `~/.local/bin`，使用 `sudo "$HOME/.local/bin/wlanlogin" --system install`。系统服务也需要当前桌面用户完成定位授权，root 不能绕过该权限。
+应用包放在 `/Applications` 并不表示已安装系统服务。需要系统范围时，使用 `sudo wlanlogin --system service install`；若命令仅链接到 `~/.local/bin`，使用 `sudo "$HOME/.local/bin/wlanlogin" --system service install`。系统服务也需要当前桌面用户完成定位授权，root 不能绕过该权限。
 
-`install` 会将完整应用包复制到所选范围的 Application Support 目录，再注册并启动后台服务。包内程序仍需指定子命令；双击 `.app` 或无参数运行不会自动完成安装。
+`service install` 会将完整应用包复制到所选范围的 Application Support 目录，再注册并启动后台服务。包内程序仍需指定子命令；双击 `.app` 或无参数运行不会自动完成安装。
 
 #### 不小心拒绝了权限怎么办
 
 **定位权限**：打开“系统设置 → 隐私与安全性 → 定位服务”，确认全局定位服务已开启，并启用 WLAN Login。此前已允许或拒绝时，重复运行命令不会再次弹出首次授权提示。若列表尚无该应用，先在桌面会话的终端运行一次交互式 `wlanlogin --user login`，让程序按需申请权限，再检查列表。设备受管理策略限制时，需要管理员解除限制。
 
-**钥匙串访问**：解锁“登录”钥匙串，在桌面会话的终端中重新运行同一范围的 `install` 并允许访问；系统范围使用 sudo。仍被拒绝时，在“钥匙串访问”中定位本程序的密码条目，打开“访问控制”，核对并添加实际安装的 `Contents/MacOS/wlanlogin` 程序，保存后重新安装。用户条目的服务名为 `dev.cxcs.tools.wlanlogin`，系统条目为 `dev.cxcs.tools.wlanlogin.system`，账户均为 `saved-login`；系统条目位于“系统”钥匙串，修改可能要求管理员密码。安装程序的路径见 [数据与安装目录](#数据与安装目录)。
+**钥匙串访问**：解锁“登录”钥匙串，在桌面会话的终端中重新运行同一范围的 `service install` 并允许访问；系统范围使用 sudo。仍被拒绝时，在“钥匙串访问”中定位本程序的密码条目，打开“访问控制”，核对并添加实际安装的 `Contents/MacOS/wlanlogin` 程序，保存后重新安装。用户条目的服务名为 `dev.cxcs.tools.wlanlogin`，系统条目为 `dev.cxcs.tools.wlanlogin.system`，账户均为 `saved-login`；系统条目位于“系统”钥匙串，修改可能要求管理员密码。安装程序的路径见 [数据与安装目录](#数据与安装目录)。
 
-后台不会主动弹出定位或钥匙串授权框，`--non-interactive` 也不会申请授权。修复后重新执行同一范围的 `install`；服务已安装时也可执行 `daemon restart`，再用 `daemon logs -f` 检查。读取失败不会自动删除保存的凭据。
+后台不会主动弹出定位或钥匙串授权框，`--non-interactive` 也不会申请授权。修复后重新执行同一范围的 `service install`；服务已安装时也可执行 `service restart`，再用 `service logs -f` 检查。读取失败不会自动删除保存的凭据。
 
 <a id="quick-windows"></a>
 
@@ -171,15 +171,15 @@ wlanlogin --user daemon status
 
 ```powershell
 .\wlanlogin.exe --version
-.\wlanlogin.exe --user install
-.\wlanlogin.exe --user daemon status
+.\wlanlogin.exe --user service install
+.\wlanlogin.exe --user service status
 ```
 
 按提示填写账号、密码和线路。用户凭据保存到 Credential Manager，后台任务在当前用户登录后启动。需要随开机启动的系统服务时，改用“以管理员身份运行”的 PowerShell，在程序目录执行：
 
 ```powershell
-.\wlanlogin.exe --system install
-.\wlanlogin.exe --system daemon status
+.\wlanlogin.exe --system service install
+.\wlanlogin.exe --system service status
 ```
 
 系统范围使用机器 DPAPI 保存凭据。两种安装范围选择一种即可；要在任意目录运行命令，将 `wlanlogin.exe` 所在目录加入对应的用户或系统 PATH，再打开新终端。
@@ -285,18 +285,18 @@ cargo build --release --locked -p wlanlogin-cli --bin wlanlogin
 ### 安装与后台自动登录
 
 ```sh
-wlanlogin --user install
-wlanlogin --user daemon status
+wlanlogin --user service install
+wlanlogin --user service status
 ```
 
-`install` 会保存后台所需的凭据并安装、启动服务。缺少已保存的凭据时，进入登录流程并强制开启 Remember me；不在 `Student_CX` 时可先离线保存，接入校园 Wi-Fi 后再认证。
+`service install` 会保存后台所需的凭据并安装、启动服务。缺少已保存的凭据时，进入登录流程并强制开启 Remember me；不在 `Student_CX` 时可先离线保存，接入校园 Wi-Fi 后再认证。
 
 | 安装范围 | 启动时机 | 操作方式 |
 | --- | --- | --- |
-| 用户 `--user` | 当前用户登录后 | 普通终端执行 `wlanlogin --user install` |
-| 系统 `--system` | 随开机启动 | Linux / macOS 使用 `sudo wlanlogin --system install`；Windows 使用管理员终端 |
+| 用户 `--user` | 当前用户登录后 | 普通终端执行 `wlanlogin --user service install` |
+| 系统 `--system` | 随开机启动 | Linux / macOS 使用 `sudo wlanlogin --system service install`；Windows 使用管理员终端 |
 
-普通终端默认选择用户范围，sudo／管理员终端默认选择系统范围。用户范围需要普通用户会话，系统服务的登录、注销及启停需要管理员权限。若 sudo 找不到用户 PATH 中的程序，使用完整路径，例如 `sudo "$HOME/.local/bin/wlanlogin" --system install`。
+普通终端默认选择用户范围，sudo／管理员终端默认选择系统范围。用户范围需要普通用户会话，系统服务的登录、注销及启停需要管理员权限。若 sudo 找不到用户 PATH 中的程序，使用完整路径，例如 `sudo "$HOME/.local/bin/wlanlogin" --system service install`。
 
 两个范围分别保存配置、凭据和运行状态；切换范围前先卸载原服务，再在新范围保存凭据并安装。程序会安装后台专用副本，之后更新原始 CLI 文件不会自动升级正在运行的服务。
 
@@ -309,14 +309,14 @@ wlanlogin --user daemon status
 Linux 旧系统可显式改用受文件权限保护的明文凭据：
 
 ```sh
-sudo wlanlogin --system install --credential-store protected-file
+sudo wlanlogin --system service install --credential-store protected-file
 ```
 
 该模式仅适用于 Linux 系统范围，凭据以**明文**保存在仅管理员可读的文件中。默认加密模式失败时不会自动降级；macOS 和 Windows 不支持此选项。
 
 macOS 安装会校验完整应用包，替换旧副本后检查实际安装程序的凭据读取与 Wi-Fi 能力，再注册、启动服务。失败时尝试恢复旧安装；回滚未完成时会保留恢复目录并报告位置。系统服务仍从当前活动桌面用户的授权宿主获取 Wi-Fi 状态；尚无桌面用户、用户切换或定位未授权时，会等待有效状态。无桌面会话的非交互系统安装，需要以后在登录用户的终端中通过 `sudo wlanlogin --system login` 完成定位授权。
 
-macOS 后台服务通过 `SMAppService` 关联签名应用身份，直接启动应用包内的程序。首次注册或此前关闭过后台活动时，系统可能要求在“系统设置 → 通用 → 登录项”允许 WLAN Login；系统范围的后台服务需要管理员批准。此时 `install` 会明确提示等待批准，保留安装和凭据；允许后执行同一范围的 `daemon start`。定位权限与后台活动批准相互独立，已有的定位授权不会因为卸载、重装或移动同一签名应用而自动重置。
+macOS 后台服务通过 `SMAppService` 关联签名应用身份，直接启动应用包内的程序。首次注册或此前关闭过后台活动时，系统可能要求在“系统设置 → 通用 → 登录项”允许 WLAN Login；系统范围的后台服务需要管理员批准。此时 `service install` 会明确提示等待批准，保留安装和凭据；允许后执行同一范围的 `service start`。定位权限与后台活动批准相互独立，已有的定位授权不会因为卸载、重装或移动同一签名应用而自动重置。
 
 Apple SDK 将包含原生 LaunchDaemon 的应用公证列为要求；本地自签名包不能据此保证系统范围可用。原生注册被系统拒绝时，安装会报告错误并尝试回滚。
 
@@ -347,16 +347,32 @@ wlanlogin login --interactive --remember-me
 
 自动化时优先将密码通过标准输入传入，并选择 `--non-interactive`。`--password` 可能将密码留在 shell 历史或进程参数列表中。macOS 的非交互操作和后台服务不会主动请求系统授权，首次使用前应完成交互式授权。
 
+### 权限查询与获取（macOS）
+
+`permission` 当前只在 macOS 显示，支持所选范围的定位和钥匙串访问诊断：
+
+```sh
+wlanlogin permission list
+wlanlogin --user permission check
+wlanlogin --user permission check macos.keychain --json
+wlanlogin --user permission get macos.location
+sudo wlanlogin --system permission get macos.keychain
+```
+
+`list` 列出权限 ID 和说明。`check [ID]` 查询指定权限，省略 ID 时查询全部；不弹授权窗口。`get <ID>` 在交互式终端中请求指定权限，并返回实际结果；拒绝、需要交互或未授权时以非零退出码结束。`check` 成功取得状态时返回零，即使状态是 Missing、Denied 或 NeedsInteraction；无法完成查询时返回非零。定位宿主尚未运行或无法连接时，报告 Unavailable 及原因，可通过 `permission get macos.location` 启动宿主并按需申请授权。
+
+`list`、`check`、`get` 均支持 `--json`。状态输出包含 `version`、`scope` 和 `permissions`，每项包含 `id`、`status`、`error`；不会输出账号密码。钥匙串检查的是当前程序对所选范围条目的读取能力，安装流程会另外启动实际安装副本复检。Missing 表示尚未保存凭据，获取权限不会创建凭据条目。
+
 ### 管理后台服务
 
 ```sh
-wlanlogin daemon status       # 查看安装、版本与运行状态
-wlanlogin daemon start        # 启动已安装服务
-wlanlogin daemon stop         # 停止服务，保留自动启动设置
-wlanlogin daemon restart      # 重启服务
+wlanlogin service status       # 查看安装、版本与运行状态
+wlanlogin service start        # 启动已安装服务
+wlanlogin service stop         # 停止服务，保留自动启动设置
+wlanlogin service restart      # 重启服务
 ```
 
-`start`、`stop`、`restart` 只管理已安装服务，未安装时会报错。直接运行 `wlanlogin daemon` 会在当前进程运行自动登录循环，需要提前在同一范围保存凭据；macOS 的手动前台 daemon 也不会申请定位权限。
+`service` 统一管理所选范围的 systemd、launchd、SCM 或用户计划任务。`start`、`stop`、`restart` 只管理已安装服务，未安装时会报错。直接运行 `wlanlogin daemon` 会在当前进程运行自动登录循环，需要提前在同一范围保存凭据；macOS 的手动前台 daemon 也不会申请定位权限。
 
 后台只在连接 `Student_CX` 且门户明确返回离线时提交认证，未知状态不自动登录。确认在线后每 4 分钟检查一次，登录成功后先在 30 秒后确认状态；新的 Wi-Fi 会话立即触发检查。首次取得状态前的临时网络错误按 1、2、4 秒最多快速重试三次，之后按 30、60、120 秒退避，最多等待 2 分钟。
 
@@ -365,10 +381,10 @@ wlanlogin daemon restart      # 重启服务
 ### 日志与排障
 
 ```sh
-wlanlogin daemon logs          # 最近 100 行
-wlanlogin daemon logs -n 200   # 最近 200 行
-wlanlogin daemon logs -f       # 持续查看，Ctrl+C 退出
-wlanlogin daemon logs -n 0 -f  # 只查看新日志
+wlanlogin service logs          # 最近 100 行
+wlanlogin service logs -n 200   # 最近 200 行
+wlanlogin service logs -f       # 持续查看，Ctrl+C 退出
+wlanlogin service logs -n 0 -f  # 只查看新日志
 ```
 
 日志读取所选范围配置目录中的 `daemon.log`；同一应用 ID 下的旧 Linux 服务若未配置应用日志，则读取 journal。服务停止后仍可查看已有日志，未安装时会报错。系统日志可能需要 sudo 或管理员权限。
@@ -389,7 +405,7 @@ RUST_LOG=wlanlogin=debug wlanlogin --user daemon
 | 仅保存凭据，没有认证 | 确认已连接 `Student_CX`，macOS 检查定位授权 |
 | 密钥管理器不可用或需要交互 | 解锁凭据存储，在同一范围进行前台授权；macOS 参照上文权限恢复步骤 |
 | 已在线，但新账号未生效 | 先注销再登录 |
-| 服务未安装或安装不完整 | 在同一范围执行 `daemon status`，必要时重新 `install` |
+| 服务未安装或安装不完整 | 在同一范围执行 `service status`，必要时重新 `service install` |
 | 显式登录后后台未恢复 | 确认两者使用相同的 `--user` / `--system` 范围 |
 | 认证被拒绝后不再自动重试 | 用 `login --interactive --remember-me` 更新凭据 |
 | macOS 已连接 Wi-Fi 却无法读取 SSID | 检查全局定位服务及 WLAN Login 授权，修复后重新安装或重启服务 |
@@ -401,30 +417,32 @@ RUST_LOG=wlanlogin=debug wlanlogin --user daemon
 ```sh
 wlanlogin logout               # 注销并暂停当前连接的自动登录
 wlanlogin logout --forget      # 注销、停止后台进程并删除所选范围的凭据
-wlanlogin uninstall            # 停止并卸载服务，保留凭据和配置
-wlanlogin uninstall --purge    # 卸载服务并清理应用数据、日志和凭据
+wlanlogin service uninstall            # 停止并卸载服务，保留凭据和配置
+wlanlogin service uninstall --purge    # 卸载服务并清理应用数据、日志和凭据
 ```
 
-`logout --forget` 保留服务安装及线路配置。未连接校园网时只清理本地凭据；门户注销失败或无法识别 Wi-Fi 时仍尝试删除凭据，但以非零退出码说明注销未完成。凭据删除失败同样报错，并保持自动登录暂停。以后可通过 `login --remember-me` 保存新凭据，再用 `daemon start` 恢复。
+`logout --forget` 保留服务安装及线路配置。未连接校园网时只清理本地凭据；门户注销失败或无法识别 Wi-Fi 时仍尝试删除凭据，但以非零退出码说明注销未完成。凭据删除失败同样报错，并保持自动登录暂停。以后可通过 `login --remember-me` 保存新凭据，再用 `service start` 恢复。
 
-`uninstall --purge` 清理服务注册、后台程序副本、应用管理的数据及凭据。停止或注销服务失败时不会继续删除数据；凭据删除失败时保留剩余文件，可修复原因后重试。它只作用于所选范围，不跨用户清理。
+`service uninstall --purge` 清理服务注册、后台程序副本、应用管理的数据及凭据。停止或注销服务失败时不会继续删除数据；凭据删除失败时保留剩余文件，可修复原因后重试。它只作用于所选范围，不跨用户清理。
 
 ```sh
-wlanlogin --user uninstall --purge
-sudo wlanlogin --system uninstall --purge  # Linux / macOS 系统范围
+wlanlogin --user service uninstall --purge
+sudo wlanlogin --system service uninstall --purge  # Linux / macOS 系统范围
 ```
 
-Windows 系统范围在管理员终端执行 `wlanlogin --system uninstall --purge`。macOS 服务停止、重启及卸载会等待托管应用退出，单独手动运行的前台 daemon 不受 `daemon stop` 影响；卸载完整包前也会停止 Wi-Fi 宿主。
+Windows 系统范围在管理员终端执行 `wlanlogin --system service uninstall --purge`。macOS 服务停止、重启及卸载会等待托管应用退出，单独手动运行的前台 daemon 不受 `service stop` 影响；卸载完整包前也会停止 Wi-Fi 宿主。
 
-macOS `daemon stop` 只停止当前会话的服务，保留原生注册及后续自动启动；`uninstall` 会注销后台服务并等待注销完成，再删除安装副本。系统设置的后台列表可能需要重新进入页面后更新。`--purge` 额外删除所选范围的凭据和应用数据，不重置系统定位授权。
+macOS `service stop` 只停止当前会话的服务，保留原生注册及后续自动启动；`service uninstall` 会注销后台服务并等待注销完成，再删除安装副本。系统设置的后台列表可能需要重新进入页面后更新。`--purge` 额外删除所选范围的凭据和应用数据，不重置系统定位授权。
 
 原始下载的 CLI、手动复制到 Applications 的应用包及 PATH 符号链接需要自行移除。`--purge` 保留其他文件、共享的 `cxcs-tools` 父目录及同级工具；系统服务审计记录由操作系统保留策略管理。macOS 包内存在未知文件或符号链接时会报错并保留它们。
 
 ### 升级
 
-同名新版使用新二进制或新应用包重新执行同一范围的 `install`。macOS 应先用原来的固定证书签名，再更新 Applications 中的源应用并安装；ad-hoc 签名或更换证书可能需要重新授权。
+服务管理命令已从 `daemon start/stop/restart/status/logs` 和顶层 `install/uninstall` 迁到 `service` 下；`daemon` 专用于当前进程的自动登录循环。
 
-macOS 使用新应用包重新 `install` 时，会自动迁移同一应用 ID 的旧 LaunchAgent / LaunchDaemon，停止旧进程、移除外部启动定义并改用原生注册；迁移失败会尝试恢复旧应用和注册。新包必须通过 `cargo xtask bundle macos` 构建，包含签名内的启动定义。
+同名新版使用新二进制或新应用包重新执行同一范围的 `service install`。macOS 应先用原来的固定证书签名，再更新 Applications 中的源应用并安装；ad-hoc 签名或更换证书可能需要重新授权。
+
+macOS 使用新应用包重新 `service install` 时，会自动迁移同一应用 ID 的旧 LaunchAgent / LaunchDaemon，停止旧进程、移除外部启动定义并改用原生注册；迁移失败会尝试恢复旧应用和注册。新包必须通过 `cargo xtask bundle macos` 构建，包含签名内的启动定义。
 
 从旧命令 `cxxy-wlanlogin-cli` 升级时，服务、配置和凭据不会自动迁移，也不提供旧命令或旧环境变量别名。保留旧版程序，先按原安装范围卸载：
 
@@ -439,7 +457,7 @@ Windows 原系统安装在管理员终端执行 `cxxy-wlanlogin-cli --system uni
 
 ```sh
 wlanlogin --user login --interactive --remember-me
-wlanlogin --user install
+wlanlogin --user service install
 ```
 
 系统安装使用 `--system` 并提供管理员权限。自动化脚本同步改用 `wlanlogin`、`WLANLOGIN_USERNAME`、`WLANLOGIN_PASSWORD` 和 `WLANLOGIN_LINE`。

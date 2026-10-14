@@ -4,10 +4,11 @@ use crate::infra::error::{Error, Message, Result};
 use std::{collections::BTreeMap, future::Future};
 
 /// An open identifier namespace: new permission kinds require no shared enum change.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(transparent)]
 pub struct PermissionId(pub String);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct PermissionDescriptor {
     pub id: PermissionId,
     pub name: String,
@@ -43,6 +44,50 @@ pub enum PermissionStatus {
 pub enum PermissionRequestOutcome {
     NotImplemented,
     Completed(PermissionStatus),
+}
+
+/// Versioned diagnostics shared by frontends and installed-process checks.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionResult {
+    pub id: String,
+    pub status: PermissionStatus,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionReport {
+    pub version: u32,
+    pub scope: String,
+    pub permissions: Vec<PermissionResult>,
+}
+
+impl PermissionReport {
+    pub fn new(scope: &str, permissions: Vec<PermissionResult>) -> Self {
+        Self {
+            version: 1,
+            scope: scope.into(),
+            permissions,
+        }
+    }
+
+    pub fn into_status(self, scope: &str, id: &str) -> Result<PermissionStatus> {
+        crate::infra::error::ensure!(
+            self.version == 1 && self.scope == scope && self.permissions.len() == 1,
+            Message::PermissionProtocol
+        );
+        let result = self
+            .permissions
+            .into_iter()
+            .next()
+            .ok_or(Message::PermissionProtocol)?;
+        crate::infra::error::ensure!(
+            result.id == id && result.error.is_none(),
+            Message::PermissionProtocol
+        );
+        Ok(result.status)
+    }
 }
 
 pub trait PermissionProvider {
@@ -81,6 +126,51 @@ pub trait PermissionProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installed_reports_validate_identity_and_never_infer_a_grant() -> Result<()> {
+        let make = || {
+            PermissionReport::new(
+                "user",
+                vec![PermissionResult {
+                    id: "macos.keychain".into(),
+                    status: PermissionStatus::NeedsInteraction,
+                    error: None,
+                }],
+            )
+        };
+        let json = serde_json::to_string(&make())?;
+        assert!(!json.contains("password"));
+        assert_eq!(
+            serde_json::from_str::<PermissionReport>(&json)?
+                .into_status("user", "macos.keychain")?,
+            PermissionStatus::NeedsInteraction
+        );
+        for case in 0..7 {
+            let mut report = make();
+            match case {
+                0 => report.version = 2,
+                1 => report.scope = "system".into(),
+                2 => report.permissions[0].id = "macos.location".into(),
+                3 => report.permissions.clear(),
+                4 => report.permissions.push(PermissionResult {
+                    id: "macos.keychain".into(),
+                    status: PermissionStatus::Granted,
+                    error: None,
+                }),
+                5 => report.permissions[0].error = Some("Keychain unavailable".into()),
+                _ => report.permissions[0].error = Some(String::new()),
+            }
+            assert!(report.into_status("user", "macos.keychain").is_err());
+        }
+        assert!(
+            serde_json::from_str::<PermissionReport>(
+                &json.replace("\"version\":1", "\"unexpected\":true,\"version\":1")
+            )
+            .is_err()
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn platform_descriptors_are_open_and_unknown_ids_are_rejected() -> Result<()> {

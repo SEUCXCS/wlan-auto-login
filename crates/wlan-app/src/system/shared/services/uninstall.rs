@@ -229,11 +229,19 @@ fn remove_enable_link(plan: &Plan) -> Result<()> {
 }
 
 async fn execute(runner: &impl Runner, command: &Invocation) -> Result<()> {
-    let output = runner.output(command).await?;
-    if !command.optional {
-        output.check(command)?;
+    #[cfg(any(target_os = "macos", test))]
+    {
+        crate::system::macos::services::app_service::output(command, runner).await?;
+        Ok(())
     }
-    Ok(())
+    #[cfg(not(any(target_os = "macos", test)))]
+    {
+        let output = runner.output(command).await?;
+        if !command.optional {
+            output.check(command)?;
+        }
+        Ok(())
+    }
 }
 
 async fn wait_for_manager(manager: &Manager, runner: &impl Runner, removed: bool) -> Result<()> {

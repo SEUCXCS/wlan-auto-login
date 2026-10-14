@@ -139,8 +139,8 @@ mod tests {
         let exe = PathBuf::from("/opt/Test App/daemon");
         let definition = PathBuf::from("/tmp/system-definition");
         let linux = linux_system_plan(exe.clone(), definition.clone())?;
-        assert!(linux.content.contains("--system daemon"));
-        assert!(linux.content.contains("daemon --background"));
+        assert!(linux.content.contains("--system service run"));
+        assert!(linux.content.contains("service run"));
         assert!(linux.content.contains("# ApplicationLog=daemon.log"));
         assert!(linux.content.contains("WantedBy=multi-user.target"));
         assert!(
@@ -171,7 +171,7 @@ mod tests {
         assert!(windows.start.iter().any(|cmd| {
             cmd.args
                 .iter()
-                .any(|a| a.to_string_lossy().contains("--system daemon --service"))
+                .any(|a| a.to_string_lossy().contains("--system service run"))
         }));
         assert!(
             windows
@@ -202,13 +202,16 @@ mod tests {
             windows_plan(executable, definition, "S-1-5-21-123")?,
         ];
         for plan in &plans {
-            assert!(plan.content.contains("daemon"));
+            assert!(
+                plan.content.contains("service run")
+                    || plan.content.contains("<string>daemon</string>")
+            );
             assert!(!plan.content.contains("--password"));
             assert!(!plan.content.contains("WLANLOGIN_PASSWORD"));
             assert!(plan.content.contains(LABEL));
         }
         assert!(plans[0].content.contains("WantedBy=default.target"));
-        assert!(plans[0].content.contains("daemon --background"));
+        assert!(plans[0].content.contains("service run"));
         assert!(plans[1].content.contains("<key>RunAtLoad</key><true/>"));
         assert!(
             plans[2]

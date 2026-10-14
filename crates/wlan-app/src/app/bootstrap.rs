@@ -35,8 +35,13 @@ async fn entry(args: cli::Cli) -> ExitCode {
         crate::system::macos::host::configure(paths.scope);
         use std::io::IsTerminal;
         let interactive = match &args.command {
-            cli::Command::Login(args) | cli::Command::Install(args) => !args.non_interactive,
-            cli::Command::Logout { .. } | cli::Command::Uninstall { .. } => true,
+            cli::Command::Login(args)
+            | cli::Command::Service(cli::ServiceCommand::Install(args)) => !args.non_interactive,
+            cli::Command::Logout { .. }
+            | cli::Command::Service(cli::ServiceCommand::Uninstall { .. }) => true,
+            cli::Command::Permission(cli::PermissionCommand::Get { .. }) => {
+                std::io::stdin().is_terminal()
+            }
             _ => false,
         } && std::io::stderr().is_terminal();
         crate::system::macos::credentials::access::configure_interaction(interactive);
@@ -44,10 +49,9 @@ async fn entry(args: cli::Cli) -> ExitCode {
     let log = if matches!(
         args.command,
         cli::Command::Daemon {
-            command: None,
             background: true,
             ..
-        }
+        } | cli::Command::Service(cli::ServiceCommand::Run)
     ) {
         paths
             .as_ref()
@@ -59,10 +63,7 @@ async fn entry(args: cli::Cli) -> ExitCode {
     };
     let result = match log.and_then(logging::init) {
         Ok(()) => match paths {
-            Ok(paths) => match context::Context::new(paths) {
-                Ok(context) => cli::dispatch(args, &context).await,
-                Err(error) => Err(error),
-            },
+            Ok(paths) => dispatch(args, paths).await,
             Err(error) => Err(error),
         },
         Err(error) => {
@@ -78,4 +79,32 @@ async fn entry(args: cli::Cli) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+async fn dispatch(args: cli::Cli, paths: config::Paths) -> crate::infra::error::Result<()> {
+    #[cfg(target_os = "macos")]
+    let args = {
+        let cli::Cli {
+            user,
+            system,
+            command,
+        } = args;
+        let Some(command) = macos::dispatch(command, &paths).await? else {
+            return Ok(());
+        };
+        cli::Cli {
+            user,
+            system,
+            command,
+        }
+    };
+    let context = context::Context::new(paths)?;
+    if matches!(
+        args.command,
+        cli::Command::Service(cli::ServiceCommand::Run)
+    ) {
+        context.paths.scope.require_access()?;
+        return crate::app::controller::daemon::run(&context, true, true).await;
+    }
+    cli::dispatch(args, &context).await
 }

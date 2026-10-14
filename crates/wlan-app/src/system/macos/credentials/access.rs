@@ -35,22 +35,6 @@ use wlanlogin_lib::Credentials;
 static INTERACTIVE: AtomicBool = AtomicBool::new(false);
 static OPERATIONS: Mutex<()> = Mutex::new(());
 
-/// The installed process reports only access state, never credential data.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CredentialCheck {
-    version: u32,
-    status: PermissionStatus,
-}
-impl CredentialCheck {
-    pub fn new(status: PermissionStatus) -> Self {
-        Self { version: 1, status }
-    }
-    pub fn into_status(self) -> Result<PermissionStatus> {
-        ensure!(self.version == 1, Message::InstalledCredentialCheckProtocol);
-        Ok(self.status)
-    }
-}
 pub fn configure_interaction(allowed: bool) {
     INTERACTIVE.store(allowed, Ordering::Release);
 }
