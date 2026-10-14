@@ -648,6 +648,8 @@ export WLANLOGIN_APP="$HOME/Applications/wlanlogin.app"
 
 Apple Silicon 的 target 为 `aarch64-apple-darwin`，Intel 为 `x86_64-apple-darwin`。指定 target 后，产物路径增加 target 层级。`dev` 配置对应 `debug` 目录。`--target-dir` 或 `CARGO_TARGET_DIR` 可指定输出根目录；以 xtask 输出的 `Bundle:` 路径为准。
 
+应用的 `CFBundleShortVersionString` 保持 Cargo 发布版本；`CFBundleVersion` 使用 xtask 自动分配的递增整数，首次为 `1`。同一工作副本的所有 profile、target 和输出目录共用仓库根目录 `.bundle-build/build-number`，该目录不提交到 Git，`cargo clean` 不会重置计数。构建号在签名前分配，后续打包失败也不复用该编号；xtask 成功时输出 `Build number:`。保留这个目录以延续本地编号，新克隆的工作副本从 `1` 开始。分发同一发布版本的新构建无需修改展示版本。
+
 已有 Developer ID Application 证书时，可直接指定签名身份：
 
 ```sh

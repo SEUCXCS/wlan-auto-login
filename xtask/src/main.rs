@@ -8,6 +8,8 @@ use std::{
     process::{Command, Stdio},
 };
 
+mod build_number;
+
 #[allow(dead_code)]
 #[path = "../../crates/wlan-app/src/infra/identity.rs"]
 mod identity;
@@ -86,7 +88,9 @@ fn bundle(options: &Bundle) -> Result<()> {
     let app_name = format!("{}.app", identity::APP_NAME);
     let app = staging.path().join(&app_name);
     let contents = app.join("Contents");
-    assemble(root, &binary, &app)?;
+    // Reserve before signing; failed bundles must not reuse an allocated number.
+    let build_number = build_number::reserve(root)?;
+    assemble(root, &binary, &app, build_number)?;
     for system in [false, true] {
         let definition = app.join(identity::macos_service_path(system));
         run(Command::new("/usr/bin/plutil")
@@ -119,6 +123,8 @@ fn bundle(options: &Bundle) -> Result<()> {
             .with_context(|| format!("Staging files retained at {}", retained.display()));
     }
     println!("Bundle: {}", destination.display());
+    println!("Version: {}", env!("CARGO_PKG_VERSION"));
+    println!("Build number: {build_number}");
     println!("Signing identity: {}", options.codesign_identity);
     if options.codesign_identity == "-" {
         println!("Ad-hoc builds may need fresh Location and Keychain approval after rebuilding.");
@@ -126,7 +132,7 @@ fn bundle(options: &Bundle) -> Result<()> {
     Ok(())
 }
 
-fn assemble(root: &Path, binary: &Path, app: &Path) -> Result<()> {
+fn assemble(root: &Path, binary: &Path, app: &Path, build_number: u64) -> Result<()> {
     for directory in identity::MACOS_BUNDLE_DIRECTORIES {
         fs::create_dir_all(app.join(directory))?;
     }
@@ -137,7 +143,7 @@ fn assemble(root: &Path, binary: &Path, app: &Path) -> Result<()> {
         contents.join("Resources/icon.icns"),
     )
     .context("Failed to copy the macOS application icon")?;
-    fs::write(contents.join("Info.plist"), plist())?;
+    fs::write(contents.join("Info.plist"), plist(build_number))?;
     fs::write(contents.join("PkgInfo"), b"APPL????")?;
     for system in [false, true] {
         fs::write(
@@ -199,12 +205,13 @@ fn read_artifacts(input: impl BufRead) -> Result<Option<PathBuf>> {
     Ok(executable)
 }
 
-fn plist() -> String {
+fn plist(build_number: u64) -> String {
     include_str!("../../packaging/macos/Info.plist")
         .replace("@APP_ID@", identity::APP_ID)
         .replace("@APP_NAME@", identity::APP_NAME)
         .replace("@DISPLAY_NAME@", identity::DISPLAY_NAME)
         .replace("@VERSION@", env!("CARGO_PKG_VERSION"))
+        .replace("@BUILD_NUMBER@", &build_number.to_string())
 }
 
 fn run(command: &mut Command) -> Result<()> {
@@ -268,7 +275,7 @@ mod tests {
             assert!(!job.contains("/usr/bin/open") && !job.contains("/Users/"));
             assert!(job.contains(if system { "--system" } else { "--user" }));
         }
-        assert!(plist().contains("<key>CFBundleName</key><string>CXCS WLAN Login</string>"));
+        assert!(plist(1).contains("<key>CFBundleName</key><string>CXCS WLAN Login</string>"));
     }
 
     #[test]
@@ -280,7 +287,7 @@ mod tests {
         let binary = staging.path().join("wlanlogin");
         fs::write(&binary, b"test executable")?;
         let app = staging.path().join("wlanlogin.app");
-        assemble(root, &binary, &app)?;
+        assemble(root, &binary, &app, 42)?;
         let icon = fs::read(app.join("Contents/Resources/icon.icns"))?;
         assert_eq!(icon, fs::read(root.join("packaging/macos/icon/icon.icns"))?);
         assert!(icon.starts_with(b"icns"));
@@ -292,6 +299,11 @@ mod tests {
             metadata.contains("<key>CFBundleDisplayName</key><string>CXCS WLAN Login</string>")
         );
         assert!(metadata.contains("<key>CFBundleExecutable</key><string>wlanlogin</string>"));
+        assert!(metadata.contains(&format!(
+            "<key>CFBundleShortVersionString</key><string>{}</string>",
+            env!("CARGO_PKG_VERSION")
+        )));
+        assert!(metadata.contains("<key>CFBundleVersion</key><string>42</string>"));
         assert_eq!(
             fs::read(app.join("Contents/MacOS/wlanlogin"))?,
             b"test executable"
@@ -320,7 +332,7 @@ mod tests {
         let root = tempfile::tempdir()?;
         let destination = root.path().join("wlanlogin.app");
         fs::create_dir_all(destination.join("Contents"))?;
-        fs::write(destination.join("Contents/Info.plist"), plist())?;
+        fs::write(destination.join("Contents/Info.plist"), plist(1))?;
         fs::write(destination.join("previous-version"), "keep")?;
         assert!(publish(&root.path().join("missing.app"), &destination, root.path()).is_err());
         assert_eq!(

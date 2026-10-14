@@ -18,7 +18,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 ## 模块职责
 
-`xtask/` 提供 `cargo xtask bundle macos`，负责调用 Cargo 构建、生成 plist、组装与验证签名应用包。名称复用 `infra/identity.rs`，版本来自 workspace；plist 模板位于 `packaging/macos/`。普通编译使用 Cargo。维护打包流程时验证参数覆盖环境变量、实际构建产物路径以及失败保留旧 bundle 的行为。
+`xtask/` 提供 `cargo xtask bundle macos`，负责调用 Cargo 构建、生成 plist、组装与验证签名应用包。名称复用 `infra/identity.rs`，展示版本来自 workspace；plist 模板位于 `packaging/macos/`。`xtask/src/build_number.rs` 在签名前加锁、原子保存 `.bundle-build/build-number` 中的递增整数，供 `CFBundleVersion` 使用；同一工作副本的 profile、target 和输出目录共用计数，`cargo clean` 不重置，失败编号不复用，新工作副本从 `1` 开始。普通编译使用 Cargo。维护打包流程时验证参数覆盖环境变量、实际构建产物路径、构建号的持久化与并发唯一性，以及失败保留旧 bundle 的行为。
 
 图标源文件为 `assets/icon/icon.svg`。
 
