@@ -8,6 +8,7 @@ Work from the repository root. This is a Cargo workspace using Rust edition 2024
 | --- | --- | --- |
 | `crates/wlan-api` | `wlanlogin-lib` | Async portal protocol library |
 | `crates/wlan-app` | `wlanlogin-cli` | CLI, TUI, daemon, and native platform adapters |
+| `xtask` | `xtask` | Developer tasks |
 
 The binary is `wlanlogin` (`.exe` on Windows). The release artifact is under `target/release/`. Keep `Cargo.lock` checked in and use `--locked` for validation. Do not update dependencies incidentally during a refactor.
 
@@ -29,7 +30,11 @@ NetworkManager, Secret Service, and native service managers are runtime dependen
 
 macOS bundles are built with `cargo xtask bundle macos`, optionally using `--codesign-identity` or `CODESIGN_IDENTITY` (CLI takes precedence; default is ad-hoc `-`). `xtask/` shares `infra/identity.rs` and renders `packaging/macos/Info.plist`; it builds the explicit `wlanlogin` binary, validates the bundle, and publishes it only after successful signing. Ordinary compilation uses Cargo, not an xtask build subcommand. Bundle generation does not install or launch services.
 
-Keep `CFBundleShortVersionString` tied to the Cargo release version. Reserve an independent integer for `CFBundleVersion` before signing through `xtask/src/build_number.rs`. The ignored `.bundle-build/` directory holds the counter and a stable lock file; atomic reservations are shared across profiles, targets, and output paths within one working copy and survive `cargo clean`. Never reuse a reserved number after a packaging failure or silently reset an invalid counter. New working copies start at 1. Verify persistence, concurrent allocation, and the actual signed bundle metadata when changing this behavior.
+`xtask/src/main.rs` only parses arguments and calls `commands::run`. `cli.rs` declares top-level commands and reusable `BuildArgs`; `cli/bundle.rs` declares platform subcommands and platform-specific options. Keep build options after the platform subcommand and signing options scoped to macOS. `commands.rs` dispatches tasks, `commands/bundle.rs` dispatches platforms, and `commands/bundle/macos.rs` orchestrates macOS assembly, signing, verification, and publication through its child modules. Add commands under `commands/<command>.rs` and packaging backends under `commands/bundle/<platform>.rs`, registering each in the corresponding CLI enum and dispatcher. Add step modules only as a workflow needs them.
+
+`support/{cargo,process,workspace}.rs` owns reusable Cargo builds, external command execution, and workspace resource lookup; it must not depend on CLI or command modules. Cargo builds accept explicit package and binary names plus independent build options, and locate executables from Cargo's JSON artifacts instead of guessing output paths. `support.rs` includes the existing application identity module as the single source of names and bundle inventory. Keep resources in `packaging/<platform>/` and platform rules in their command backend. Register platform commands on every host; check native-tool requirements when executing them.
+
+Keep `CFBundleShortVersionString` tied to the Cargo release version. Reserve an independent integer for `CFBundleVersion` before signing through `xtask/src/commands/bundle/macos/build_number.rs`. The ignored `.bundle-build/` directory holds the counter and a stable lock file; atomic reservations are shared across profiles, targets, and output paths within one working copy and survive `cargo clean`. Never reuse a reserved number after a packaging failure or silently reset an invalid counter. New working copies start at 1. Verify persistence, concurrent allocation, and the actual signed bundle metadata when changing this behavior.
 
 `APP_NAME` is the command, executable and directory name `wlanlogin`; `DISPLAY_NAME` is `CXCS WLAN Login` and may contain spaces. Keep these roles separate. The icon source is `assets/icon/icon.svg`; the pre-generated `packaging/macos/icon/icon.icns` is copied to `Contents/Resources/icon.icns` before signing. Keep packaged resources in the shared bundle member inventory so installation, rollback and cleanup accept them.
 

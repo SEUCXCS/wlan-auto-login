@@ -575,6 +575,14 @@ macOS `service uninstall` 注销后台服务，等待注销完成，再删除安
 
 6. 按[创建签名证书](#macos-signing)及后续步骤完成签名、命令入口和后台服务安装。
 
+`bundle` 下按平台提供子命令，构建和签名选项放在 `macos` 之后。可逐级查看帮助：
+
+```sh
+cargo xtask --help
+cargo xtask bundle --help
+cargo xtask bundle macos --help
+```
+
 可指定构建配置、架构和输出目录：
 
 ```sh
@@ -748,7 +756,7 @@ macOS 后台程序位于对应应用包的 `Contents/MacOS/wlanlogin`。钥匙�
 | --- | --- |
 | `crates/wlan-api` | `wlanlogin-lib`，门户协议 |
 | `crates/wlan-app` | `wlanlogin-cli`，CLI、TUI、后台服务和系统集成 |
-| `xtask` | macOS 应用打包 |
+| `xtask` | 开发任务工具 |
 | `docs` | 门户协议说明 |
 
 开发验证使用模拟门户、临时目录、模拟服务命令和隔离 IPC。不访问真实校园网，不修改已安装服务或真实凭据。部分测试使用本地 socket 和子进程，Linux 测试还使用 `dbus-daemon`。

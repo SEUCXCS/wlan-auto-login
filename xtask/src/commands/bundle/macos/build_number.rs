@@ -1,4 +1,4 @@
-//! Reserve bundle build numbers independently of Cargo versions and output paths.
+//! Reserve macOS bundle build numbers independently of Cargo versions and output paths.
 use anyhow::{Context, Result, ensure};
 use std::{
     fs::{self, File},

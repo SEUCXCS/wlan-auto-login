@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | `crates/wlan-api` | `wlanlogin-lib` | 门户请求、JSONP 解析、认证状态和协议错误 |
 | `crates/wlan-app` | `wlanlogin-cli` | CLI / TUI、业务操作、daemon 与操作系统集成 |
+| `xtask` | `xtask` | 开发任务入口，目前提供 macOS 应用打包 |
 | `docs` | — | 登录、注销、状态查询的协议依据 |
 
 安装 Rust、Cargo、rustfmt 和 Clippy，并提交应用依赖的 `Cargo.lock`。仓库没有 `rust-toolchain.toml`，也没有声明 MSRV；此前架构重构使用 Rust/Cargo `1.100.0-nightly` 验证，这不是强制 nightly 的声明。若要建立稳定工具链或最低版本要求，需要单独验证整个依赖树并更新文档。
@@ -18,7 +19,23 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 ## 模块职责
 
-`xtask/` 提供 `cargo xtask bundle macos`，负责调用 Cargo 构建、生成 plist、组装与验证签名应用包。名称复用 `infra/identity.rs`，展示版本来自 workspace；plist 模板位于 `packaging/macos/`。`xtask/src/build_number.rs` 在签名前加锁、原子保存 `.bundle-build/build-number` 中的递增整数，供 `CFBundleVersion` 使用；同一工作副本的 profile、target 和输出目录共用计数，`cargo clean` 不重置，失败编号不复用，新工作副本从 `1` 开始。普通编译使用 Cargo。维护打包流程时验证参数覆盖环境变量、实际构建产物路径、构建号的持久化与并发唯一性，以及失败保留旧 bundle 的行为。
+`xtask/` 按命令、平台和平台步骤组织，当前提供 `cargo xtask bundle macos`。`main.rs` 只解析参数并调用命令入口，`cli.rs` 声明顶层命令及可复用的构建参数，`cli/bundle.rs` 声明平台子命令；`--profile`、`--target`、`--target-dir` 放在平台子命令之后，`--codesign-identity` 只属于 macOS。普通编译使用 Cargo。
+
+| 路径（相对 `xtask/src`） | 维护范围 |
+| --- | --- |
+| `commands.rs` | 顶层命令分发 |
+| `commands/bundle.rs` | 打包平台分发 |
+| `commands/bundle/macos.rs` | 校验宿主和参数，编排构建、暂存、组装、签名、验证与发布 |
+| `commands/bundle/macos/assemble.rs` | 包目录、图标、应用及服务 plist 组装 |
+| `commands/bundle/macos/sign.rs` | plist 检查、代码签名和签名验证 |
+| `commands/bundle/macos/publish.rs` | 已验证应用包的发布、旧包备份和失败回滚 |
+| `commands/bundle/macos/build_number.rs` | macOS 构建号的加锁与原子分配 |
+| `support/cargo.rs` | 按明确的 package、binary 和构建配置调用 Cargo，解析实际产物路径 |
+| `support/process.rs`、`support/workspace.rs` | 外部命令执行与工作区资源定位 |
+
+新增命令时，在 `cli.rs` 注册参数，在 `commands.rs` 注册分发，并实现 `commands/<command>.rs`；新增打包平台时，在 `cli/bundle.rs` 和 `commands/bundle.rs` 注册，并实现 `commands/bundle/<platform>.rs`。流程复杂后再增加同名目录存放步骤。`support` 不依赖命令或 CLI；平台规则留在对应平台模块中，共享实现根据实际复用需要提取。
+
+应用名称由 `support.rs` 复用 `infra/identity.rs`，展示版本来自 workspace；打包资源存放在 `packaging/<platform>/`。
 
 图标源文件为 `assets/icon/icon.svg`。
 
