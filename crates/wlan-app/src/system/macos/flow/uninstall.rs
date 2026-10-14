@@ -62,11 +62,7 @@ impl UninstallHooks for Hooks {
     }
 }
 
-pub(crate) async fn run(
-    paths: &Paths,
-    purge: bool,
-    delete_credentials: impl std::future::Future<Output = Result<()>>,
-) -> Result<()> {
+pub(crate) async fn run(paths: &Paths, purge: bool) -> Result<()> {
     // Common ordering owns locks, stop barriers, unregistration and scope cleanup.
-    crate::system::shared::flow::uninstall::run_with(paths, purge, delete_credentials, &Hooks).await
+    crate::system::shared::flow::uninstall::run_with(paths, purge, &Hooks).await
 }

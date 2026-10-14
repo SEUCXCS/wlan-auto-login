@@ -9,15 +9,10 @@ use crate::{infra::cleanup, infra::control, infra::paths::Paths};
 use std::{future::Future, time::Duration};
 
 #[cfg(not(target_os = "macos"))]
-pub async fn run(
-    paths: &Paths,
-    purge: bool,
-    delete_credentials: impl Future<Output = Result<()>>,
-) -> Result<()> {
+pub async fn run(paths: &Paths, purge: bool) -> Result<()> {
     run_with(
         paths,
         purge,
-        delete_credentials,
         &crate::system::shared::services::hooks::DefaultHooks,
     )
     .await
@@ -26,19 +21,10 @@ pub async fn run(
 pub(crate) async fn run_with(
     paths: &Paths,
     purge: bool,
-    delete_credentials: impl Future<Output = Result<()>>,
     hooks: &impl crate::system::shared::services::hooks::UninstallHooks,
 ) -> Result<()> {
     // The native override supplies extra steps; the transaction order remains common.
-    uninstall_with(
-        paths,
-        &plan(paths)?,
-        purge,
-        &SystemRunner,
-        delete_credentials,
-        hooks,
-    )
-    .await?;
+    uninstall(paths, &plan(paths)?, purge, &SystemRunner, hooks).await?;
 
     if purge {
         tracing::info!(
@@ -52,6 +38,27 @@ pub(crate) async fn run_with(
         tracing::info!("{}", Message::ServiceUninstalledSavedCredentialsRetained);
     }
     Ok(())
+}
+
+async fn uninstall(
+    paths: &Paths,
+    plan: &Plan,
+    purge: bool,
+    runner: &impl Runner,
+    hooks: &impl crate::system::shared::services::hooks::UninstallHooks,
+) -> Result<()> {
+    // The storage future is polled only after verified stop/unregistration and
+    // while daemon and operation locks are held. No background read can survive
+    // that barrier, so purge does not need to parse the state it will remove.
+    uninstall_with(
+        paths,
+        plan,
+        purge,
+        runner,
+        crate::system::shared::credentials::delete(paths),
+        hooks,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -388,6 +395,78 @@ mod tests {
                 "all service checks must run"
             );
         }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn purge_deletes_scoped_storage_without_parsing_control_state() -> Result<()> {
+        for state in [
+            r#"{"paused":false,"session":null,"revision":0}"#,
+            "invalid json",
+            r#"{"paused":false,"session":null,"revision":0,"credential_generation":18446744073709551615}"#,
+        ] {
+            for already_unregistered in [false, true] {
+                let dir = tempfile::tempdir()?;
+                let (paths, plan) = fixture(dir.path(), 1)?;
+                fs::write(paths.config.join("control.json"), state)?;
+                fs::write(paths.secrets.join("login.json"), "invalid credential data")?;
+                let sibling = dir.path().join("SEUCXCS/another-tool");
+                fs::create_dir(&sibling)?;
+                fs::write(sibling.join("settings.json"), "preserve")?;
+                let runner = if already_unregistered {
+                    fs::remove_file(&plan.definition)?;
+                    FakeRunner::new([
+                        (true, "LoadState=not-found\n"),
+                        (true, ""),
+                        (true, "LoadState=not-found\n"),
+                    ])
+                } else {
+                    removal_runner(1)
+                };
+
+                // Exercise the production storage selection with temporary system
+                // files; service-manager operations remain entirely simulated.
+                uninstall(&paths, &plan, true, &runner, &FixtureHooks).await?;
+
+                assert!(!plan.definition.exists() && !plan.executable.exists());
+                assert!(!paths.config.exists() && !paths.runtime.exists());
+                assert!(!paths.secrets.exists());
+                assert!(!dir.path().join("SEUCXCS/wlanlogin").exists());
+                assert_eq!(
+                    fs::read_to_string(sibling.join("settings.json"))?,
+                    "preserve"
+                );
+                assert!(dir.path().join("original-cli").exists());
+                assert!(runner.outputs.borrow().is_empty());
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn failed_unregister_never_polls_scoped_credential_deletion() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (paths, plan) = fixture(dir.path(), 1)?;
+        let state = "invalid json";
+        fs::write(paths.config.join("control.json"), state)?;
+        let runner = FakeRunner::new([(true, STOPPED), (false, "permission denied")]);
+
+        assert!(
+            uninstall(&paths, &plan, true, &runner, &FixtureHooks)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fs::read_to_string(paths.secrets.join("login.cred"))?,
+            "encrypted test secret"
+        );
+        assert_eq!(
+            fs::read_to_string(paths.config.join("control.json"))?,
+            state
+        );
+        assert!(plan.definition.exists() && plan.executable.exists());
         Ok(())
     }
 

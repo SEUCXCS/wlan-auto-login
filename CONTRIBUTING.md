@@ -107,7 +107,7 @@ macOS Wi-Fi 宿主使用有长度限制的 IPC 帧、协议版本和请求 ID；
 
 daemon 不得在启动时预读。单次检查先验证目标 Wi-Fi、暂停、策略期限及门户 Offline，再读取凭据，提交前再次验证 Wi-Fi 会话。成功读取返回 `BackgroundCredentials`，包含不可输出的 `CredentialPermit`；所有完成结果（包括超时后缓存的结果）在消费时复检，Wi-Fi await 后再次复检，任一检查失败都不得调用门户登录。校验有独立超时，正常等待和校验失败不进入网络失败退避；提供者／解锁事件只唤醒等待，不解除门户凭据拒绝。保留单个在途原生读任务，超时、注销或许可失效不得另开第二个任务。
 
-`CredentialPermit` 绑定 scope、配置目录及 `control.json` 中独立的 `credential_generation`。`flow/credentials/save.rs` 和 `delete.rs` 在调用原生后端之前递增并原子保存代数，调用方继续持有现有 operation lock；写入失效记录失败必须阻止存储操作，原生操作失败也不得恢复旧代数。凭据代数不复用暂停／调度的 revision。`credential_generation` 是持久化状态中的必填字段；状态文件不存在时初始化为零。
+`CredentialPermit` 绑定 scope、配置目录及 `control.json` 中独立的 `credential_generation`。`flow/credentials/save.rs` 和 `delete.rs` 在调用原生后端之前递增并原子保存代数，调用方继续持有现有 operation lock；写入失效记录失败必须阻止存储操作，原生操作失败也不得恢复旧代数。凭据代数不复用暂停／调度的 revision。`credential_generation` 是持久化状态中的必填字段；状态文件不存在时初始化为零。完整卸载的凭据删除由卸载 flow 选择存储后端，在确认服务注销、后台停止并持有 daemon / operation lock 后执行；不调用常规的代数失效流程，也不解析待清理的控制状态。
 
 Linux 用户许可另外保存 logind 会话 ID、`TimestampMonotonic` 及内存中的会话提示／代数。每个消费检查点在实时查询前后验证会话代数及完整身份，避免注销、重新登录和提示恢复原值时使用旧结果。Linux 系统范围及 macOS／Windows 不增加图形会话门槛，继续按原生后台访问规则读取，只应用共同的存储新鲜度检查。
 
