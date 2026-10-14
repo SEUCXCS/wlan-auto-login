@@ -6,10 +6,11 @@ use crate::infra::{
     error::{Context, Message, Result},
     paths::Paths,
 };
+use crate::system::define::credentials::{BackgroundRead, CredentialPermit, Validity, WaitReason};
 use crate::system::define::wifi::WifiConnection;
 use std::future::Future;
 use tokio::time::Instant;
-use wlanlogin_lib::{AuthState, Client, Credentials, LoginOutcome};
+use wlanlogin_lib::{AuthState, Client, LoginOutcome};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Outcome {
@@ -17,6 +18,9 @@ pub(super) enum Outcome {
     WaitingForTargetWifi,
     Paused,
     CredentialsRejected,
+    CredentialsMissing,
+    CredentialReadFailed(crate::infra::error::credentials::Diagnostic),
+    WaitingForCredentials(WaitReason),
     WaitingForDeadline,
     Online,
     UnknownPortalState,
@@ -31,6 +35,16 @@ impl Outcome {
             Self::WaitingForTargetWifi => "waiting_for_target_wifi",
             Self::Paused => "automatic_login_paused",
             Self::CredentialsRejected => "credentials_rejected",
+            Self::CredentialsMissing => "credentials_missing",
+            Self::CredentialReadFailed(_) => "credential_read_failed",
+            Self::WaitingForCredentials(reason) => match reason {
+                WaitReason::Session => "waiting_for_graphical_session",
+                WaitReason::CredentialsChanged => "credentials_changed",
+                WaitReason::Provider => "waiting_for_credential_provider",
+                WaitReason::Locked => "waiting_for_keyring_unlock",
+                WaitReason::PermissionDenied => "credential_permission_denied",
+                WaitReason::NeedsInteraction => "credential_interaction_required",
+            },
             Self::WaitingForDeadline => "waiting_for_deadline",
             Self::Online => "online",
             Self::UnknownPortalState => "unknown_portal_state",
@@ -38,16 +52,43 @@ impl Outcome {
             Self::Authenticated => "authenticated",
         }
     }
+    pub(super) fn diagnostic(self) -> Option<crate::infra::error::credentials::Diagnostic> {
+        match self {
+            Self::CredentialReadFailed(diagnostic) => Some(diagnostic),
+            _ => None,
+        }
+    }
+    pub(super) fn credentials_state(self) -> control::CredentialState {
+        use control::CredentialState as S;
+        match self {
+            Self::CredentialsMissing => S::Missing,
+            Self::CredentialReadFailed(_) => S::Failed,
+            Self::WaitingForCredentials(reason) => match reason {
+                WaitReason::Session => S::WaitingForSession,
+                WaitReason::CredentialsChanged => S::NotChecked,
+                WaitReason::Provider => S::WaitingForProvider,
+                WaitReason::Locked => S::WaitingForUnlock,
+                WaitReason::PermissionDenied => S::WaitingForPermission,
+                WaitReason::NeedsInteraction => S::WaitingForInteraction,
+            },
+            Self::Authenticated | Self::CredentialsRejected => S::Available,
+            _ => S::NotChecked,
+        }
+    }
 }
 
-pub(super) async fn tick(
+pub(super) async fn tick<V>(
     client: &Client,
     paths: &Paths,
     monitor: &impl WifiConnection,
-    read_credentials: impl Future<Output = Result<Option<Credentials>>>,
+    read_credentials: impl Future<Output = Result<BackgroundRead>>,
+    validate: impl FnOnce(CredentialPermit) -> V,
     policy: &mut Policy,
     scheduled: bool,
-) -> Result<Outcome> {
+) -> Result<Outcome>
+where
+    V: Future<Output = Result<Validity>>,
+{
     let session = monitor
         .target_session()
         .await
@@ -84,9 +125,21 @@ pub(super) async fn tick(
         tracing::debug!("{}", Message::PortalStateUnknown);
         return Ok(Outcome::UnknownPortalState);
     }
-    let saved = read_credentials
-        .await?
-        .ok_or_else(|| crate::infra::error::error!(Message::SavedCredentialsMissing))?;
+    let saved = match read_credentials.await? {
+        BackgroundRead::Available(credentials) => credentials,
+        BackgroundRead::Failed(diagnostic) => {
+            policy.wait_for_credentials();
+            return Ok(Outcome::CredentialReadFailed(diagnostic));
+        }
+        BackgroundRead::Missing => {
+            policy.wait_for_credentials();
+            return Ok(Outcome::CredentialsMissing);
+        }
+        BackgroundRead::Waiting(reason) => {
+            policy.wait_for_credentials();
+            return Ok(Outcome::WaitingForCredentials(reason));
+        }
+    };
     // Recheck the Wi-Fi immediately before sending credentials after an await.
     if monitor
         .target_session()
@@ -97,8 +150,31 @@ pub(super) async fn tick(
     {
         return Ok(Outcome::WifiSessionChanged);
     }
+    // Wi-Fi inspection awaited after consumption; validate the permit once more.
+    let validity = match validate(saved.permit.clone()).await {
+        Ok(validity) => validity,
+        Err(error) => {
+            let outcome = match crate::system::flow::credentials::background::failure(&error) {
+                BackgroundRead::Failed(diagnostic) => Outcome::CredentialReadFailed(diagnostic),
+                BackgroundRead::Waiting(reason) => Outcome::WaitingForCredentials(reason),
+                _ => unreachable!("error projection cannot contain credentials"),
+            };
+            policy.wait_for_credentials();
+            return Ok(outcome);
+        }
+    };
+    if validity != Validity::Valid {
+        policy.wait_for_credentials();
+        return Ok(Outcome::WaitingForCredentials(
+            if validity == Validity::SessionExpired {
+                WaitReason::Session
+            } else {
+                WaitReason::CredentialsChanged
+            },
+        ));
+    }
     let line = Preferences::load(paths)?.line;
-    match client.login(&saved, line).await {
+    match client.login(&saved.credentials, line).await {
         Ok(LoginOutcome::Authenticated) => {
             policy.success();
             tracing::info!(line = %line, "{}", Message::Authenticated);
@@ -120,6 +196,7 @@ pub(super) async fn tick(
 mod tests {
     use super::*;
     use std::time::Duration;
+    use wlanlogin_lib::Credentials;
 
     struct FixedWifi;
 
@@ -144,6 +221,24 @@ mod tests {
         for (responses, reads_secret, seconds, blocked, outcome) in [
             (vec![ONLINE], false, 240, false, Outcome::Online),
             (vec![UNKNOWN], false, 30, false, Outcome::UnknownPortalState),
+            (vec![OFFLINE], true, 30, false, Outcome::CredentialsMissing),
+            (
+                vec![OFFLINE],
+                true,
+                30,
+                false,
+                Outcome::WaitingForCredentials(WaitReason::Locked),
+            ),
+            (
+                vec![OFFLINE],
+                true,
+                30,
+                false,
+                Outcome::CredentialReadFailed(crate::infra::error::credentials::Diagnostic::new(
+                    crate::infra::error::credentials::Kind::InvalidFormat,
+                    crate::infra::error::credentials::Stage::Decode,
+                )),
+            ),
             (vec![OFFLINE, ONLINE], true, 240, false, Outcome::Online),
             (
                 vec![OFFLINE, OFFLINE, r#"dr1({"result":1});"#],
@@ -201,11 +296,24 @@ mod tests {
                 &FixedWifi,
                 async {
                     read.set(true);
-                    Ok(Some(Credentials {
-                        username: "student".into(),
-                        password: "test-secret".into(),
-                    }))
+                    Ok(match outcome {
+                        Outcome::CredentialsMissing => BackgroundRead::Missing,
+                        Outcome::WaitingForCredentials(reason) => BackgroundRead::Waiting(reason),
+                        Outcome::CredentialReadFailed(diagnostic) => {
+                            BackgroundRead::Failed(diagnostic)
+                        }
+                        _ => BackgroundRead::Available(
+                            crate::system::define::credentials::BackgroundCredentials::fixture(
+                                &paths,
+                                Credentials {
+                                    username: "student".into(),
+                                    password: "test-secret".into(),
+                                },
+                            )?,
+                        ),
+                    })
                 },
+                |_| async { Ok(Validity::Valid) },
                 &mut policy,
                 true,
             )
@@ -230,6 +338,7 @@ mod tests {
                 &paths,
                 &FixedWifi,
                 async { panic!("premature credential read") },
+                |_| async { Ok(Validity::Valid) },
                 &mut policy,
                 true,
             )
@@ -271,6 +380,7 @@ mod tests {
             paused: true,
             session: Some("student-session".into()),
             revision: 0,
+            credential_generation: 0,
         };
         policy.update(state.session.clone(), &mut state);
         state.save(&paths)?;
@@ -279,6 +389,7 @@ mod tests {
             &paths,
             &UnavailableWifi,
             async { panic!("Wi-Fi failure must not read credentials") },
+            |_| async { Ok(Validity::Valid) },
             &mut policy,
             true,
         )
@@ -302,6 +413,7 @@ mod tests {
                 &paths,
                 &FixedWifi,
                 async { panic!("paused retry must not read credentials") },
+                |_| async { Ok(Validity::Valid) },
                 &mut policy,
                 true,
             )
@@ -314,6 +426,7 @@ mod tests {
                 &paths,
                 &DisconnectedWifi,
                 async { panic!("disconnected check must not read credentials") },
+                |_| async { Ok(Validity::Valid) },
                 &mut policy,
                 true,
             )
@@ -325,6 +438,132 @@ mod tests {
                 .await
                 .is_err()
         );
+        Ok(())
+    }
+
+    struct ExpiringWifi {
+        calls: std::cell::Cell<u32>,
+        state: tokio::sync::watch::Sender<crate::system::define::credentials::SessionState>,
+        changed_wifi: bool,
+    }
+    impl WifiConnection for ExpiringWifi {
+        async fn target_session(&self) -> Result<Option<String>> {
+            let calls = self.calls.get() + 1;
+            self.calls.set(calls);
+            if calls == 2 {
+                // Expiry happens inside the last Wi-Fi await, after credentials were consumed.
+                tokio::task::yield_now().await;
+                let mut next = self.state.borrow().clone();
+                next.update(Some("!old".into()))?;
+                self.state.send_replace(next);
+                if self.changed_wifi {
+                    return Ok(Some("another-wifi".into()));
+                }
+            }
+            Ok(Some("student-session".into()))
+        }
+    }
+    #[tokio::test]
+    async fn final_checkpoint_after_wifi_await_blocks_expired_changed_and_failed_permits()
+    -> Result<()> {
+        use crate::system::define::credentials::{
+            BackgroundCredentials, SessionIdentity, SessionPermit, SessionState,
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for case in 0..4 {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let base = format!("http://{}", listener.local_addr()?);
+            let client = Client::new(wlanlogin_lib::PortalConfig {
+                status_url: format!("{base}/status"),
+                action_url: format!("{base}/action"),
+                timeout: Duration::from_secs(2),
+                ..Default::default()
+            })?;
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await?;
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(stream.read_u8().await?);
+                }
+                assert!(String::from_utf8(request)?.starts_with("GET /status"));
+                let body = r#"dr1({"result":0,"v46ip":"10.0.0.12"});"#;
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
+                Ok::<_, crate::infra::error::Error>(listener)
+            });
+            let dir = tempfile::tempdir()?;
+            let paths = Paths::test(dir.path());
+            let initial = SessionState {
+                hint: Some("old".into()),
+                generation: 0,
+            };
+            let (sender, receiver) = tokio::sync::watch::channel(initial.clone());
+            let wifi = ExpiringWifi {
+                calls: std::cell::Cell::new(0),
+                state: sender,
+                changed_wifi: case == 3,
+            };
+            let mut credentials = BackgroundCredentials::fixture(
+                &paths,
+                Credentials {
+                    username: "mock".into(),
+                    password: "mock-only".into(),
+                },
+            )?;
+            credentials.permit.session = Some(SessionPermit {
+                identity: SessionIdentity {
+                    id: "old".into(),
+                    started_at: 1,
+                },
+                state: initial,
+            });
+            let mut policy = Policy::default();
+            let outcome = tick(
+                &client,
+                &paths,
+                &wifi,
+                async { Ok(BackgroundRead::Available(credentials)) },
+                |permit| async move {
+                    assert!(
+                        permit
+                            .session
+                            .is_some_and(|session| session.state != *receiver.borrow())
+                    );
+                    match case {
+                        0 => Ok(Validity::SessionExpired),
+                        1 => Ok(Validity::CredentialsChanged),
+                        2 => Err(crate::infra::error::credentials::CredentialError::new(
+                            crate::infra::error::credentials::Kind::Timeout,
+                            crate::infra::error::credentials::Stage::Session,
+                        )
+                        .into()),
+                        _ => panic!("changed Wi-Fi must prevent further credential validation"),
+                    }
+                },
+                &mut policy,
+                true,
+            )
+            .await?;
+            let expected = match case {
+                0 => Outcome::WaitingForCredentials(WaitReason::Session),
+                1 => Outcome::WaitingForCredentials(WaitReason::CredentialsChanged),
+                2 => Outcome::CredentialReadFailed(
+                    crate::infra::error::credentials::Diagnostic::new(
+                        crate::infra::error::credentials::Kind::Timeout,
+                        crate::infra::error::credentials::Stage::Session,
+                    ),
+                ),
+                _ => Outcome::WifiSessionChanged,
+            };
+            assert_eq!(outcome, expected);
+            assert!(!policy.credentials_rejected());
+            let listener = tokio::time::timeout(Duration::from_secs(2), server).await???;
+            // Only the initial status query is allowed; even login's status query is forbidden.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(30), listener.accept())
+                    .await
+                    .is_err()
+            );
+        }
         Ok(())
     }
 }

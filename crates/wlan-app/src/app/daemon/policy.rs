@@ -15,6 +15,7 @@ pub(super) struct Policy {
     initial_status_pending: bool,
     initial_status_failures: usize,
     credential_blocked: bool,
+    waiting_credentials: bool,
     revision: u64,
     failures: u32,
     retry_at: Option<Instant>,
@@ -90,6 +91,7 @@ impl Policy {
         auth == AuthState::Offline
     }
     pub(super) fn success(&mut self) {
+        self.waiting_credentials = false;
         self.status_received();
         self.failures = 0;
         self.retry_at = None;
@@ -100,6 +102,20 @@ impl Policy {
         self.success();
         self.poll_at = Some(Instant::now() + ONLINE_INTERVAL);
     }
+    pub(super) fn wait_for_credentials(&mut self) {
+        self.waiting_credentials = true;
+        self.poll_at = Some(Instant::now() + CHECK_INTERVAL);
+        self.retry_at = None;
+    }
+
+    pub(super) fn credentials_changed(&mut self) {
+        // Unlock/provider notifications must not clear portal rejection or network backoff.
+        if self.waiting_credentials {
+            self.waiting_credentials = false;
+            self.poll_at = None;
+        }
+    }
+
     pub(super) fn status_received(&mut self) {
         self.initial_status_pending = false;
     }
@@ -146,6 +162,26 @@ impl Policy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn unlock_wakes_waiting_without_resetting_portal_rejection_or_network_backoff() {
+        let mut policy = Policy::default();
+        let mut state = control::State::default();
+        policy.update(Some("wifi".into()), &mut state);
+        policy.wait_for_credentials();
+        assert!(!policy.should_check(&state, Instant::now()));
+        policy.credentials_changed();
+        assert!(policy.should_check(&state, Instant::now()));
+        policy.wait_for_credentials();
+        tokio::time::advance(Duration::from_secs(30)).await;
+        assert!(policy.should_check(&state, Instant::now()));
+        policy.reject_credentials();
+        policy.credentials_changed();
+        assert!(policy.credentials_rejected());
+        let deadline = policy.failure(Instant::now(), false);
+        policy.credentials_changed();
+        assert_eq!(policy.retry_deadline(), Some(Instant::now() + deadline));
+    }
 
     #[test]
     fn disconnected_paused_and_invalid_credentials_never_login() {
@@ -196,6 +232,7 @@ mod tests {
             paused: true,
             session: Some("interface#7".into()),
             revision: 0,
+            credential_generation: 0,
         };
         let mut policy = Policy::default();
         policy.update(Some("interface#0".into()), &mut state);
@@ -228,6 +265,7 @@ mod tests {
             paused: true,
             session: Some("wifi-1".into()),
             revision: 0,
+            credential_generation: 0,
         };
         let mut policy = Policy::default();
         policy.update(Some("wifi-1".into()), &mut state);

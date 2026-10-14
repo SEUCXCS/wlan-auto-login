@@ -10,7 +10,7 @@ pub const APP_BUNDLE: &str = "wlanlogin.app";
 
 #[cfg(windows)]
 pub const DAEMON_BINARY: &str = "wlanlogin-daemon.exe";
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub const DAEMON_BINARY: &str = "wlanlogin-daemon";
 
 #[cfg(any(target_os = "linux", test))]

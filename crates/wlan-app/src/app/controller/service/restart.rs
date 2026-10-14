@@ -1,5 +1,6 @@
+//! Request the normalized restart workflow for the selected platform.
 use crate::infra::{error::Result, paths::Paths};
-use crate::system::shared::services::{self, Action};
+
 pub async fn run(paths: &Paths) -> Result<()> {
-    services::manage(paths, Action::Restart).await
+    crate::system::flow::restart::run(paths).await
 }

@@ -557,6 +557,20 @@ pub enum Message {
     NotConnectedToTargetWifi,
     #[error("{0}")]
     Detail(String),
+    #[error("Credential event connection closed")]
+    CredentialEventListenerStopped,
+    #[error("Graphical session is not ready for credential provider activation")]
+    SessionNotReady,
+    #[error("Unsupported control protocol; reinstall with the current binary")]
+    ControlProtocol,
+    #[error("Unsupported installed protocol; uninstall with the old binary and reinstall")]
+    UnsupportedInstalledProtocol,
+    #[error("Credential generation exhausted")]
+    CredentialGenerationExhausted,
+    #[error("Session generation exhausted")]
+    SessionGenerationExhausted,
+    #[error("Credential permit does not match the selected storage scope")]
+    CredentialPermitScopeMismatch,
 }
 
 impl From<String> for Message {

@@ -19,7 +19,7 @@ pub fn login(result: &LoginResult) {
     }
 }
 
-use crate::app::controller::service::status::InstallationReport;
+use crate::system::define::services::InstallationReport;
 pub fn status(reports: &[InstallationReport]) -> String {
     if reports.is_empty() {
         "🔴 安装状态：未安装".into()
@@ -96,8 +96,72 @@ fn format_report(report: &InstallationReport) -> String {
         }
         None => lines.push("运行状态：未安装，未查询系统服务".into()),
     }
+    if let Some(Ok(runtime)) = &report.runtime {
+        use crate::infra::control::CredentialState as S;
+        let credentials = match runtime.credentials {
+            S::NotChecked => "当前凭据尚未检查",
+            S::Available => "可用",
+            S::Missing => "未保存",
+            S::WaitingForSession => "等待图形会话就绪",
+            S::WaitingForProvider => "等待凭据服务",
+            S::WaitingForUnlock => "等待钱包解锁",
+            S::WaitingForPermission => "凭据访问被拒绝，请检查权限",
+            S::WaitingForInteraction => "需要前台授权或解锁",
+            S::Failed => "读取失败",
+        };
+        lines.push(format!("凭据状态：{credentials}"));
+        if let Some(diagnostic) = runtime.diagnostic {
+            lines.push(credential_diagnostic(diagnostic));
+        }
+        if let Some(outcome) = &runtime.outcome {
+            lines.push(format!("自动登录状态：{outcome}"));
+        }
+    }
+    if let Some(Err(error)) = &report.runtime {
+        lines.push(format!("凭据状态：未知（无法获取 daemon 诊断：{error}）"));
+    }
     lines.join("\n")
 }
+fn credential_diagnostic(diagnostic: crate::infra::error::credentials::Diagnostic) -> String {
+    use crate::infra::error::credentials::{Kind, Stage};
+    let message = match diagnostic.kind {
+        Kind::Timeout => "凭据操作超时，稍后重试",
+        Kind::InvalidEncoding | Kind::InvalidFormat => "保存的凭据格式损坏，请重新保存",
+        Kind::UnsupportedVersion => "不支持已保存的凭据格式版本，请重新保存",
+        Kind::Incomplete => "保存的凭据不完整，请重新保存",
+        Kind::DuplicateEntries => "发现重复凭据，请处理本应用的重复条目",
+        Kind::DecryptionFailed => "凭据解密失败，请检查存储环境或重新保存",
+        Kind::UnsafeStorage => "凭据存储的路径或权限不符合要求，请检查存储",
+        Kind::TaskFailed => "后台凭据读取任务失败，将重试",
+        Kind::BackendUnavailable | Kind::ProviderUnavailable => {
+            "凭据后端不可用，请检查服务或运行环境"
+        }
+        Kind::NativeFailure => "原生凭据操作失败，请检查诊断码",
+        Kind::Unknown => "凭据操作失败，原因未识别，请查看日志",
+        Kind::Locked => "钱包已锁定，请解锁",
+        Kind::NeedsInteraction => "需要前台授权或解锁",
+        Kind::PermissionDenied => "凭据访问被拒绝，请检查权限",
+    };
+    let stage = match diagnostic.stage {
+        Stage::Session => "会话准备",
+        Stage::Connect => "连接服务",
+        Stage::Search => "查找条目",
+        Stage::Inspect => "检查存储",
+        Stage::Read => "读取凭据",
+        Stage::Decode => "解析凭据",
+        Stage::Decrypt => "解密",
+        Stage::Task => "后台任务",
+    };
+    let mut detail = format!("凭据诊断：{message}（阶段：{stage}）");
+    if let Some(code) = diagnostic.native_code {
+        detail.push_str(&format!("；原生错误码：{code}"));
+    }
+    if let Some(code) = diagnostic.bus_code {
+        detail.push_str(&format!("；D-Bus 错误：{code:?}"));
+    }
+    detail
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +178,21 @@ mod tests {
     }
     use crate::infra::command::tests::{FakeRunner, RUNNING};
     use std::fs;
+
+    #[test]
+    fn credential_failures_have_distinct_recovery_messages_and_safe_native_codes() {
+        use crate::infra::error::credentials::{Diagnostic, Kind, Stage};
+        let timeout = credential_diagnostic(Diagnostic::new(Kind::Timeout, Stage::Read));
+        let malformed = credential_diagnostic(Diagnostic::new(Kind::InvalidFormat, Stage::Decode));
+        let duplicate =
+            credential_diagnostic(Diagnostic::new(Kind::DuplicateEntries, Stage::Search));
+        assert!(timeout.contains("超时") && !timeout.contains("权限"));
+        assert!(malformed.contains("格式损坏") && malformed.contains("重新保存"));
+        assert!(duplicate.contains("重复") && !duplicate.contains("解锁"));
+        let mut native = Diagnostic::new(Kind::NativeFailure, Stage::Read);
+        native.native_code = Some(-123);
+        assert!(credential_diagnostic(native).contains("-123"));
+    }
 
     #[tokio::test]
     async fn system_reports_only_actual_artifacts_and_confirmed_registration() -> Result<()> {

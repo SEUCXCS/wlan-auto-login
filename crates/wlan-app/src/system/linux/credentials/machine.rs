@@ -89,7 +89,13 @@ impl MachineStore {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
                 Err(error) => return Err(error.into()),
             };
-            validate_private(&path)?;
+            validate_private(&path).map_err(|error| {
+                crate::system::shared::credentials::diagnostics::specific(
+                    error,
+                    crate::infra::error::credentials::Kind::UnsafeStorage,
+                    crate::infra::error::credentials::Stage::Inspect,
+                )
+            })?;
             let modified = metadata.modified()?;
             if background
                 && let Some((old, length, credentials)) = &*self.cache.lock().map_err(|_| {
@@ -121,7 +127,13 @@ impl MachineStore {
                     Zeroizing::new(fs::read(supplied)?)
                 } else {
                     let encrypted = Zeroizing::new(fs::read(&path)?);
-                    crypt("decrypt", &encrypted).await?
+                    crypt("decrypt", &encrypted).await.map_err(|error| {
+                        crate::system::shared::credentials::diagnostics::specific(
+                            error,
+                            crate::infra::error::credentials::Kind::DecryptionFailed,
+                            crate::infra::error::credentials::Stage::Decrypt,
+                        )
+                    })?
                 }
             };
 

@@ -50,7 +50,7 @@
 
 | 平台 | Wi-Fi 识别 | 后台服务 | 用户凭据 | 系统凭据 |
 | --- | --- | --- | --- | --- |
-| Linux | NetworkManager、D-Bus | systemd 用户服务或系统服务 | Secret Service，例如已解锁的 GNOME Keyring | `systemd-creds` 加密凭据 |
+| Linux | NetworkManager、D-Bus | systemd 用户服务或系统服务 | Secret Service，例如 GNOME Keyring、KWallet | `systemd-creds` 加密凭据 |
 | macOS | CoreWLAN、SystemConfiguration、定位授权 | `SMAppService` LaunchAgent 或 LaunchDaemon | 用户 Keychain | System Keychain |
 | Windows | Native Wi-Fi API | Task Scheduler 或 Service Control Manager | Credential Manager | 机器 DPAPI |
 
@@ -301,6 +301,22 @@ macOS 安装会校验完整应用包。替换旧副本后，程序检查凭据�
 
 系统范围使用机器 DPAPI 保存凭据，后台服务随开机启动。用户与系统范围选择一个即可。
 
+### Linux 桌面会话与钱包
+
+用户 daemon 仍随用户服务启动；启动本身不读取钱包。连接到 Student_CX、自动登录未暂停、门户明确离线且确实需要凭据时，才进行后台读取。未保存凭据、钱包锁定或服务未就绪时，daemon 继续等待；服务上线或钱包解锁会触发重试，另有定时重试。后台不会弹出解锁或授权窗口；自动登录 GNOME 后钱包未解锁时，可通过前台 `wlanlogin --user login` 或桌面钱包管理器解锁。
+
+Linux 用户后台读取统一先检查活动用户会话、显示 socket 和激活环境，包括凭据服务已经运行的情况。确认就绪后，程序使用官方库访问标准 `org.freedesktop.secrets`，由 D-Bus 按标准机制启动或重启服务。这是通用的 Linux 会话初始化顺序，适用于实现 Secret Service 的桌面钱包。系统范围的凭据读取不依赖图形会话。
+
+常见桌面通常维护标准会话目标与环境，无需额外设置。未使用标准目标的自定义桌面可在图形会话就绪后执行：
+
+```sh
+wlanlogin --user service session-ready
+```
+
+它将当前会话的显示环境同步给 D-Bus / systemd，并向已运行 daemon 发送确认通知；注销前可执行 `wlanlogin --user service session-end`。通知只保存在 daemon 内存中，并绑定实际登录会话；每次读取前检查会话存活，读取后再次核对会话身份。重启 daemon 后自定义桌面需重新发送就绪通知。
+
+`service status` 显示暂未读取、等待会话／凭据服务／钱包解锁、需要前台交互、权限被拒绝、未保存、可用或读取失败。读取失败区分超时、格式损坏、重复条目、解密及任务失败，并显示阶段、诊断码和恢复提示。daemon 持续等待，不因这些失败退出或删除凭据；未识别的错误不会被判为权限问题。查询状态不会读取或启动钱包。Linux 系统范围使用自身的 systemd 加密凭据或显式 protected-file，不依赖桌面钱包。
+
 ### 升级
 
 服务管理命令已从 `daemon start/stop/restart/status/logs` 和顶层 `install/uninstall` 迁到 `service` 下；`daemon` 专用于当前进程的自动登录循环。
@@ -319,7 +335,7 @@ macOS 安装会校验完整应用包。替换旧副本后，程序检查凭据�
 
    系统范围使用 `--system` 和管理员权限。
 
-macOS 重新安装时，会迁移同一应用 ID 的旧 LaunchAgent 或 LaunchDaemon。程序停止旧进程，移除外部启动定义，并改用原生注册。迁移失败时，程序尝试恢复旧应用和注册。新包应通过 `cargo xtask bundle macos` 构建，并包含签名内的启动定义。
+当前控制 IPC 使用版本 3，新增安全诊断字段；版本 1、2 均不兼容。当前版本不兼容旧服务启动参数、旧 IPC、`macos-host` / `macos-service` / `macos-credential-check` 或旧 macOS 外部启动定义。保留旧程序，在原范围执行旧版本的卸载命令（保留凭据），再用新版本安装。macOS 检测到旧安装时会在修改之前报错；不自动迁移旧协议。已使用当前协议的安装仍支持失败回滚。新包应通过 `cargo xtask bundle macos` 构建，并包含签名内的启动定义。
 
 Arch 软件包通过 pacman 更新，随后重启用户服务：
 
@@ -465,7 +481,13 @@ systemctl --user stop dev.cxcs.tools.wlanlogin.service
 systemctl --user restart dev.cxcs.tools.wlanlogin.service
 ```
 
-后台服务只在连接 `Student_CX` 且门户确认离线时提交认证。门户状态未知时，服务不会自动登录。检查间隔如下：
+后台服务只在连接 `Student_CX` 且门户确认离线时提交认证。门户状态未知时，服务不会自动登录。
+
+后台读取超时后会继续保留同一个读取任务；任务稍后完成时，程序会重新检查其许可，提交登录前再检查一次。Linux 用户范围的结果绑定 logind 会话 ID、启动时间及本地会话代数；注销、重新登录或会话变更后，旧结果会丢弃并等待重新读取。系统范围不依赖桌面会话；macOS 和 Windows 保持原生钥匙串／凭据管理器的后台访问规则。
+
+所有平台的结果都绑定所选范围、配置目录和凭据代数。保存或删除凭据前先持久化新的代数，失败则停止存储操作；即使存储操作随后失败，旧读取结果也会失效。这个代数与暂停状态和重试调度版本独立，不改变凭据格式或状态 IPC v3。
+
+检查间隔如下：
 
 - 确认在线后，每 4 分钟检查一次。
 - 登录成功后，先在 30 秒后确认状态。

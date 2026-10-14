@@ -137,7 +137,13 @@ fn save_item<T>(
 
 fn load_native(scope: Scope) -> Result<Option<Credentials>> {
     match keychain(scope)?.find_generic_password(service(scope), CREDENTIAL_ENTRY) {
-        Ok((password, _)) => decode(std::str::from_utf8(password.as_ref())?).map(Some),
+        Ok((password, _)) => decode(std::str::from_utf8(password.as_ref()).map_err(|e| {
+            crate::system::shared::credentials::diagnostics::at(
+                e.into(),
+                crate::infra::error::credentials::Stage::Decode,
+            )
+        })?)
+        .map(Some),
         Err(error) if error.code() == -25300 => Ok(None),
         Err(error) => Err(error).context(Message::KeychainCredentialInaccessible),
     }

@@ -39,7 +39,7 @@ pub async fn run(context: &Context, mut args: LoginArgs, installing: bool) -> Re
     #[cfg(target_os = "macos")]
     {
         let allow_interaction = !non_interactive && io::stderr().is_terminal();
-        if let Err(error) = crate::system::macos::host::prepare(allow_interaction).await {
+        if let Err(error) = crate::system::macos::runtime::host::prepare(allow_interaction).await {
             if installing && !(context.paths.scope == Scope::System && !allow_interaction) {
                 return Err(error);
             }

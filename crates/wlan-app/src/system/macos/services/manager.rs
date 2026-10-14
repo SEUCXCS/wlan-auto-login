@@ -4,7 +4,7 @@ use crate::infra::{
     error::{Message, Result},
 };
 use crate::system::define::services::{Action, Plan, ServiceState};
-use crate::system::shared::services::{fields, lifecycle::execute};
+use crate::system::shared::services::{fields, steps::execute};
 pub(crate) async fn query(
     domain: &str,
     target: &str,

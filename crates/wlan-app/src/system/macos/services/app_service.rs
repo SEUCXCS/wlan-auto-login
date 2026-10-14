@@ -41,43 +41,31 @@ pub(crate) fn command(executable: &Path, domain: &str, action: &str) -> Invocati
     )
 }
 
-/// The signed job's arguments identify the CLI protocol of this bundle.
-/// Inspect at execution time: installation may have replaced the bundle since planning.
-pub(crate) fn current_protocol(executable: &Path, system: bool) -> Result<bool> {
-    let Some(definition) = super::definition::bundle_definition(executable, system) else {
-        return Ok(false);
-    };
-    match std::fs::read_to_string(definition) {
-        Ok(content) => Ok(content.contains("<string>service</string>")
-            && content.contains("<string>run</string>")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error.into()),
-    }
+/// Reject unsupported signed definitions before executing any native mutation.
+pub(crate) fn require_current(executable: &Path, system: bool) -> Result<()> {
+    let definition = super::definition::bundle_definition(executable, system)
+        .context(Message::UnsupportedInstalledProtocol)?;
+    let content = std::fs::read_to_string(definition)?;
+    ensure!(
+        content == crate::infra::identity::macos_service_plist(system),
+        Message::UnsupportedInstalledProtocol
+    );
+    Ok(())
 }
 
-/// Execute new plans against either newly published or restored older signed bundles.
 pub(crate) async fn output(invocation: &Invocation, runner: &impl Runner) -> Result<CommandOutput> {
-    let selected = if invocation.args.len() == 4
+    if invocation.args.len() == 4
         && invocation.args[1] == "service"
         && invocation.args[2] == "native"
-        && !current_protocol(
+    {
+        require_current(
             Path::new(&invocation.program),
             invocation.args[0] == "--system",
-        )? {
-        Invocation::new(
-            &invocation.program,
-            [
-                &invocation.args[0],
-                &"macos-service".into(),
-                &invocation.args[3],
-            ],
-        )
-    } else {
-        invocation.clone()
-    };
-    let output = runner.output(&selected).await?;
-    if !selected.optional {
-        output.check(&selected)?;
+        )?;
+    }
+    let output = runner.output(invocation).await?;
+    if !invocation.optional {
+        output.check(invocation)?;
     }
     Ok(output)
 }
@@ -100,8 +88,8 @@ pub(crate) async fn query(
     runner: &impl Runner,
 ) -> Result<ServiceState> {
     let definition = super::definition::bundle_definition(executable, domain == "system");
-    // Old bundles cannot execute the new private protocol. Query their legacy
-    // job until installation migrates it.
+    // A missing definition is reported as incomplete without executing a bundle.
+    // Existing unsupported definitions are rejected by output().
     let registration = if definition.is_some_and(|p| p.is_file()) {
         let invocation = command(executable, domain, "status");
         let output = output(&invocation, runner).await?;
@@ -182,7 +170,7 @@ pub(crate) fn perform(scope: crate::infra::scope::Scope, action: &str) -> Result
     unsafe extern "C" {}
 
     objc2::rc::autoreleasepool(|_| {
-        let app = crate::system::macos::bundle::current()?;
+        let app = crate::system::macos::services::bundle::current()?;
         let installed = crate::infra::paths::macos_bundle(scope)?.canonicalize()?;
         let main = NSBundle::mainBundle();
         ensure!(
@@ -292,15 +280,22 @@ mod tests {
     const DOMAIN: &str = "gui/501 = {\nservices = {\n}\n}";
 
     fn plan(root: &Path) -> Result<Plan> {
-        super::super::definition::app_service_plan(
+        let plan = super::super::definition::app_service_plan(
             root.join("wlanlogin.app/Contents/MacOS/wlanlogin"),
             false,
             501,
-        )
+        )?;
+        std::fs::create_dir_all(
+            plan.definition
+                .parent()
+                .context("fixture definition parent")?,
+        )?;
+        std::fs::write(&plan.definition, &plan.content)?;
+        Ok(plan)
     }
 
     #[tokio::test]
-    async fn commands_follow_the_bundle_protocol_after_replacement_and_rollback() -> Result<()> {
+    async fn unsupported_bundle_is_rejected_before_native_mutation() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let plan = plan(dir.path())?;
         std::fs::create_dir_all(
@@ -309,29 +304,20 @@ mod tests {
                 .context(Message::MacosServiceDefinitionMissing)?,
         )?;
         let invocation = command(&plan.executable, "gui/501", "unregister");
-        for current in [true, false, true] {
-            std::fs::write(
-                &plan.definition,
-                if current {
-                    plan.content.as_str()
-                } else {
-                    "<string>daemon</string><string>--background</string>"
-                },
-            )?;
-            let runner = FakeRunner::new([(true, ENABLED)]);
-            output(&invocation, &runner).await?;
-            let calls = runner.calls.borrow();
-            assert_eq!(calls.len(), 1);
-            if current {
-                assert_eq!(calls[0].args, ["--user", "service", "native", "unregister"]);
-            } else {
-                assert_eq!(calls[0].args, ["--user", "macos-service", "unregister"]);
-            }
-        }
-        std::fs::write(&plan.definition, &plan.content)?;
-        let runner = FakeRunner::new([(false, "registration failed")]);
+        std::fs::write(
+            &plan.definition,
+            "<string>daemon</string><string>--background</string>",
+        )?;
+        let runner = FakeRunner::default();
         assert!(output(&invocation, &runner).await.is_err());
-        assert_eq!(runner.calls.borrow().len(), 1);
+        assert!(runner.calls.borrow().is_empty());
+        std::fs::write(&plan.definition, &plan.content)?;
+        let runner = FakeRunner::new([(true, ENABLED)]);
+        output(&invocation, &runner).await?;
+        assert_eq!(
+            runner.calls.borrow()[0].args,
+            ["--user", "service", "native", "unregister"]
+        );
         Ok(())
     }
 
@@ -361,9 +347,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_query_never_executes_new_protocol_in_an_old_binary() -> Result<()> {
+    async fn missing_definition_queries_only_native_liveness() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let plan = plan(dir.path())?;
+        std::fs::remove_file(&plan.definition)?;
         let runner = FakeRunner::new([(true, LOADED)]);
         let state = query(
             "gui/501",

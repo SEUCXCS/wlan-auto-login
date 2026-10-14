@@ -4,7 +4,7 @@ use crate::infra::{
     error::{Message, Result},
 };
 use crate::system::define::services::{Action, Plan, ServiceManager, ServiceState};
-use crate::system::shared::services::{fields, lifecycle::execute};
+use crate::system::shared::services::{fields, steps::execute};
 pub(crate) async fn query(system: bool, name: &str, runner: &impl Runner) -> Result<ServiceState> {
     let command = Invocation::new(
         "systemctl",

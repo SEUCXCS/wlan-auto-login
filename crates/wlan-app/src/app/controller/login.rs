@@ -81,7 +81,7 @@ pub async fn prepare(
     let save_only = !state.is_target();
     let mut warning = state.notice();
     let saved = if request.username.is_none() || request.password.is_none() {
-        match store.load().await {
+        match crate::system::flow::credentials::load::run(store).await {
             Ok(value) => value,
             Err(error) => {
                 warning = Some(error.to_string());
@@ -124,8 +124,7 @@ pub async fn execute(
     };
     let remember = form.remember || outcome.is_none();
     if remember {
-        store
-            .save(form.credentials.clone())
+        crate::system::flow::credentials::save::run(paths, store, form.credentials.clone())
             .await
             .context(if outcome.is_some() {
                 Message::SaveAuthenticatedCredentialsFailed
