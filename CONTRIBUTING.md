@@ -119,6 +119,8 @@ Linux 用户后台先检查 logind 活动会话、显示 socket 和用户 system
 
 私有 D-Bus 回归用隔离子进程为官方库设置环境，禁止并行测试修改当前进程的环境。`provider_child` / `read_child` 是 ignored 辅助用例，由父测试显式调用并验证地址属于临时总线；不得直接运行整个套件的 ignored 用例。
 
+macOS Core Location 的长期 RunLoop 每轮必须清空独立的 `autoreleasepool`，及时释放状态查询及回调产生的临时对象；manager 和 delegate 由循环外的 `Retained` 保持存活。Windows `SHGetKnownFolderPath` 的输出通过作用域内的释放守卫管理，成功与失败路径都必须调用 `CoTaskMemFree`。
+
 ### 错误与日志
 
 应用代码使用 `infra::error::{Error, Result, Context, Message}`。通用稳定诊断文本在 `infra/error/message.rs`、凭据诊断模板在 `infra/error/credentials.rs` 用 `#[derive(thiserror::Error)]` 与 `#[error("...")]` 定义；用有意义的字段携带上下文。`anyhow` 仅在错误边界封装外部错误，不作为各模块的公共错误类型。
