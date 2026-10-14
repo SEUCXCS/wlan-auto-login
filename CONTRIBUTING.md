@@ -22,9 +22,13 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 `main.rs` 只调用 `app::run()`。不要向入口增加认证、服务管理或平台分支。
 
+`app::run()` 只解析参数并调用编译期选中的平台 `boot()`。平台启动编排归 `app/bootstrap/`，包括 Windows SCM 应用回调和 macOS AppKit 主线程循环的选择；共享的作用域、日志、应用依赖装配和命令分发由 `app/bootstrap.rs` 的 `entry()` 负责。
+
 | 路径（相对 `crates/wlan-app/src`） | 维护范围 |
 | --- | --- |
-| `app.rs` | Clap 入口、Tokio runtime、日志初始化、作用域与应用依赖装配；Windows 服务回调 |
+| `app.rs` | 应用模块声明、Clap 入口、编译期选择平台 bootstrap |
+| `app/bootstrap.rs` | 平台模块声明、普通 Tokio runtime 的创建、错误记录与限时关闭；共享 `entry()` 初始化日志、作用域与应用依赖并分发命令 |
+| `app/bootstrap/{linux,macos,windows}.rs` | 平台启动编排；Linux 普通入口、macOS AppKit 选择、Windows SCM 应用回调 |
 | `app/context.rs` | 门户客户端、所选路径及 Wi-Fi / 凭据适配器的构建 |
 | `app/cli.rs` | 参数声明、解析与命令分发；把 CLI 参数转换为 controller 请求 |
 | `app/cli/login.rs` | stdin、交互选择、TUI 重试与安装时的凭据输入 |

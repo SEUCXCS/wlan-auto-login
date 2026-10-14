@@ -57,6 +57,7 @@ For safe CLI smoke checks, use only `--help`, subcommand `--help`, and `--versio
 
 `main.rs` delegates to `app::run()`. The module roots are `app.rs`, `infra.rs`, and `system.rs`.
 
+- `app::run()` parses arguments and calls the selected platform's `boot()`. `app/bootstrap.rs` owns the shared Tokio runtime lifecycle and the shared asynchronous `entry()` for scope, logging, dependency assembly, and command dispatch. `app/bootstrap/{linux,macos,windows}.rs` own platform startup orchestration. The Windows bootstrap supplies the application callback to SCM; the macOS bootstrap selects the AppKit main-thread loop.
 - `app/cli.rs`, `app/cli/`, and `app/tui.rs` own arguments, terminal input, interaction, and presentation. `app/context.rs` constructs application dependencies.
 - `app/controller/` exposes reusable login, logout, install, uninstall, and daemon operations. `app/controller/daemon/` contains separate run, start, stop, restart, status, and logs entry points. Return structured results or accept explicit output/cancellation interfaces; do not read terminal input here.
 - `app/daemon.rs` and `app/daemon/` own the daemon lifetime, scheduling, single authentication checks, retry policy, and bounded background credential reads.
