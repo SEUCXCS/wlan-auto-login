@@ -29,6 +29,8 @@ NetworkManager, Secret Service, and native service managers are runtime dependen
 
 macOS bundles are built with `cargo xtask bundle macos`, optionally using `--codesign-identity` or `CODESIGN_IDENTITY` (CLI takes precedence; default is ad-hoc `-`). `xtask/` shares `infra/identity.rs` and renders `packaging/macos/Info.plist`; it builds the explicit `wlanlogin` binary, validates the bundle, and publishes it only after successful signing. Ordinary compilation uses Cargo, not an xtask build subcommand. Bundle generation does not install or launch services.
 
+Keep `CFBundleShortVersionString` tied to the Cargo release version. Reserve an independent integer for `CFBundleVersion` before signing through `xtask/src/build_number.rs`. The ignored `.bundle-build/` directory holds the counter and a stable lock file; atomic reservations are shared across profiles, targets, and output paths within one working copy and survive `cargo clean`. Never reuse a reserved number after a packaging failure or silently reset an invalid counter. New working copies start at 1. Verify persistence, concurrent allocation, and the actual signed bundle metadata when changing this behavior.
+
 `APP_NAME` is the command, executable and directory name `wlanlogin`; `DISPLAY_NAME` is `CXCS WLAN Login` and may contain spaces. Keep these roles separate. The icon source is `assets/icon/icon.svg`; the pre-generated `packaging/macos/icon/icon.icns` is copied to `Contents/Resources/icon.icns` before signing. Keep packaged resources in the shared bundle member inventory so installation, rollback and cleanup accept them.
 
 Run relevant checks after each logical change and the complete set before delivery of an architectural change:

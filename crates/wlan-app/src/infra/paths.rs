@@ -124,7 +124,18 @@ impl Paths {
 #[cfg(windows)]
 pub fn known_folder(id: &windows_sys::core::GUID) -> Result<PathBuf> {
     use std::os::windows::ffi::OsStringExt;
-    // SAFETY: the shell allocates a NUL-terminated UTF-16 string, released with CoTaskMemFree.
+
+    struct PathBuffer(*mut u16);
+    impl Drop for PathBuffer {
+        fn drop(&mut self) {
+            // SAFETY: SHGetKnownFolderPath's output must be freed on success
+            // and failure. CoTaskMemFree also accepts a null pointer.
+            unsafe { windows_sys::Win32::System::Com::CoTaskMemFree(self.0.cast()) };
+        }
+    }
+
+    // SAFETY: the shell initializes its output; the guard owns that allocation
+    // before checking the result and retains it throughout UTF-16 conversion.
     unsafe {
         let mut value = std::ptr::null_mut();
         let result = windows_sys::Win32::UI::Shell::SHGetKnownFolderPath(
@@ -133,6 +144,7 @@ pub fn known_folder(id: &windows_sys::core::GUID) -> Result<PathBuf> {
             std::ptr::null_mut(),
             &mut value,
         );
+        let value = PathBuffer(value);
         crate::infra::error::ensure!(
             result >= 0,
             Message::FailedToResolveSystemDirectoryResultX {
@@ -140,11 +152,10 @@ pub fn known_folder(id: &windows_sys::core::GUID) -> Result<PathBuf> {
             }
         );
         let mut length = 0;
-        while *value.add(length) != 0 {
+        while *value.0.add(length) != 0 {
             length += 1;
         }
-        let path = std::ffi::OsString::from_wide(std::slice::from_raw_parts(value, length));
-        windows_sys::Win32::System::Com::CoTaskMemFree(value.cast());
+        let path = std::ffi::OsString::from_wide(std::slice::from_raw_parts(value.0, length));
         Ok(path.into())
     }
 }

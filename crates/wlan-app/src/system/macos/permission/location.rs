@@ -131,60 +131,65 @@ impl Location {
                     let mut updating = false;
                     let mut activating = None;
                     while !worker.stop.load(Ordering::Acquire) {
-                        let status = read(&manager);
-                        let request = worker.request.swap(false, Ordering::AcqRel);
-                        if request && status == Status::NotDetermined {
-                            if activate() {
-                                activating = Some(Instant::now());
-                                worker.activation.send_replace(Activation::Pending);
-                            } else {
-                                worker.activation.send_replace(Activation::Failed);
-                            }
-                        } else if request {
-                            // Authorization may have changed after the client queued its request.
-                            worker.activation.send_replace(Activation::Requested);
-                        }
-                        let mut requested = false;
-                        if let Some(started) = activating {
-                            if status != Status::NotDetermined {
-                                activating = None;
+                        // Core Location queries and callbacks create autoreleased XPC
+                        // objects. Drain them each turn instead of retaining them until
+                        // this long-lived thread exits; manager and delegate stay retained.
+                        objc2::rc::autoreleasepool(|_| {
+                            let status = read(&manager);
+                            let request = worker.request.swap(false, Ordering::AcqRel);
+                            if request && status == Status::NotDetermined {
+                                if activate() {
+                                    activating = Some(Instant::now());
+                                    worker.activation.send_replace(Activation::Pending);
+                                } else {
+                                    worker.activation.send_replace(Activation::Failed);
+                                }
+                            } else if request {
+                                // Authorization may have changed after the client queued its request.
                                 worker.activation.send_replace(Activation::Requested);
-                            } else if active() {
-                                // Activation acceptance alone is insufficient. Core Location
-                                // ignores in-use requests from an inactive application.
-                                manager.requestWhenInUseAuthorization();
-                                requested = true;
-                                activating = None;
-                                worker.activation.send_replace(Activation::Requested);
-                            } else if started.elapsed() >= Duration::from_secs(3) {
-                                activating = None;
-                                worker.activation.send_replace(Activation::TimedOut);
                             }
-                        }
-                        // macOS CLI-style hosts need an active Location client for CoreWLAN.
-                        // No coordinates are stored, returned over IPC or written to logs.
-                        if !updating && (status == Status::Granted || requested) {
-                            manager.startUpdatingLocation();
-                            updating = true;
-                        } else if updating
-                            && matches!(
-                                status,
-                                Status::Denied | Status::Restricted | Status::Disabled
-                            )
-                        {
-                            manager.stopUpdatingLocation();
-                            updating = false;
-                        }
-                        let status = read(&manager);
-                        worker.status.send_if_modified(|previous| {
-                            if *previous == status {
-                                false
-                            } else {
-                                *previous = status;
-                                true
+                            let mut requested = false;
+                            if let Some(started) = activating {
+                                if status != Status::NotDetermined {
+                                    activating = None;
+                                    worker.activation.send_replace(Activation::Requested);
+                                } else if active() {
+                                    // Activation acceptance alone is insufficient. Core Location
+                                    // ignores in-use requests from an inactive application.
+                                    manager.requestWhenInUseAuthorization();
+                                    requested = true;
+                                    activating = None;
+                                    worker.activation.send_replace(Activation::Requested);
+                                } else if started.elapsed() >= Duration::from_secs(3) {
+                                    activating = None;
+                                    worker.activation.send_replace(Activation::TimedOut);
+                                }
                             }
+                            // macOS CLI-style hosts need an active Location client for CoreWLAN.
+                            // No coordinates are stored, returned over IPC or written to logs.
+                            if !updating && (status == Status::Granted || requested) {
+                                manager.startUpdatingLocation();
+                                updating = true;
+                            } else if updating
+                                && matches!(
+                                    status,
+                                    Status::Denied | Status::Restricted | Status::Disabled
+                                )
+                            {
+                                manager.stopUpdatingLocation();
+                                updating = false;
+                            }
+                            let status = read(&manager);
+                            worker.status.send_if_modified(|previous| {
+                                if *previous == status {
+                                    false
+                                } else {
+                                    *previous = status;
+                                    true
+                                }
+                            });
+                            CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, 0.1, false);
                         });
-                        CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, 0.1, false);
                         // A run loop without sources may return immediately.
                         std::thread::sleep(Duration::from_millis(20));
                     }
