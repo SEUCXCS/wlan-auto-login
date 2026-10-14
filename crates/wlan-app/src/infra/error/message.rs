@@ -2,6 +2,16 @@
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)] // Some messages are used only by other compilation targets.
 pub enum Message {
+    #[error(
+        "Permission was not granted; check the reported status and request authorization in an interactive terminal"
+    )]
+    PermissionNotGranted,
+    #[error("One or more permissions could not be checked")]
+    PermissionCheckFailed,
+    #[error("Timed out waiting for permission diagnostics or authorization")]
+    PermissionTimedOut,
+    #[error("Invalid permission response version, scope, identifier, or results")]
+    PermissionProtocol,
     #[error("Invalid SMAppService response")]
     MacosServiceProtocol,
     #[error("SMAppService must run inside the installed signed application bundle")]
@@ -13,7 +23,7 @@ pub enum Message {
     #[error("Timed out waiting for SMAppService unregistration; application files retained")]
     MacosServiceUnregisterTimedOut,
     #[error(
-        "Background service is registered but needs approval; allow WLAN Login in System Settings > General > Login Items, then run daemon start in the same scope"
+        "Background service is registered but needs approval; allow CXCS WLAN Login in System Settings > General > Login Items, then run service start in the same scope"
     )]
     MacosBackgroundApprovalRequired,
     #[error("Failed to configure Keychain interaction: {status}")]
@@ -48,7 +58,7 @@ pub enum Message {
     #[error("Failed to open user Keychain")]
     FailedToOpenUserKeychain,
     #[error(
-        "Saved credentials are inaccessible; unlock Keychain or allow WLAN Login during a foreground operation"
+        "Saved credentials are inaccessible; unlock Keychain or allow CXCS WLAN Login during a foreground operation"
     )]
     KeychainCredentialInaccessible,
     #[error("Cannot update the existing credential; the original item has been retained")]
@@ -74,7 +84,7 @@ pub enum Message {
     )]
     LocationActivationTimedOut,
     #[error(
-        "Location access was denied; enable WLAN Login in System Settings > Privacy & Security > Location Services"
+        "Location access was denied; enable CXCS WLAN Login in System Settings > Privacy & Security > Location Services"
     )]
     LocationDenied,
     #[error(
@@ -120,7 +130,7 @@ pub enum Message {
     #[error("Installation failed; previous bundle, definition and credential access restored")]
     BundleInstallationRestored,
     #[error(
-        "Location access is unavailable ({state}); allow WLAN Login in System Settings > Privacy & Security > Location Services"
+        "Location access is unavailable ({state}); allow CXCS WLAN Login in System Settings > Privacy & Security > Location Services"
     )]
     LocationUnavailable { state: String },
     #[error(
@@ -145,16 +155,14 @@ pub enum Message {
     InstalledExecutableReturnedAnUnrecognizedVersion,
     #[error("Timed out waiting for service stop; no new start request submitted")]
     TimedOutWaitingForServiceStopNoNew,
-    #[error("Service is not installed; run install first")]
+    #[error("Service is not installed; run service install first")]
     ServiceNotInstalled,
-    #[error("Service installation is incomplete; run install again")]
+    #[error("Service installation is incomplete; run service install again")]
     InstallationIncomplete,
-    #[error("Service is not registered; run install first")]
+    #[error("Service is not registered; run service install first")]
     ServiceNotRegistered,
-    #[error("Service registration was removed; run install again")]
+    #[error("Service registration was removed; run service install again")]
     ServiceRegistrationRemoved,
-    #[error("Failed to read journal; check journalctl availability and access permissions")]
-    FailedToReadJournalCheckJournalctlAvailabilityAnd,
     #[error("Failed to register Ctrl+C listener")]
     FailedToRegisterCtrlCListener,
     #[error("Installation path has no parent directory")]
@@ -185,7 +193,7 @@ pub enum Message {
     SCMResponseIsMissingInstalled,
     #[error("Unknown SCM service state")]
     UnknownSCMServiceState,
-    #[error("Service uninstalled but credential deletion failed; retry uninstall --purge")]
+    #[error("Service uninstalled but credential deletion failed; retry service uninstall --purge")]
     ServiceUninstalledButCredentialDeletionFailedRetryUninstall,
     #[error(
         "Service uninstalled but installed executable could not be removed; close it before retrying"
@@ -345,12 +353,8 @@ pub enum Message {
     InstallationPathContainsControlCharacters,
     #[error("Installation path must be UTF-8")]
     InstallationPathMustBeUTF8,
-    #[error("Log path must be UTF-8")]
-    LogPathMustBeUTF8,
     #[error("Failed to determine service status: {value0}")]
     FailedToDetermineServiceStatus { value0: String },
-    #[error("journalctl failed: {status}")]
-    JournalctlFailedStatus { status: String },
     #[error("No service log entries available")]
     NoServiceLogEntriesAvailable,
     #[error("Service installed and started for scope {value0}; {value1}")]
@@ -405,8 +409,6 @@ pub enum Message {
     FailedToStopDaemonError { error: String },
     #[error("Not connected to Student_CX; deleting local credentials without portal logout")]
     NotConnectedToStudentCXDeletingLocal,
-    #[error("--service is only supported by Windows Service Control Manager")]
-    ServiceIsOnlySupportedByWindowsService,
     #[error("Credentials saved without authentication; credentials have not been verified")]
     CredentialsSavedOffline,
     #[error("Failed to read Wi-Fi SSID; check location permission: {code}")]
@@ -539,14 +541,26 @@ pub enum Message {
     SaveAuthenticatedCredentialsFailed,
     #[error("Failed to save offline credentials; service installation cannot continue")]
     SaveOfflineCredentialsFailed,
-    #[error("Service log output pipe is unavailable")]
-    LogOutputUnavailable,
     #[error("Service entry is not initialized")]
     ServiceEntryUnavailable,
     #[error("Not connected to Student_CX; credentials will be saved without authentication")]
     NotConnectedToTargetWifi,
     #[error("{0}")]
     Detail(String),
+    #[error("Credential event connection closed")]
+    CredentialEventListenerStopped,
+    #[error("Graphical session is not ready for credential provider activation")]
+    SessionNotReady,
+    #[error("Unsupported control protocol; reinstall with the current binary")]
+    ControlProtocol,
+    #[error("Invalid bundle service definition; rebuild with cargo xtask bundle macos")]
+    InvalidBundleServiceDefinition,
+    #[error("Credential generation exhausted")]
+    CredentialGenerationExhausted,
+    #[error("Session generation exhausted")]
+    SessionGenerationExhausted,
+    #[error("Credential permit does not match the selected storage scope")]
+    CredentialPermitScopeMismatch,
 }
 
 impl From<String> for Message {

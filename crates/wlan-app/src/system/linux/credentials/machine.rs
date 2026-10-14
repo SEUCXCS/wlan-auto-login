@@ -89,7 +89,13 @@ impl MachineStore {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
                 Err(error) => return Err(error.into()),
             };
-            validate_private(&path)?;
+            validate_private(&path).map_err(|error| {
+                crate::system::shared::credentials::diagnostics::specific(
+                    error,
+                    crate::infra::error::credentials::Kind::UnsafeStorage,
+                    crate::infra::error::credentials::Stage::Inspect,
+                )
+            })?;
             let modified = metadata.modified()?;
             if background
                 && let Some((old, length, credentials)) = &*self.cache.lock().map_err(|_| {
@@ -121,7 +127,13 @@ impl MachineStore {
                     Zeroizing::new(fs::read(supplied)?)
                 } else {
                     let encrypted = Zeroizing::new(fs::read(&path)?);
-                    crypt("decrypt", &encrypted).await?
+                    crypt("decrypt", &encrypted).await.map_err(|error| {
+                        crate::system::shared::credentials::diagnostics::specific(
+                            error,
+                            crate::infra::error::credentials::Kind::DecryptionFailed,
+                            crate::infra::error::credentials::Stage::Decrypt,
+                        )
+                    })?
                 }
             };
 
@@ -255,7 +267,7 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_corrupt_and_conflicting_files_without_decrypting() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let paths = Paths::test(dir.path().join("cxcs-tools/wlanlogin/secrets"));
+        let paths = Paths::test(dir.path().join("SEUCXCS/wlanlogin/secrets"));
         fs::create_dir_all(&paths.secrets)?;
         for name in ["login.cred", "login.json"] {
             fs::write(paths.secrets.join(name), "invalid secret data")?;
@@ -275,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn deletion_unlinks_leaf_symlinks_but_rejects_redirected_directories() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let mut paths = Paths::test(dir.path().join("cxcs-tools/wlanlogin/secrets"));
+        let mut paths = Paths::test(dir.path().join("SEUCXCS/wlanlogin/secrets"));
         fs::create_dir_all(&paths.secrets)?;
         let original = dir.path().join("outside-secret");
         fs::write(&original, "preserve")?;

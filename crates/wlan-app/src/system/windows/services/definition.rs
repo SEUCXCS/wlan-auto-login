@@ -1,4 +1,5 @@
 use crate::infra::command::Invocation;
+use crate::infra::identity::DISPLAY_NAME;
 #[cfg(target_os = "windows")]
 use crate::infra::paths::Paths;
 use crate::system::define::services::{LABEL, Manager, Plan};
@@ -10,7 +11,7 @@ use std::{ffi::OsStr, path::PathBuf};
 
 pub(crate) fn windows_system_plan(executable: PathBuf, definition: PathBuf) -> Result<Plan> {
     let binary = format!(
-        "\"{}\" --system daemon --service",
+        "\"{}\" --system service run",
         executable
             .to_str()
             .context(Message::InstallationPathMustBeUTF8)?
@@ -37,6 +38,8 @@ pub(crate) fn windows_system_plan(executable: PathBuf, definition: PathBuf) -> R
                     "auto",
                     "obj=",
                     "LocalSystem",
+                    "DisplayName=",
+                    DISPLAY_NAME,
                 ],
             )
             .optional(),
@@ -51,6 +54,8 @@ pub(crate) fn windows_system_plan(executable: PathBuf, definition: PathBuf) -> R
                     "auto",
                     "obj=",
                     "LocalSystem",
+                    "DisplayName=",
+                    DISPLAY_NAME,
                 ],
             ),
             Invocation::new(
@@ -82,11 +87,11 @@ pub(crate) fn windows_plan(executable: PathBuf, definition: PathBuf, sid: &str) 
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!-- {LABEL} -->
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-<RegistrationInfo><Description>Student_CX automatic login</Description></RegistrationInfo>
+<RegistrationInfo><Description>{DISPLAY_NAME} — Student_CX automatic login</Description></RegistrationInfo>
 <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{sid}</UserId></LogonTrigger></Triggers>
 <Principals><Principal id="User"><UserId>{sid}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
 <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>true</StartWhenAvailable><RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable><AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><Hidden>true</Hidden><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings>
-<Actions Context="User"><Exec><Command>{exe}</Command><Arguments>daemon --background</Arguments></Exec></Actions>
+<Actions Context="User"><Exec><Command>{exe}</Command><Arguments>--user service run</Arguments></Exec></Actions>
 </Task>
 "#
     );

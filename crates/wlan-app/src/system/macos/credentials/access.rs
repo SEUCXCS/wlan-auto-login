@@ -1,7 +1,7 @@
 //! Scoped Keychain operations. Serialize the process-wide interaction switch.
 use crate::infra::{
     error::{Context, Message, Result, ensure},
-    identity::{APP_ID, CREDENTIAL_ENTRY, SYSTEM_CREDENTIAL_SERVICE},
+    identity::{APP_ID, CREDENTIAL_ENTRY, DISPLAY_NAME, SYSTEM_CREDENTIAL_SERVICE},
     scope::Scope,
 };
 use crate::system::{
@@ -35,22 +35,6 @@ use wlanlogin_lib::Credentials;
 static INTERACTIVE: AtomicBool = AtomicBool::new(false);
 static OPERATIONS: Mutex<()> = Mutex::new(());
 
-/// The installed process reports only access state, never credential data.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CredentialCheck {
-    version: u32,
-    status: PermissionStatus,
-}
-impl CredentialCheck {
-    pub fn new(status: PermissionStatus) -> Self {
-        Self { version: 1, status }
-    }
-    pub fn into_status(self) -> Result<PermissionStatus> {
-        ensure!(self.version == 1, Message::InstalledCredentialCheckProtocol);
-        Ok(self.status)
-    }
-}
 pub fn configure_interaction(allowed: bool) {
     INTERACTIVE.store(allowed, Ordering::Release);
 }
@@ -153,7 +137,13 @@ fn save_item<T>(
 
 fn load_native(scope: Scope) -> Result<Option<Credentials>> {
     match keychain(scope)?.find_generic_password(service(scope), CREDENTIAL_ENTRY) {
-        Ok((password, _)) => decode(std::str::from_utf8(password.as_ref())?).map(Some),
+        Ok((password, _)) => decode(std::str::from_utf8(password.as_ref()).map_err(|e| {
+            crate::system::shared::credentials::diagnostics::at(
+                e.into(),
+                crate::infra::error::credentials::Stage::Decode,
+            )
+        })?)
+        .map(Some),
         Err(error) if error.code() == -25300 => Ok(None),
         Err(error) => Err(error).context(Message::KeychainCredentialInaccessible),
     }
@@ -300,7 +290,7 @@ fn trusted_applications(binary: Option<&Path>) -> Result<Vec<CFType>> {
 
 fn initial_access(binary: Option<&Path>) -> Result<CFType> {
     let applications = CFArray::from_CFTypes(&trusted_applications(binary)?);
-    let description = CFString::new("WLAN Login saved campus credentials");
+    let description = CFString::new(&format!("{DISPLAY_NAME} saved campus credentials"));
     unsafe {
         let mut access = std::ptr::null_mut();
         let code = SecAccessCreate(
@@ -440,7 +430,7 @@ fn extend_read_access(access: &CFType, applications: &[CFType]) -> Result<bool> 
         }
         // No decrypt-only entry: add one without changing mixed ACLs or owner.
         let apps = CFArray::from_CFTypes(applications);
-        let description = CFString::new("WLAN Login saved campus credentials");
+        let description = CFString::new(&format!("{DISPLAY_NAME} saved campus credentials"));
         let mut acl = std::ptr::null();
         let code = SecACLCreateWithSimpleContents(
             access,

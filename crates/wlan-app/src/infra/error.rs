@@ -1,4 +1,5 @@
 //! Typed application errors with source-preserving boundary conversion.
+pub(crate) mod credentials;
 pub(crate) mod message;
 pub(crate) mod portal;
 pub(crate) use message::Message;
@@ -7,6 +8,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Credential(#[from] credentials::CredentialError),
     #[error("{0}")]
     Message(#[from] Message),
     #[error("{message}: {source}")]
@@ -31,6 +34,10 @@ impl Error {
             Ok(error) => return error,
             Err(error) => error,
         };
+        let error = match error.downcast::<credentials::CredentialError>() {
+            Ok(error) => return Self::Credential(error),
+            Err(error) => error,
+        };
         match error.downcast::<wlanlogin_lib::Error>() {
             Ok(error) => Self::from(error),
             Err(error) => Self::External(error),
@@ -40,6 +47,15 @@ impl Error {
     pub fn downcast_ref<E: std::error::Error + Send + Sync + 'static>(&self) -> Option<&E> {
         match self {
             Self::Context { source, .. } => source.downcast_ref(),
+            Self::Credential(error) => {
+                (error as &dyn std::error::Error)
+                    .downcast_ref()
+                    .or_else(|| {
+                        error
+                            .source_error()
+                            .and_then(|source| source.downcast_ref())
+                    })
+            }
             Self::External(error) => error.downcast_ref(),
             Self::Portal(error) => (&error.source as &dyn std::error::Error).downcast_ref(),
             Self::Message(message) => (message as &dyn std::error::Error).downcast_ref(),

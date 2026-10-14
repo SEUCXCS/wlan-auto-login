@@ -1,10 +1,12 @@
 //! Register signed, bundle-contained jobs and keep approval separate from launchd liveness.
 use crate::infra::{
-    command::{Invocation, Runner},
+    command::{CommandOutput, Invocation, Runner},
     error::{Context, Message, Result, ensure},
     identity::APP_ID,
 };
-use crate::system::define::services::{Action, Plan, ServiceState};
+#[cfg(test)]
+use crate::system::define::services::Plan;
+use crate::system::define::services::{Action, ServiceState};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -34,10 +36,40 @@ pub(crate) fn command(executable: &Path, domain: &str, action: &str) -> Invocati
             } else {
                 "--user"
             },
-            "macos-service",
+            "service",
+            "native",
             action,
         ],
     )
+}
+
+/// Validate the signed service definition before executing native operations.
+pub(crate) fn validate_definition(executable: &Path, system: bool) -> Result<()> {
+    let definition = super::definition::bundle_definition(executable, system)
+        .context(Message::InvalidBundleServiceDefinition)?;
+    let content = std::fs::read_to_string(definition)?;
+    ensure!(
+        content == crate::infra::identity::macos_service_plist(system),
+        Message::InvalidBundleServiceDefinition
+    );
+    Ok(())
+}
+
+pub(crate) async fn output(invocation: &Invocation, runner: &impl Runner) -> Result<CommandOutput> {
+    if invocation.args.len() == 4
+        && invocation.args[1] == "service"
+        && invocation.args[2] == "native"
+    {
+        validate_definition(
+            Path::new(&invocation.program),
+            invocation.args[0] == "--system",
+        )?;
+    }
+    let output = runner.output(invocation).await?;
+    if !invocation.optional {
+        output.check(invocation)?;
+    }
+    Ok(output)
 }
 
 fn decode(text: &str, domain: &str) -> Result<Registration> {
@@ -58,11 +90,11 @@ pub(crate) async fn query(
     runner: &impl Runner,
 ) -> Result<ServiceState> {
     let definition = super::definition::bundle_definition(executable, domain == "system");
-    // Old bundles cannot execute the new private protocol. Query their legacy
-    // job until installation migrates it.
+    // A missing definition is reported as incomplete without executing a bundle.
+    // Existing definitions are validated by output().
     let registration = if definition.is_some_and(|p| p.is_file()) {
         let invocation = command(executable, domain, "status");
-        let output = runner.output(&invocation).await?;
+        let output = output(&invocation, runner).await?;
         output.check(&invocation)?;
         Some(decode(&output.stdout, domain)?)
     } else {
@@ -106,19 +138,18 @@ pub(crate) async fn manage(
     domain: &str,
     target: &str,
     executable: &Path,
-    plan: &Plan,
     action: Action,
     runner: &impl Runner,
 ) -> Result<()> {
     let live = super::manager::query(domain, target, runner).await?;
     if matches!(action, Action::Stop | Action::Restart) {
-        super::manager::manage(domain, target, plan, Action::Stop, live, runner).await?;
+        super::manager::stop(target, live, runner).await?;
     } else if live.registered {
-        return super::manager::manage(domain, target, plan, action, live, runner).await;
+        return super::manager::start(target, runner).await;
     }
     if !matches!(action, Action::Stop) {
         let invocation = command(executable, domain, "register");
-        let output = runner.output(&invocation).await?;
+        let output = output(&invocation, runner).await?;
         output.check(&invocation)?;
         ensure!(
             decode(&output.stdout, domain)? == Registration::Enabled,
@@ -140,7 +171,7 @@ pub(crate) fn perform(scope: crate::infra::scope::Scope, action: &str) -> Result
     unsafe extern "C" {}
 
     objc2::rc::autoreleasepool(|_| {
-        let app = crate::system::macos::bundle::current()?;
+        let app = crate::system::macos::services::bundle::current()?;
         let installed = crate::infra::paths::macos_bundle(scope)?.canonicalize()?;
         let main = NSBundle::mainBundle();
         ensure!(
@@ -250,11 +281,45 @@ mod tests {
     const DOMAIN: &str = "gui/501 = {\nservices = {\n}\n}";
 
     fn plan(root: &Path) -> Result<Plan> {
-        super::super::definition::app_service_plan(
+        let plan = super::super::definition::app_service_plan(
             root.join("wlanlogin.app/Contents/MacOS/wlanlogin"),
             false,
             501,
-        )
+        )?;
+        std::fs::create_dir_all(
+            plan.definition
+                .parent()
+                .context("fixture definition parent")?,
+        )?;
+        std::fs::write(&plan.definition, &plan.content)?;
+        Ok(plan)
+    }
+
+    #[tokio::test]
+    async fn invalid_bundle_definition_is_rejected_before_native_mutation() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let plan = plan(dir.path())?;
+        std::fs::create_dir_all(
+            plan.definition
+                .parent()
+                .context(Message::MacosServiceDefinitionMissing)?,
+        )?;
+        let invocation = command(&plan.executable, "gui/501", "unregister");
+        std::fs::write(
+            &plan.definition,
+            "<plist><dict><key>Label</key><string>unrelated.app</string></dict></plist>",
+        )?;
+        let runner = FakeRunner::default();
+        assert!(output(&invocation, &runner).await.is_err());
+        assert!(runner.calls.borrow().is_empty());
+        std::fs::write(&plan.definition, &plan.content)?;
+        let runner = FakeRunner::new([(true, ENABLED)]);
+        output(&invocation, &runner).await?;
+        assert_eq!(
+            runner.calls.borrow()[0].args,
+            ["--user", "service", "native", "unregister"]
+        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -283,9 +348,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_query_never_executes_new_protocol_in_an_old_binary() -> Result<()> {
+    async fn missing_definition_queries_only_native_liveness() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let plan = plan(dir.path())?;
+        std::fs::remove_file(&plan.definition)?;
         let runner = FakeRunner::new([(true, LOADED)]);
         let state = query(
             "gui/501",
@@ -314,7 +380,6 @@ mod tests {
             "gui/501",
             "gui/501/dev.cxcs.tools.wlanlogin",
             &plan.executable,
-            &plan,
             Action::Stop,
             &runner,
         )
@@ -333,7 +398,6 @@ mod tests {
             "gui/501",
             "gui/501/dev.cxcs.tools.wlanlogin",
             &plan.executable,
-            &plan,
             Action::Restart,
             &runner,
         )
@@ -366,7 +430,6 @@ mod tests {
                 "gui/501",
                 "gui/501/dev.cxcs.tools.wlanlogin",
                 &plan.executable,
-                &plan,
                 Action::Start,
                 &runner
             )

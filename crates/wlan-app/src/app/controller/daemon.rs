@@ -1,6 +1,11 @@
-pub(crate) mod logs;
-pub(crate) mod restart;
-pub(crate) mod run;
-pub(crate) mod start;
-pub(crate) mod status;
-pub(crate) mod stop;
+use crate::app::{context::Context, daemon};
+use crate::infra::error::Result;
+
+pub async fn run(context: &Context, managed: bool) -> Result<()> {
+    crate::system::flow::run::run(
+        &context.paths,
+        managed,
+        daemon::run(&context.client, &context.paths, managed),
+    )
+    .await
+}

@@ -4,8 +4,8 @@ use crate::infra::{
     error::{Message, Result},
 };
 use crate::system::define::services::{Action, LABEL, Plan, ServiceState};
-use crate::system::shared::services::lifecycle::wait_task_stopped;
-use crate::system::shared::services::{fields, lifecycle::execute};
+use crate::system::shared::services::steps::wait_task_stopped;
+use crate::system::shared::services::{fields, steps::execute};
 pub(crate) async fn query_task(name: &str, runner: &impl Runner) -> Result<ServiceState> {
     let command = windows_query(name);
     let result = runner.output(&command).await?;
@@ -194,8 +194,8 @@ mod tests {
     #[test]
     fn scm_registration_commands_and_query_share_the_service_name() -> Result<()> {
         let plan = crate::system::windows::services::definition::windows_system_plan(
-            r"C:\Program Files\cxcs-tools\wlanlogin\wlanlogin-daemon.exe".into(),
-            r"C:\ProgramData\cxcs-tools\wlanlogin\service.json".into(),
+            r"C:\Program Files\SEUCXCS\wlanlogin\wlanlogin-daemon.exe".into(),
+            r"C:\ProgramData\SEUCXCS\wlanlogin\service.json".into(),
         )?;
         let name = plan.manager.name();
         assert_eq!(name, "dev.cxcs.tools.wlanlogin");

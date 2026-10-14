@@ -1,5 +1,6 @@
 mod login;
 mod output;
+pub(super) mod permission;
 use crate::system::define::credentials::CredentialMode;
 use clap::{Args, Parser, Subcommand};
 use wlanlogin_lib::Line;
@@ -32,18 +33,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    #[cfg(target_os = "macos")]
-    #[command(hide = true)]
-    MacosService { action: MacosServiceAction },
-    #[cfg(target_os = "macos")]
-    #[command(hide = true)]
-    MacosCredentialCheck,
-    #[cfg(target_os = "macos")]
-    #[command(hide = true)]
-    MacosHost {
-        #[arg(long)]
-        system_helper: bool,
-    },
     /// 登录校园网；不在 Student_CX 时仅保存凭据，凭据不足时打开交互界面
     Login(LoginArgs),
     /// 注销当前校园网会话
@@ -52,46 +41,86 @@ pub enum Command {
         #[arg(long)]
         forget: bool,
     },
-    /// 直接运行后台登录循环，或管理已安装的系统服务
-    #[command(subcommand_negates_reqs = true, args_conflicts_with_subcommands = true)]
+    /// 在当前进程运行自动登录循环
     Daemon {
-        #[command(subcommand)]
-        command: Option<DaemonCommand>,
+        // Internal macOS mode that runs only the Wi-Fi/Location host in the desktop
+        // user session. Used by foreground commands and system services; skips login.
+        #[cfg(target_os = "macos")]
         #[arg(long, hide = true)]
-        background: bool,
-        #[arg(long, hide = true)]
-        service: bool,
+        internal_wifi_host: bool,
+        // Select the desktop-user host serving system-scope clients, without root.
+        #[cfg(target_os = "macos")]
+        #[arg(long, hide = true, requires = "internal_wifi_host")]
+        system_helper: bool,
     },
-    /// 安装自动启动服务；管理员默认安装系统服务，首次登录强制保存凭据
+    /// 管理用户或系统范围的后台服务
+    #[command(subcommand)]
+    Service(ServiceCommand),
+    /// 查询或获取当前平台的权限
+    #[command(subcommand)]
+    Permission(PermissionCommand),
+}
+
+#[derive(Subcommand)]
+pub enum ServiceCommand {
+    /// 安装并启动服务；首次登录强制保存凭据
     Install(LoginArgs),
-    /// 停止并卸载后台服务，保留已保存的账号密码
+    /// 停止并卸载服务，保留已保存的账号密码
     Uninstall {
         /// 同时清理所选范围的应用日志、配置、运行文件和凭据
         #[arg(long)]
         purge: bool,
     },
+    /// 启动已安装的服务
+    Start,
+    /// 停止服务，保留安装和自动启动设置
+    Stop,
+    /// 重启已安装的服务
+    Restart,
+    /// 查看服务安装、注册、运行状态和已安装版本
+    Status,
+    /// 查看服务日志
+    Logs(LogsArgs),
+    /// 图形会话就绪后同步激活环境并通知 daemon（Linux 用户范围）
+    #[cfg(target_os = "linux")]
+    SessionReady,
+    /// 注销前撤销当前图形会话的就绪通知（Linux 用户范围）
+    #[cfg(target_os = "linux")]
+    SessionEnd,
+    #[command(hide = true)]
+    Run,
+    #[cfg(target_os = "macos")]
+    #[command(hide = true, subcommand)]
+    Native(NativeServiceCommand),
 }
 
 #[cfg(target_os = "macos")]
-#[derive(Clone, Copy, clap::ValueEnum)]
-pub enum MacosServiceAction {
+#[derive(Clone, Copy, Subcommand)]
+pub enum NativeServiceCommand {
     Status,
     Register,
     Unregister,
 }
 
-#[derive(Subcommand, Debug, PartialEq, Eq)]
-pub enum DaemonCommand {
-    /// 启动已安装的系统服务
-    Start,
-    /// 停止已安装的系统服务，保留安装和自动启动设置
-    Stop,
-    /// 重启已安装的系统服务
-    Restart,
-    /// 查看系统服务的安装、运行状态和已安装版本
-    Status,
-    /// 查看已安装服务的日志
-    Logs(LogsArgs),
+#[derive(Subcommand)]
+pub enum PermissionCommand {
+    /// 列出当前平台支持的权限
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// 查询权限状态，不弹出授权窗口；省略 ID 时查询全部
+    Check {
+        id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// 请求指定权限并报告结果；需要交互式终端
+    Get {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Args, Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,93 +172,42 @@ pub(super) async fn dispatch(
     let paths = &context.paths;
     if !matches!(
         args.command,
-        Command::Daemon {
-            command: Some(DaemonCommand::Status | DaemonCommand::Logs(_)),
-            ..
-        }
+        Command::Service(ServiceCommand::Status | ServiceCommand::Logs(_))
     ) {
-        #[cfg(target_os = "macos")]
-        let read_only = matches!(
-            args.command,
-            Command::MacosService {
-                action: MacosServiceAction::Status
-            }
-        );
-        #[cfg(not(target_os = "macos"))]
-        let read_only = false;
-        if !read_only {
-            paths.scope.require_access()?;
-        }
+        paths.scope.require_access()?;
     }
     match args.command {
-        #[cfg(target_os = "macos")]
-        Command::MacosService { action } => {
-            let action = match action {
-                MacosServiceAction::Status => "status",
-                MacosServiceAction::Register => "register",
-                MacosServiceAction::Unregister => "unregister",
-            };
-            println!(
-                "{}",
-                crate::system::macos::services::app_service::perform(paths.scope, action)?
-            );
-            Ok(())
-        }
-        #[cfg(target_os = "macos")]
-        Command::MacosCredentialCheck => {
-            let status =
-                crate::system::macos::credentials::access::status(paths.scope, false).await?;
-            let result = crate::system::macos::credentials::access::CredentialCheck::new(status);
-            println!("{}", serde_json::to_string(&result)?);
-            Ok(())
-        }
-        #[cfg(target_os = "macos")]
-        Command::MacosHost { system_helper } => {
-            use crate::system::macos::host::{Host, Role};
-            let host = Host::start(if system_helper {
-                Role::System
-            } else {
-                Role::Foreground
-            })
-            .await?;
-            let mut shutdown = crate::infra::shutdown::Shutdown::new()?;
-            crate::infra::shutdown::until_stopped(host.wait(), shutdown.wait()).await
-        }
         Command::Login(args) => login::run(context, args, false).await,
         Command::Logout { forget } => {
             #[cfg(target_os = "macos")]
             {
                 use std::io::IsTerminal;
                 if let Err(error) =
-                    crate::system::macos::host::prepare(std::io::stderr().is_terminal()).await
+                    crate::system::macos::runtime::host::prepare(std::io::stderr().is_terminal())
+                        .await
                 {
                     tracing::warn!(%error, "Wi-Fi authorization unavailable during logout");
                 }
             }
             controller::logout::run(&context.client, paths, forget).await
         }
-        Command::Install(args) => login::run(context, args, true).await,
-        Command::Uninstall { purge } => controller::uninstall::run(paths, purge).await,
-        Command::Daemon {
-            command: None,
-            background,
-            service,
-        } => controller::daemon::run::run(context, background, service).await,
-        Command::Daemon {
-            command: Some(command),
-            ..
-        } => match command {
-            DaemonCommand::Start => controller::daemon::start::run(paths).await,
-            DaemonCommand::Stop => controller::daemon::stop::run(paths).await,
-            DaemonCommand::Restart => controller::daemon::restart::run(paths).await,
-            DaemonCommand::Status => {
-                let reports =
-                    controller::daemon::status::run(paths, !args.user && !args.system).await?;
-                println!("{}", output::status(&reports));
-                controller::daemon::status::check(&reports)
+        Command::Daemon { .. } => controller::daemon::run(context, false).await,
+        Command::Service(command) => match command {
+            ServiceCommand::Install(args) => login::run(context, args, true).await,
+            ServiceCommand::Uninstall { purge } => {
+                controller::service::uninstall::run(paths, purge).await
             }
-            DaemonCommand::Logs(options) => {
-                controller::daemon::logs::run(
+            ServiceCommand::Start => controller::service::start::run(paths).await,
+            ServiceCommand::Stop => controller::service::stop::run(paths).await,
+            ServiceCommand::Restart => controller::service::restart::run(paths).await,
+            ServiceCommand::Status => {
+                let reports =
+                    controller::service::status::run(paths, !args.user && !args.system).await?;
+                println!("{}", output::status(&reports));
+                controller::service::status::check(&reports)
+            }
+            ServiceCommand::Logs(options) => {
+                controller::service::logs::run(
                     paths,
                     crate::system::define::services::LogOptions {
                         lines: options.lines,
@@ -240,148 +218,191 @@ pub(super) async fn dispatch(
                 )
                 .await
             }
+            #[cfg(target_os = "linux")]
+            ServiceCommand::SessionReady | ServiceCommand::SessionEnd => {
+                unreachable!("session hooks are handled by bootstrap")
+            }
+            ServiceCommand::Run => unreachable!("service process entry is handled by bootstrap"),
+            #[cfg(target_os = "macos")]
+            ServiceCommand::Native(_) => {
+                unreachable!("native service entry is handled by bootstrap")
+            }
         },
+        Command::Permission(_) => {
+            unreachable!("permission entry is handled by bootstrap")
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
+
     #[test]
-    fn cleanup_flags_are_explicit_and_keep_the_selected_scope() {
-        for flag in ["--user", "--system"] {
-            let parsed = Cli::try_parse_from(["app", flag, "uninstall", "--purge"]);
+    fn service_commands_keep_scope_and_cleanup_options() {
+        for scope in ["--user", "--system"] {
+            for action in [
+                "install",
+                "uninstall",
+                "start",
+                "stop",
+                "restart",
+                "status",
+                "logs",
+                "run",
+            ] {
+                assert!(Cli::try_parse_from(["app", scope, "service", action]).is_ok());
+                assert!(Cli::try_parse_from(["app", "service", action, scope]).is_ok());
+            }
             assert!(matches!(
-                parsed,
+                Cli::try_parse_from(["app", scope, "service", "uninstall", "--purge"]),
                 Ok(Cli {
-                    command: Command::Uninstall { purge: true },
+                    command: Command::Service(ServiceCommand::Uninstall { purge: true }),
                     ..
                 })
             ));
-            let parsed = Cli::try_parse_from(["app", "logout", "--forget", flag]);
             assert!(matches!(
-                parsed,
+                Cli::try_parse_from(["app", "logout", "--forget", scope]),
                 Ok(Cli {
                     command: Command::Logout { forget: true },
                     ..
                 })
             ));
         }
-        assert!(matches!(
-            Cli::try_parse_from(["app", "uninstall"]),
-            Ok(Cli {
-                command: Command::Uninstall { purge: false },
-                ..
-            })
-        ));
-        assert!(matches!(
-            Cli::try_parse_from(["app", "logout"]),
-            Ok(Cli {
-                command: Command::Logout { forget: false },
-                ..
-            })
-        ));
-        assert!(Cli::try_parse_from(["app", "uninstall", "--forget"]).is_err());
+        assert!(Cli::try_parse_from(["app", "--user", "--system", "service", "install"]).is_err());
+        assert!(Cli::try_parse_from(["app", "service", "uninstall", "--forget"]).is_err());
         assert!(Cli::try_parse_from(["app", "logout", "--purge"]).is_err());
     }
+
     #[test]
-    fn scope_flags_work_with_every_command() {
+    fn daemon_runs_only_the_loop_and_service_controls_are_separate() {
+        assert!(matches!(
+            Cli::try_parse_from(["app", "daemon"]),
+            Ok(Cli {
+                command: Command::Daemon { .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn logs_parse_without_starting_a_service() {
+        assert!(matches!(
+            Cli::try_parse_from(["app", "--system", "service", "logs", "-n", "0", "-f"]),
+            Ok(Cli {
+                command: Command::Service(ServiceCommand::Logs(LogsArgs {
+                    lines: 0,
+                    follow: true
+                })),
+                ..
+            })
+        ));
+        assert!(Cli::try_parse_from(["app", "service", "logs", "-n", "-1"]).is_err());
+        assert!(Cli::try_parse_from(["app", "service", "--unknown-option", "logs"]).is_err());
+    }
+
+    #[test]
+    fn public_help_exposes_service_and_hides_process_entries() {
+        let mut command = Cli::command();
+        let help = command.render_help().to_string();
+        assert!(help.contains("service"));
+        let daemon = command.find_subcommand_mut("daemon");
+        assert!(daemon.is_some());
+        if let Some(daemon) = daemon {
+            let help = daemon.render_help().to_string();
+            assert!(!help.contains("--internal-wifi-host"));
+            assert!(!help.contains("--system-helper"));
+        }
+        let service = command.find_subcommand_mut("service");
+        assert!(service.is_some());
+        if let Some(service) = service {
+            let help = service.render_help().to_string();
+            assert!(help.contains("install") && help.contains("status"));
+            assert!(!help.contains("native") && !help.contains("  run"));
+        }
+        assert!(help.contains("permission"));
+    }
+
+    #[test]
+    fn permission_arguments_are_available_on_every_platform() {
         for args in [
-            vec!["app", "--system", "daemon", "status"],
-            vec!["app", "daemon", "start", "--system"],
-            vec!["app", "--user", "daemon"],
-            vec!["app", "--system", "install"],
-            vec!["app", "daemon", "logs", "--system"],
+            vec!["app", "permission", "list"],
+            vec!["app", "permission", "list", "--json"],
+            vec!["app", "permission", "check"],
+            vec!["app", "permission", "check", "--json"],
+            vec![
+                "app",
+                "--system",
+                "permission",
+                "check",
+                "macos.keychain",
+                "--json",
+            ],
+            vec!["app", "permission", "get", "macos.location"],
+            vec!["app", "permission", "get", "custom.permission", "--json"],
         ] {
             assert!(Cli::try_parse_from(args).is_ok());
         }
-        assert!(Cli::try_parse_from(["app", "--user", "--system", "install"]).is_err());
-    }
-    #[test]
-    fn log_options_parse_without_starting_a_daemon() {
-        for (arguments, expected) in [
-            (
-                vec!["app", "daemon", "logs"],
-                LogsArgs {
-                    lines: 100,
-                    follow: false,
-                },
-            ),
-            (
-                vec!["app", "--system", "daemon", "logs", "-n", "0", "-f"],
-                LogsArgs {
-                    lines: 0,
-                    follow: true,
-                },
-            ),
-        ] {
-            assert!(matches!(Cli::try_parse_from(arguments), Ok(Cli {
-                command: Command::Daemon { command: Some(DaemonCommand::Logs(options)), .. }, ..
-            }) if options == expected));
-        }
-        assert!(Cli::try_parse_from(["app", "daemon", "logs", "-n", "-1"]).is_err());
-        assert!(Cli::try_parse_from(["app", "daemon", "--background", "logs"]).is_err());
+        assert!(Cli::try_parse_from(["app", "permission", "get"]).is_err());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn daemon_without_subcommand_still_runs_the_process() {
-        for arguments in [vec!["app", "daemon"], vec!["app", "daemon", "--background"]] {
+    fn native_service_arguments_are_explicit() {
+        for args in [
+            vec!["app", "service", "native", "status"],
+            vec!["app", "--user", "service", "native", "register"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn internal_wifi_host_selects_a_separate_daemon_mode() {
+        for system_helper in [false, true] {
+            let mut args = vec!["app", "daemon", "--internal-wifi-host"];
+            if system_helper {
+                args.push("--system-helper");
+            }
             assert!(matches!(
-                Cli::try_parse_from(arguments),
+                Cli::try_parse_from(args),
                 Ok(Cli {
-                    user: _,
-                    system: _,
-                    command: Command::Daemon { command: None, .. }
-                })
+                    command: Command::Daemon {
+                        internal_wifi_host: true,
+                        system_helper: actual,
+                    },
+                    ..
+                }) if actual == system_helper
             ));
         }
+        assert!(Cli::try_parse_from(["app", "daemon", "--system-helper"]).is_err());
         assert!(matches!(
-            Cli::try_parse_from(["app", "daemon", "status"]),
-            Ok(Cli {
-                user: _,
-                system: _,
-                command: Command::Daemon {
-                    command: Some(DaemonCommand::Status),
-                    background: false,
-                    service: false
-                }
-            })
+            Cli::try_parse_from(["app", "daemon", "--internal-wifi-host", "--help"]),
+            Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp
         ));
-        assert!(Cli::try_parse_from(["app", "daemon", "--background", "status"]).is_err());
+        assert!(matches!(
+            Cli::try_parse_from(["app", "daemon", "--unsupported-host-option", "--help"]),
+            Err(error) if error.kind() == clap::error::ErrorKind::UnknownArgument
+        ));
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
-    fn daemon_service_controls_are_subcommands() {
-        for (argument, expected) in [
-            ("start", DaemonCommand::Start),
-            ("stop", DaemonCommand::Stop),
-            ("restart", DaemonCommand::Restart),
-        ] {
-            let parsed = Cli::try_parse_from(["app", "daemon", argument]);
-            assert!(matches!(parsed, Ok(Cli { user: _, system: _,
-                command: Command::Daemon { command: Some(command), background: false, service: false }
-            }) if command == expected));
-            assert!(Cli::try_parse_from(["app", "daemon", "--background", argument]).is_err());
+    fn internal_wifi_host_is_not_available_on_other_platforms() {
+        for option in ["--internal-wifi-host", "--system-helper"] {
+            assert!(Cli::try_parse_from(["app", "daemon", option]).is_err());
         }
     }
 
     #[test]
     fn explicit_tui_and_non_interactive_are_mutually_exclusive() {
-        assert!(
-            Cli::try_parse_from(["app", "login", "--interactive", "--non-interactive"]).is_err()
-        );
-        let parsed = Cli::try_parse_from(["app", "login", "--interactive", "--remember-me"]);
-        assert!(matches!(
-            parsed,
-            Ok(Cli {
-                user: _,
-                system: _,
-                command: Command::Login(LoginArgs {
-                    interactive: true,
-                    remember_me: true,
-                    ..
-                })
-            })
-        ));
+        for command in [vec!["login"], vec!["service", "install"]] {
+            let mut args = vec!["app"];
+            args.extend(command);
+            args.extend(["--interactive", "--non-interactive"]);
+            assert!(Cli::try_parse_from(args).is_err());
+        }
     }
 }

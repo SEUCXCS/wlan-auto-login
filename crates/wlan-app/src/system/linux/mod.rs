@@ -1,6 +1,10 @@
 #[cfg(target_os = "linux")]
 pub(crate) mod credentials;
+#[cfg(target_os = "linux")]
+pub(crate) mod flow;
 pub(crate) mod permission;
+#[cfg(target_os = "linux")]
+pub(crate) mod runtime;
 pub(crate) mod services;
 #[cfg(target_os = "linux")]
 pub(crate) mod wifi;

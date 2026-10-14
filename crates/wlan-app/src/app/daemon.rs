@@ -26,7 +26,7 @@ pub async fn run(client: &Client, paths: &Paths, managed: bool) -> Result<()> {
         {
             tokio::select! {
                 result = shutdown.wait() => result,
-                _ = crate::system::windows::services::runtime::stop_signal() => Ok(()),
+                _ = crate::system::windows::runtime::service::stop_signal() => Ok(()),
             }
         }
         #[cfg(not(windows))]
@@ -42,11 +42,13 @@ async fn run_inner(client: &Client, paths: &Paths, managed: bool) -> Result<()> 
     ensure_scope(paths)?;
     stores::prepare_daemon()?;
     let _singleton = control::singleton(paths)?;
-    let (_server, mut commands) = control::serve_with_mode(paths, managed).await?;
+    let (server, mut commands) = control::serve_with_mode(paths, managed).await?;
     let wake = tokio::sync::Notify::new();
+    let (session, readiness) =
+        tokio::sync::watch::channel(crate::system::define::credentials::SessionState::default());
     until_stopped(
-        runtime::run_loop(client, paths, &wake),
-        runtime::control_stop(&mut commands, &wake),
+        runtime::run_loop(client, paths, &wake, readiness, &server.status),
+        runtime::control_stop_with_session(&mut commands, &wake, &session),
     )
     .await
 }

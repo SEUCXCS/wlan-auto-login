@@ -182,7 +182,7 @@ mod tests {
             .build()?;
         runtime.block_on(async {
             let mut shutdown = Shutdown::new()?;
-            // Cancelling a wait must preserve the listener, unlike the old loop.
+            // Cancelling a wait must preserve the listener for subsequent shutdown signals.
             assert!(
                 tokio::time::timeout(Duration::from_millis(10), shutdown.wait())
                     .await

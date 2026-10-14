@@ -1,3 +1,8 @@
 /target/
+/.bundle-build/
+
 .env
 *.log
+
+# macOS
+.DS_Store

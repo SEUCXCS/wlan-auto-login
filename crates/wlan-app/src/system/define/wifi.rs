@@ -36,11 +36,3 @@ impl WifiState {
         }
     }
 }
-
-pub async fn wifi_state(wifi: &impl WifiConnection) -> WifiState {
-    match wifi.target_session().await {
-        Ok(Some(_)) => WifiState::Target,
-        Ok(None) => WifiState::Other,
-        Err(error) => WifiState::Unavailable(format!("{error:#}")),
-    }
-}

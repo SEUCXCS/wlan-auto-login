@@ -1,5 +1,6 @@
 //! Service contracts, installation descriptions and normalized manager state.
 pub use crate::infra::identity::APP_ID as LABEL;
+use crate::infra::scope::Scope;
 use crate::infra::{
     command::{Invocation, Runner},
     error::Result,
@@ -9,8 +10,6 @@ use std::{future::Future, path::PathBuf};
 pub(crate) enum Manager {
     #[cfg(any(target_os = "linux", test))]
     Systemd { system: bool },
-    #[cfg(any(target_os = "macos", test))]
-    Launchd { domain: String, target: String },
     #[cfg(any(target_os = "macos", test))]
     MacosAppService {
         domain: String,
@@ -83,9 +82,50 @@ pub(crate) trait ServiceManager {
 
 #[derive(Debug)]
 pub enum LogSource {
-    #[cfg(any(target_os = "linux", test))]
-    Journal(Invocation),
     File(PathBuf),
 }
 
 pub(crate) use crate::infra::file_log::LogOptions;
+
+pub struct InstallationReport {
+    pub scope: Scope,
+    pub manager_label: &'static str,
+    pub service_name: String,
+    pub executable: PathBuf,
+    pub definition: PathBuf,
+    pub files: Artifacts,
+    pub registration_missing: bool,
+    pub state: Option<Result<ServiceState>>,
+    pub version: Option<Result<String>>,
+    pub runtime: Option<Result<crate::infra::control::RuntimeStatus>>,
+}
+
+pub(crate) struct Artifacts {
+    pub definition: bool,
+    pub executable: bool,
+}
+impl Artifacts {
+    pub fn complete(&self) -> bool {
+        self.definition && self.executable
+    }
+
+    pub(crate) fn any(&self) -> bool {
+        self.definition || self.executable
+    }
+}
+
+pub(crate) trait LogBackend {
+    fn source(
+        &self,
+        paths: &crate::infra::paths::Paths,
+        plan: &Plan,
+        options: LogOptions,
+    ) -> Result<LogSource>;
+    fn read(
+        &self,
+        source: LogSource,
+        options: LogOptions,
+        output: &mut impl std::io::Write,
+        stop: impl Future<Output = std::io::Result<()>>,
+    ) -> impl Future<Output = Result<()>>;
+}

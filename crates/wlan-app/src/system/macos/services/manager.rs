@@ -3,8 +3,8 @@ use crate::infra::{
     command::{Invocation, Runner},
     error::{Message, Result},
 };
-use crate::system::define::services::{Action, Plan, ServiceState};
-use crate::system::shared::services::{fields, lifecycle::execute};
+use crate::system::define::services::ServiceState;
+use crate::system::shared::services::{fields, steps::execute};
 pub(crate) async fn query(
     domain: &str,
     target: &str,
@@ -28,42 +28,17 @@ pub(crate) async fn query(
         Ok(ServiceState::absent())
     }
 }
-pub(crate) async fn manage(
-    domain: &str,
-    target: &str,
-    plan: &Plan,
-    action: Action,
-    state: ServiceState,
-    runner: &impl Runner,
-) -> Result<()> {
-    use std::ffi::OsStr;
-    match action {
-        Action::Stop | Action::Restart if state.registered => {
-            execute(runner, Invocation::new("launchctl", ["bootout", target])).await?;
-        }
-        _ => {}
+pub(crate) async fn stop(target: &str, state: ServiceState, runner: &impl Runner) -> Result<()> {
+    if state.registered {
+        execute(runner, Invocation::new("launchctl", ["bootout", target])).await?;
     }
-    match action {
-        Action::Start if state.registered => {
-            execute(runner, Invocation::new("launchctl", ["kickstart", target])).await
-        }
-        Action::Start | Action::Restart => {
-            execute(
-                runner,
-                Invocation::new(
-                    "launchctl",
-                    [
-                        OsStr::new("bootstrap"),
-                        OsStr::new(domain),
-                        plan.definition.as_os_str(),
-                    ],
-                ),
-            )
-            .await
-        }
-        Action::Stop => Ok(()),
-    }
+    Ok(())
 }
+
+pub(crate) async fn start(target: &str, runner: &impl Runner) -> Result<()> {
+    execute(runner, Invocation::new("launchctl", ["kickstart", target])).await
+}
+
 fn parse_launchd(text: &str) -> Result<ServiceState> {
     // Only parse the job's own properties, not nested resource/exit dictionaries.
     let mut depth = 0usize;
@@ -111,8 +86,6 @@ fn launchd_domain_contains(text: &str, label: &str) -> bool {
 mod tests {
     use super::*;
     use crate::infra::command::tests::FakeRunner;
-    use crate::system::define::services::Manager;
-    use crate::system::define::services::ServiceManager;
     #[test]
     fn launchd_reads_only_top_level_job_properties() -> Result<()> {
         let state = parse_launchd(
@@ -126,23 +99,17 @@ mod tests {
     }
     #[tokio::test]
     async fn launchd_unloaded_job_requires_an_accessible_domain() -> Result<()> {
-        let manager = Manager::Launchd {
-            domain: "gui/501".into(),
-            target: "gui/501/dev.cxcs.tools.wlanlogin".into(),
-        };
+        let domain = "gui/501";
+        let target = "gui/501/dev.cxcs.tools.wlanlogin";
         let runner = FakeRunner::new([
             (false, "missing job"),
             (true, "gui/501 = {\nservices = {\n}\n}"),
         ]);
-        let state = manager.query(&runner).await?;
+        let state = query(domain, target, &runner).await?;
         assert!(!state.running);
         assert!(!state.registered);
-        assert!(
-            manager.installed(&state),
-            "an unloaded plist remains installed"
-        );
         let runner = FakeRunner::new([(false, "missing job"), (false, "missing domain")]);
-        assert!(manager.query(&runner).await.is_err());
+        assert!(query(domain, target, &runner).await.is_err());
         Ok(())
     }
 }

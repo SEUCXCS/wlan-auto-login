@@ -1,14 +1,16 @@
 //! Stable native identifiers and names shared by all application adapters.
 pub const APP_ID: &str = "dev.cxcs.tools.wlanlogin";
-pub const ORGANIZATION: &str = "cxcs-tools";
+pub const ORGANIZATION: &str = "SEUCXCS";
+/// Command, executable and directory name; keep separate from the display name.
 pub const APP_NAME: &str = "wlanlogin";
+pub const DISPLAY_NAME: &str = "CXCS WLAN Login";
 pub const CREDENTIAL_ENTRY: &str = "saved-login";
 #[cfg(target_os = "macos")]
 pub const APP_BUNDLE: &str = "wlanlogin.app";
 
 #[cfg(windows)]
 pub const DAEMON_BINARY: &str = "wlanlogin-daemon.exe";
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub const DAEMON_BINARY: &str = "wlanlogin-daemon";
 
 #[cfg(any(target_os = "linux", test))]
@@ -36,6 +38,7 @@ pub const MACOS_BUNDLE_FILES: &[&str] = &[
     "Contents/Info.plist",
     "Contents/PkgInfo",
     "Contents/MacOS/wlanlogin",
+    "Contents/Resources/icon.icns",
     "Contents/Library/LaunchAgents/dev.cxcs.tools.wlanlogin.plist",
     "Contents/Library/LaunchDaemons/dev.cxcs.tools.wlanlogin.plist",
     "Contents/_CodeSignature/CodeResources",

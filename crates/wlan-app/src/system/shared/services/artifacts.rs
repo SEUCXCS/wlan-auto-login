@@ -8,7 +8,7 @@ pub(crate) use crate::system::define::services::Plan;
 #[cfg(test)]
 pub(crate) use crate::system::linux::services::definition::{linux_plan, linux_system_plan};
 #[cfg(test)]
-pub(crate) use crate::system::macos::services::definition::{macos_plan, macos_system_plan};
+pub(crate) use crate::system::macos::services::definition::app_service_plan;
 pub(crate) use crate::system::native::services::definition::plan;
 #[cfg(test)]
 pub(crate) use crate::system::windows::services::definition::{windows_plan, windows_system_plan};
@@ -72,7 +72,7 @@ pub(crate) fn assert_owned(path: &Path) -> Result<()> {
         Err(e) => Err(e.into()),
     }
 }
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn xml(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -82,36 +82,26 @@ pub(crate) fn xml(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-pub(crate) struct Artifacts {
-    pub definition: bool,
-    pub executable: bool,
-}
+pub(crate) use crate::system::define::services::Artifacts;
 
 impl Artifacts {
     pub fn read(plan: &Plan) -> Result<Self> {
         assert_owned(&plan.definition)?;
         let executable = is_file(&plan.executable)?;
         #[cfg(target_os = "macos")]
-        let executable =
-            if let Some(app) = crate::system::macos::bundle::enclosing(&plan.executable) {
-                executable
-                    && is_file(&app.join("Contents/Info.plist"))?
-                    && is_file(&app.join("Contents/_CodeSignature/CodeResources"))?
-            } else {
-                executable
-            };
+        let executable = if let Some(app) =
+            crate::system::macos::services::bundle::enclosing(&plan.executable)
+        {
+            executable
+                && is_file(&app.join("Contents/Info.plist"))?
+                && is_file(&app.join("Contents/_CodeSignature/CodeResources"))?
+        } else {
+            executable
+        };
         Ok(Self {
             definition: is_file(&plan.definition)?,
             executable,
         })
-    }
-
-    pub fn complete(&self) -> bool {
-        self.definition && self.executable
-    }
-
-    pub(crate) fn any(&self) -> bool {
-        self.definition || self.executable
     }
 }
 
@@ -139,28 +129,32 @@ mod tests {
         let exe = PathBuf::from("/opt/Test App/daemon");
         let definition = PathBuf::from("/tmp/system-definition");
         let linux = linux_system_plan(exe.clone(), definition.clone())?;
-        assert!(linux.content.contains("--system daemon"));
-        assert!(linux.content.contains("daemon --background"));
-        assert!(linux.content.contains("# ApplicationLog=daemon.log"));
-        assert!(linux.content.contains("WantedBy=multi-user.target"));
+        assert!(linux.content.contains("--system service run"));
+        assert!(linux.content.contains("service run"));
         assert!(
             linux
                 .content
-                .contains("StateDirectory=cxcs-tools/wlanlogin\n")
+                .contains("Description=CXCS WLAN Login — Student_CX automatic login\n")
         );
+        assert!(linux.content.contains("WantedBy=multi-user.target"));
+        assert!(linux.content.contains("StateDirectory=SEUCXCS/wlanlogin\n"));
         assert!(
             linux
                 .content
-                .contains("RuntimeDirectory=cxcs-tools/wlanlogin\n")
+                .contains("RuntimeDirectory=SEUCXCS/wlanlogin\n")
         );
         assert!(!linux.content.contains("--user"));
-        let macos = macos_system_plan(exe.clone(), definition.clone(), "/tmp/log".into())?;
+        let macos = app_service_plan(
+            "/Applications/wlanlogin.app/Contents/MacOS/wlanlogin".into(),
+            true,
+            0,
+        )?;
         assert!(macos.content.contains("<string>--system</string>"));
         assert!(
             macos
                 .start
                 .iter()
-                .any(|cmd| cmd.args.iter().any(|a| a == "system"))
+                .any(|cmd| cmd.args.iter().any(|a| a == "--system"))
         );
         assert!(!macos.start.iter().any(|cmd| {
             cmd.args
@@ -171,7 +165,7 @@ mod tests {
         assert!(windows.start.iter().any(|cmd| {
             cmd.args
                 .iter()
-                .any(|a| a.to_string_lossy().contains("--system daemon --service"))
+                .any(|a| a.to_string_lossy().contains("--system service run"))
         }));
         assert!(
             windows
@@ -180,6 +174,15 @@ mod tests {
                 .any(|cmd| cmd.args.iter().any(|a| a == "auto"))
         );
         assert!(matches!(windows.manager, Manager::WindowsService));
+        for command in &windows.start[..2] {
+            assert!(
+                command
+                    .args
+                    .windows(2)
+                    .any(|args| { args[0] == "DisplayName=" && args[1] == "CXCS WLAN Login" })
+            );
+            assert_eq!(command.args[1], LABEL);
+        }
         for plan in [linux, macos, windows] {
             assert_eq!(plan.scope, crate::infra::scope::Scope::System);
             assert!(plan.content.contains(LABEL));
@@ -193,22 +196,36 @@ mod tests {
         let definition = PathBuf::from("/tmp/definition");
         let plans = [
             linux_plan(executable.clone(), definition.clone())?,
-            macos_plan(
-                executable.clone(),
-                definition.clone(),
-                "/tmp/daemon.log".into(),
+            app_service_plan(
+                "/Applications/wlanlogin.app/Contents/MacOS/wlanlogin".into(),
+                false,
                 501,
             )?,
             windows_plan(executable, definition, "S-1-5-21-123")?,
         ];
         for plan in &plans {
-            assert!(plan.content.contains("daemon"));
+            assert!(
+                plan.content.contains("service run")
+                    || plan
+                        .content
+                        .contains("<string>service</string><string>run</string>")
+            );
             assert!(!plan.content.contains("--password"));
             assert!(!plan.content.contains("WLANLOGIN_PASSWORD"));
             assert!(plan.content.contains(LABEL));
         }
         assert!(plans[0].content.contains("WantedBy=default.target"));
-        assert!(plans[0].content.contains("daemon --background"));
+        assert!(
+            plans[0]
+                .content
+                .contains("Description=CXCS WLAN Login — Student_CX automatic login\n")
+        );
+        assert!(
+            plans[2].content.contains(
+                "<Description>CXCS WLAN Login — Student_CX automatic login</Description>"
+            )
+        );
+        assert!(plans[0].content.contains("service run"));
         assert!(plans[1].content.contains("<key>RunAtLoad</key><true/>"));
         assert!(
             plans[2]

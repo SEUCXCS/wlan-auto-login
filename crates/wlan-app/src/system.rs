@@ -18,3 +18,5 @@ compile_error!("Supported platforms: Linux, macOS and Windows");
 
 pub(crate) mod shared;
 pub(crate) use shared::{credentials, wifi};
+
+pub(crate) use native::flow;

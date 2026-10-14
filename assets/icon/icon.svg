@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">WLAN Auto Login</title>
+  <desc id="description">A white Wi-Fi symbol on a blue rounded square.</desc>
+  <defs>
+    <linearGradient id="background" x1="160" y1="96" x2="864" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38a5f5" />
+      <stop offset="0.55" stop-color="#2878ed" />
+      <stop offset="1" stop-color="#2453d4" />
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#background)" />
+  <rect x="65" y="65" width="894" height="894" rx="199" fill="none" stroke="#ffffff" stroke-opacity="0.16" stroke-width="2" />
+  <g fill="none" stroke="#ffffff" stroke-width="72" stroke-linecap="round">
+    <path d="M 264.513 452.513 A 350 350 0 0 1 759.487 452.513" />
+    <path d="M 339.466 527.466 A 244 244 0 0 1 684.534 527.466" />
+    <path d="M 414.419 602.419 A 138 138 0 0 1 609.581 602.419" />
+  </g>
+  <circle cx="512" cy="700" r="42" fill="#ffffff" />
+</svg>

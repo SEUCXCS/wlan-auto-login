@@ -3,9 +3,6 @@ members = ["crates/wlan-api", "crates/wlan-app", "xtask"]
 default-members = ["crates/wlan-api", "crates/wlan-app"]
 resolver = "3"
 
-[profile.release]
-strip = "symbols"
-
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
@@ -40,3 +37,10 @@ unsafe_op_in_unsafe_fn = "deny"
 [workspace.lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

@@ -4,7 +4,6 @@ use crate::infra::error::{Context, Result};
 use crate::{
     infra::control,
     infra::paths::Paths,
-    system::credentials,
     system::shared::services as service,
     system::wifi::{WifiConnection, WifiProbe},
 };
@@ -25,7 +24,7 @@ pub(crate) async fn run(client: &Client, paths: &Paths, forget: bool) -> Result<
                 client.logout().await.map_err(Into::into)
             }
         },
-        credentials::delete(paths),
+        crate::system::flow::credentials::delete::run(paths),
         async {
             control::stop(paths).await;
             control::wait_stopped(paths).await
