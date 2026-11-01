@@ -46,7 +46,11 @@ pub async fn operation_lock(paths: &Paths) -> Result<File> {
     for _ in 0..250 {
         match fs2::FileExt::try_lock_exclusive(&file) {
             Ok(()) => return Ok(file),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || (cfg!(windows)
+                        && e.raw_os_error() == fs2::lock_contended_error().raw_os_error()) =>
+            {
                 tokio::time::sleep(Duration::from_millis(100)).await
             }
             Err(e) => return Err(e.into()),
@@ -68,6 +72,24 @@ pub async fn wait_stopped(paths: &Paths) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn contended_operation_waits_until_the_lock_is_released() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::test(dir.path());
+        let held = operation_lock(&paths).await?;
+        let waiting = operation_lock(&paths);
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err()
+        );
+        drop(held);
+        let _acquired = tokio::time::timeout(Duration::from_secs(1), waiting).await??;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn instance_lock_is_exclusive_and_released_on_drop() -> Result<()> {
         let dir = tempfile::tempdir()?;
