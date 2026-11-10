@@ -26,7 +26,9 @@ fn decode_definition(bytes: &[u8]) -> io::Result<String> {
         ));
     }
     let words = body
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|word| {
             if little {
                 u16::from_le_bytes([word[0], word[1]])

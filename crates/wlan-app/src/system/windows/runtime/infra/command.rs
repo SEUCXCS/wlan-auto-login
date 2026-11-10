@@ -28,13 +28,7 @@ impl Invocation {
         self.optional = true;
         self
     }
-    pub(crate) async fn run(&self) -> Result<()> {
-        let result = self.output().await?;
-        if !self.optional {
-            result.check(self)?;
-        }
-        Ok(())
-    }
+
     pub(crate) async fn output(&self) -> Result<CommandOutput> {
         let mut command = tokio::process::Command::new(&self.program);
         command.args(&self.args).kill_on_drop(true);
