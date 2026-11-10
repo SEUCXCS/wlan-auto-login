@@ -27,9 +27,9 @@ pub fn macos_bundle(scope: crate::infra::scope::Scope) -> Result<PathBuf> {
 }
 
 pub fn user_daemon_executable() -> Result<PathBuf> {
-    return Ok(macos_bundle(crate::infra::scope::Scope::User)?
+    Ok(macos_bundle(crate::infra::scope::Scope::User)?
         .join("Contents/MacOS")
-        .join(APP_NAME));
+        .join(APP_NAME))
 }
 
 pub fn system_daemon_executable() -> Result<PathBuf> {

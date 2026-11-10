@@ -48,45 +48,6 @@ pub async fn connect(address: &str) -> Result<tokio::net::windows::named_pipe::N
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
-
-    #[tokio::test]
-    async fn busy_pipe_waits_for_an_available_instance() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let paths = Paths::test(dir.path());
-        let (mut listener, address) =
-            Listener::bind(&paths, &format!("busy-pipe-test-{}", std::process::id()))?;
-        let _first = connect(&address).await?;
-        let waiting = connect(&address);
-        tokio::pin!(waiting);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), &mut waiting)
-                .await
-                .is_err()
-        );
-        let _accepted = listener.accept().await?;
-        let _second = tokio::time::timeout(Duration::from_secs(1), waiting).await??;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn missing_pipe_fails_without_retrying() -> Result<()> {
-        let address = format!(
-            r"\\.\pipe\wlanlogin-missing-pipe-test-{}",
-            std::process::id()
-        );
-        assert!(
-            tokio::time::timeout(Duration::from_millis(200), connect(&address))
-                .await?
-                .is_err()
-        );
-        Ok(())
-    }
-}
-
 fn pipe(address: &str, first: bool, scope: crate::infra::scope::Scope) -> Result<Stream> {
     use std::ptr;
     use windows_sys::Win32::{
@@ -134,5 +95,44 @@ fn pipe(address: &str, first: bool, scope: crate::infra::scope::Scope) -> Result
             );
         LocalFree(descriptor);
         Ok(result?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn busy_pipe_waits_for_an_available_instance() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::test(dir.path());
+        let (mut listener, address) =
+            Listener::bind(&paths, &format!("busy-pipe-test-{}", std::process::id()))?;
+        let _first = connect(&address).await?;
+        let waiting = connect(&address);
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err()
+        );
+        let _accepted = listener.accept().await?;
+        let _second = tokio::time::timeout(Duration::from_secs(1), waiting).await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_pipe_fails_without_retrying() -> Result<()> {
+        let address = format!(
+            r"\\.\pipe\wlanlogin-missing-pipe-test-{}",
+            std::process::id()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), connect(&address))
+                .await?
+                .is_err()
+        );
+        Ok(())
     }
 }

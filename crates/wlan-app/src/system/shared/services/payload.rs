@@ -9,6 +9,7 @@ fn remove_if_present(path: &Path) -> Result<()> {
     }
 }
 pub(crate) struct Backup(Option<tempfile::NamedTempFile>);
+#[allow(dead_code)] // The signed macOS payload uses its own backup transaction.
 impl Backup {
     pub(crate) fn capture(path: &Path) -> Result<Self> {
         match fs::metadata(path) {

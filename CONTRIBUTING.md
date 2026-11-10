@@ -51,7 +51,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 | `app/bootstrap.rs` | 平台模块声明、普通 Tokio runtime 的创建、错误记录与限时关闭；共享 `entry()` 初始化日志、作用域与应用依赖并分发命令 |
 | `app/bootstrap/{linux,macos,windows}.rs` | 平台启动编排；Linux 普通入口、macOS AppKit 选择、Windows SCM 应用回调 |
 | `app/context.rs` | 门户客户端、所选路径及 Wi-Fi / 凭据适配器的构建 |
-| `app/cli.rs` | 参数声明、解析与命令分发；把 CLI 参数转换为 controller 请求 |
+| `app/bootstrap/<platform>/cli.rs` | 参数声明、解析与命令分发；把 CLI 参数转换为 controller 请求 |
 | `app/cli/login.rs` | stdin、交互选择、TUI 重试与安装时的凭据输入 |
 | `app/cli/output.rs` | controller 结果的终端展示与状态格式化 |
 | `app/tui.rs` | 终端生命周期、绘制、键盘事件和登录表单 |
@@ -92,7 +92,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 ### CLI 与业务操作
 
-在 `app/cli.rs` 声明参数，再将普通请求类型传给 `app/controller`。公开服务管理统一使用 `service install/uninstall/start/stop/restart/status/logs`；`daemon` 只运行当前进程的循环。各平台生成的服务定义使用隐藏 `service run`；Windows 系统范围由 bootstrap 接入 SCM，用户计划任务直接运行，macOS 用户范围保留 AppKit 事件循环。macOS bootstrap 处理 `service native` 和 Wi-Fi 宿主内部入口，共享 bootstrap 在构造门户客户端前处理跨平台权限入口。服务 controller 的生产操作统一调用 `system::flow`，不直接引用 shared 或某个原生平台；平台 flow 组合公共流程与原生适配器，前端负责交互及展示；返回结构化数据，或显式注入输出 writer、取消 future 等接口。服务状态查询不能靠日志文本判断成功与否。TUI 不直接调用门户或服务管理器。
+在 `app/bootstrap/<platform>/cli.rs` 声明参数，再将普通请求类型传给 `app/controller`。公开服务管理统一使用 `service install/uninstall/start/stop/restart/status/logs`；`daemon` 只运行当前进程的循环。各平台生成的服务定义使用隐藏 `service run`；Windows 系统范围由 bootstrap 接入 SCM，用户计划任务直接运行，macOS 用户范围保留 AppKit 事件循环。macOS bootstrap 处理 `service native` 和 Wi-Fi 宿主内部入口，共享 bootstrap 在构造门户客户端前处理跨平台权限入口。服务 controller 的生产操作统一调用 `system::flow`，不直接引用 shared 或某个原生平台；平台 flow 组合公共流程与原生适配器，前端负责交互及展示；返回结构化数据，或显式注入输出 writer、取消 future 等接口。服务状态查询不能靠日志文本判断成功与否。TUI 不直接调用门户或服务管理器。
 
 新增 daemon 行为先明确 `policy.rs` 中的状态转换，再接入单次检查或调度循环。保留持久化停止监听器、请求超时和单个后台凭据任务；Linux D-Bus 事件流必须持续排空。`AuthState::Unknown` 不得触发自动登录，手动登录只恢复相同作用域的 daemon。
 
@@ -184,3 +184,13 @@ cargo check -p wlanlogin-cli --tests --locked --target aarch64-apple-darwin
 每完成一个可验证的功能就创建一个提交。使用 Conventional Commits，例如 `refactor(app): separate login controller from terminal input`、`fix(system): preserve service definition on rollback`、`docs: document contributor toolchain`。
 
 提交前检查 staged diff，只包含本次功能；保留其他维护者未提交的修改。PR 描述说明具体行为变化、影响范围和已执行的验证。平台只有编译检查时明确写出，不把它描述为运行测试。命令、目录职责或运行行为变化时同步维护 README、本指南及英文 [AGENT.md](AGENT.md)。
+
+## Platform source boundaries
+
+Target-dependent implementation belongs in system/linux, system/macos, or system/windows. Elsewhere, target cfg, cfg_attr, and cfg! are permitted only for module selection and re-exports at the facades checked by cargo xtask check-boundaries. Test code follows the same rule; ordinary #[cfg(test)] remains allowed. Do not replace compile-time branches with runtime OS-name checks.
+
+Native infrastructure source under system/<platform>/runtime/infra is compiled exactly once through the infra.rs facade, preserving existing module identities and app -> system -> infra dependencies. These are source-selected modules, not reverse calls from infra into system. Shared state and protocol files remain under infra/control. Platform CLI assembly stays under app/bootstrap/<platform>/cli.rs, keeping Clap out of system contracts.
+
+Installation orchestration lives in each platform flow. Windows and Linux reuse byte-preserving backups from shared/services/payload.rs; macOS retains its signed bundle transaction. Native artifact readers and service dispatch live under each platform services directory. Do not put native API, XML encoding, ACL, or task-registration branches in shared workflows.
+
+Run targeted tests during each feature, then the complete workspace suite once at final integration. On Windows, if an external tool has added untrusted write access to the user Temp ACL, use an isolated temporary directory with the current user and SYSTEM as the only writers; never weaken product storage validation to accommodate a test environment. Cross-target checks verify compilation, not native runtime behavior.

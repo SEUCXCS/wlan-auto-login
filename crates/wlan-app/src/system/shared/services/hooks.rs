@@ -34,5 +34,6 @@ pub(crate) trait UninstallHooks {
         Vec::new()
     }
 }
+#[allow(dead_code)] // Native bundle uninstall supplies custom hooks.
 pub(crate) struct DefaultHooks;
 impl UninstallHooks for DefaultHooks {}

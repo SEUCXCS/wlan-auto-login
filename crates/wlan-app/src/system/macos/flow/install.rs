@@ -348,6 +348,19 @@ fn prepare_system_directories() -> Result<()> {
     Ok(())
 }
 
+/// Prepare native installation metadata before entering the platform workflow.
+pub(crate) async fn run(paths: &Paths) -> Result<()> {
+    // Reject conflicting user/system installations before changing artifacts.
+    crate::system::shared::services::artifacts::ensure_no_conflicting_install(paths)?;
+
+    // Capture the currently selected service plan for rollback.
+    let previous = crate::system::macos::services::definition::plan(paths)?;
+
+    install(paths, previous).await
+}
+
+pub(crate) use crate::system::shared::services::artifacts::ensure_no_conflicting_install as validate_scope;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,16 +525,3 @@ mod tests {
         assert_eq!(*calls.borrow(), 1);
     }
 }
-
-/// Prepare native installation metadata before entering the platform workflow.
-pub(crate) async fn run(paths: &Paths) -> Result<()> {
-    // Reject conflicting user/system installations before changing artifacts.
-    crate::system::shared::services::artifacts::ensure_no_conflicting_install(paths)?;
-
-    // Capture the currently selected service plan for rollback.
-    let previous = crate::system::macos::services::definition::plan(paths)?;
-
-    install(paths, previous).await
-}
-
-pub(crate) use crate::system::shared::services::artifacts::ensure_no_conflicting_install as validate_scope;

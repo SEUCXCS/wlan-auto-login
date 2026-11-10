@@ -17,6 +17,8 @@ pub struct Cli {
 pub enum Command {
     /// Compile the application, assemble a bundle, and verify its signature.
     Bundle(bundle::BundleArgs),
+    /// Reject target-specific business logic outside platform source boundaries.
+    CheckBoundaries,
 }
 
 #[derive(Args)]
@@ -59,7 +61,9 @@ mod tests {
             "custom build",
             "--codesign-identity=-",
         ])?;
-        let Command::Bundle(bundle) = cli.command;
+        let Command::Bundle(bundle) = cli.command else {
+            panic!("expected bundle command")
+        };
         let BundlePlatform::Macos(options) = bundle.platform;
         let build = BuildOptions::from(&options.build);
         assert_eq!(build.profile, "dev");
@@ -116,7 +120,9 @@ mod tests {
             arguments.extend(["--codesign-identity=-", "--target-dir", "explicit build"]);
         }
         let cli = Cli::try_parse_from(arguments)?;
-        let Command::Bundle(bundle) = cli.command;
+        let Command::Bundle(bundle) = cli.command else {
+            panic!("expected bundle command")
+        };
         let BundlePlatform::Macos(options) = bundle.platform;
         assert_eq!(options.build.profile, "release");
         assert_eq!(options.build.target, None);

@@ -1,6 +1,7 @@
 //! The ordinary process entry has no additional native hosting requirements.
 use crate::infra::{error::Result, paths::Paths};
 
+#[allow(dead_code)] // The macOS native runner owns its GUI loop.
 pub(crate) async fn run(
     _paths: &Paths,
     _managed: bool,

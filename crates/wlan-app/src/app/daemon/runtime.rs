@@ -57,7 +57,7 @@ pub(super) async fn run_loop(
 ) -> Result<()> {
     let mut policy = Policy::default();
     let mut store = credentials::BackgroundReader::new(paths)?;
-    let mut credential_events = crate::system::native::runtime::daemon::CredentialEvents::default();
+    let mut credential_events = crate::system::native::runtime::daemon::CredentialEvents::new();
     let mut monitor = None;
     let mut scheduled = true;
     let mut last_outcome = None;

@@ -6,6 +6,9 @@ pub(crate) async fn stop(shutdown: &mut Shutdown) -> Result<()> {
 #[derive(Default)]
 pub(crate) struct CredentialEvents(Option<crate::system::linux::runtime::credentials::Events>);
 impl CredentialEvents {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
     pub(crate) async fn refresh(&mut self, scope: Scope) {
         if scope == Scope::User && self.0.is_none() {
             self.0 = tokio::time::timeout(

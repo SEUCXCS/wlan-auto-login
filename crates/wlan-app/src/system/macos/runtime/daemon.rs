@@ -6,6 +6,9 @@ pub(crate) async fn stop(shutdown: &mut Shutdown) -> Result<()> {
 #[derive(Default)]
 pub(crate) struct CredentialEvents;
 impl CredentialEvents {
+    pub(crate) fn new() -> Self {
+        Self
+    }
     pub(crate) async fn refresh(&mut self, scope: Scope) {
         let _ = scope;
     }

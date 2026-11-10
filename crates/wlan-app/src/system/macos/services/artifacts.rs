@@ -12,13 +12,15 @@ pub(crate) fn inspect_executable(_plan: &Plan, executable: bool) -> Result<bool>
                 && crate::system::shared::services::artifacts::is_file(
                     &app.join("Contents/Info.plist"),
                 )?
-                && crate::system::shared::services::artifacts::is_file(&app.join("Contents/_CodeSignature/CodeResources"))?
+                && crate::system::shared::services::artifacts::is_file(
+                    &app.join("Contents/_CodeSignature/CodeResources"),
+                )?
         } else {
             executable
         };
     Ok(executable)
 }
-use crate::infra::error::{Context, Message};
+use crate::infra::error::Message;
 use std::path::PathBuf;
 
 pub(crate) fn original_user_home() -> Result<Option<PathBuf>> {

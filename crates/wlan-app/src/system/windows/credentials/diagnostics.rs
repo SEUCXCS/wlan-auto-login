@@ -94,7 +94,6 @@ pub(crate) fn diagnostic(error: &Error, stage: Stage) -> Diagnostic {
 }
 
 /// A failed decoder/decryptor has a specific cause, while deadlines/denials retain theirs.
-
 pub(crate) fn specific(error: Error, kind: Kind, stage: Stage) -> Error {
     let mut detail = diagnostic(&error, stage);
     if !matches!(

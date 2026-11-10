@@ -8,7 +8,7 @@ pub(crate) fn read_definition(path: &Path) -> std::io::Result<String> {
 pub(crate) fn inspect_executable(_plan: &Plan, executable: bool) -> Result<bool> {
     Ok(executable)
 }
-use crate::infra::error::{Context, Message};
+use crate::infra::error::Message;
 use std::path::PathBuf;
 
 pub(crate) fn original_user_home() -> Result<Option<PathBuf>> {

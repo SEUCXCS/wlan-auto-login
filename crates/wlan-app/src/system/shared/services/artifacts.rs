@@ -11,6 +11,8 @@ pub(crate) use crate::system::linux::services::definition::{linux_plan, linux_sy
 pub(crate) use crate::system::macos::services::definition::app_service_plan;
 pub(crate) use crate::system::native::services::definition::plan;
 #[cfg(test)]
+use crate::system::windows::services::definition::xml;
+#[cfg(test)]
 pub(crate) use crate::system::windows::services::definition::{windows_plan, windows_system_plan};
 #[cfg(test)]
 use std::path::PathBuf;
@@ -38,14 +40,6 @@ pub(crate) fn assert_owned(path: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.into()),
     }
-}
-pub(crate) fn xml(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 pub(crate) use crate::system::define::services::Artifacts;

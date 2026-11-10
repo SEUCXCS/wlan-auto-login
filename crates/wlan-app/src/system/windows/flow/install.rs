@@ -8,7 +8,7 @@ use crate::system::shared::services::artifacts::{Plan, assert_owned};
 
 use crate::system::shared::services::artifacts::{ensure_no_conflicting_install, plan};
 
-use crate::system::shared::services::steps;
+use crate::system::windows::services::wait as steps;
 
 use crate::{
     infra::control,
