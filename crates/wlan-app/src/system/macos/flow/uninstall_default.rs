@@ -8,16 +8,6 @@ use crate::system::shared::services::artifacts::{Plan, assert_owned, plan};
 use crate::{infra::cleanup, infra::control, infra::paths::Paths};
 use std::{future::Future, time::Duration};
 
-#[cfg(not(target_os = "macos"))]
-pub async fn run(paths: &Paths, purge: bool) -> Result<()> {
-    run_with(
-        paths,
-        purge,
-        &crate::system::shared::services::hooks::DefaultHooks,
-    )
-    .await
-}
-
 pub(crate) async fn run_with(
     paths: &Paths,
     purge: bool,
@@ -171,7 +161,7 @@ async fn uninstall_with(
 }
 
 fn remove_enable_link(plan: &Plan) -> Result<()> {
-    #[cfg(any(target_os = "linux", test))]
+    #[cfg(test)]
     match &plan.manager {
         Manager::Systemd { system } => {
             let parent = plan
@@ -213,7 +203,7 @@ fn remove_enable_link(plan: &Plan) -> Result<()> {
         #[cfg(test)]
         _ => {}
     }
-    #[cfg(not(any(target_os = "linux", test)))]
+    #[cfg(not(test))]
     let _ = plan;
     Ok(())
 }
@@ -398,78 +388,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn purge_deletes_scoped_storage_without_parsing_control_state() -> Result<()> {
-        for state in [
-            r#"{"paused":false,"session":null,"revision":0}"#,
-            "invalid json",
-            r#"{"paused":false,"session":null,"revision":0,"credential_generation":18446744073709551615}"#,
-        ] {
-            for already_unregistered in [false, true] {
-                let dir = tempfile::tempdir()?;
-                let (paths, plan) = fixture(dir.path(), 1)?;
-                fs::write(paths.config.join("control.json"), state)?;
-                fs::write(paths.secrets.join("login.json"), "invalid credential data")?;
-                let sibling = dir.path().join("SEUCXCS/another-tool");
-                fs::create_dir(&sibling)?;
-                fs::write(sibling.join("settings.json"), "preserve")?;
-                let runner = if already_unregistered {
-                    fs::remove_file(&plan.definition)?;
-                    FakeRunner::new([
-                        (true, "LoadState=not-found\n"),
-                        (true, ""),
-                        (true, "LoadState=not-found\n"),
-                    ])
-                } else {
-                    removal_runner(1)
-                };
-
-                // Exercise the production storage selection with temporary system
-                // files; service-manager operations remain entirely simulated.
-                uninstall(&paths, &plan, true, &runner, &FixtureHooks).await?;
-
-                assert!(!plan.definition.exists() && !plan.executable.exists());
-                assert!(!paths.config.exists() && !paths.runtime.exists());
-                assert!(!paths.secrets.exists());
-                assert!(!dir.path().join("SEUCXCS/wlanlogin").exists());
-                assert_eq!(
-                    fs::read_to_string(sibling.join("settings.json"))?,
-                    "preserve"
-                );
-                assert!(dir.path().join("original-cli").exists());
-                assert!(runner.outputs.borrow().is_empty());
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn failed_unregister_never_polls_scoped_credential_deletion() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let (paths, plan) = fixture(dir.path(), 1)?;
-        let state = "invalid json";
-        fs::write(paths.config.join("control.json"), state)?;
-        let runner = FakeRunner::new([(true, STOPPED), (false, "permission denied")]);
-
-        assert!(
-            uninstall(&paths, &plan, true, &runner, &FixtureHooks)
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            fs::read_to_string(paths.secrets.join("login.cred"))?,
-            "encrypted test secret"
-        );
-        assert_eq!(
-            fs::read_to_string(paths.config.join("control.json"))?,
-            state
-        );
-        assert!(plan.definition.exists() && plan.executable.exists());
-        Ok(())
-    }
-
     #[tokio::test]
     async fn ordinary_uninstall_preserves_credentials_logs_and_preferences() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -606,7 +524,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn purge_removes_only_owned_dangling_systemd_enable_links() -> Result<()> {
         for (kind, directory) in [(0, "default.target.wants"), (1, "multi-user.target.wants")] {
@@ -667,7 +584,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn purge_rejects_redirected_data_roots_before_touching_services() -> Result<()> {
         let dir = tempfile::tempdir()?;

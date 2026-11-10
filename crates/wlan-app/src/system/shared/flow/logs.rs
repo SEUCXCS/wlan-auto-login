@@ -77,15 +77,12 @@ fn fixture_source(paths: &Paths, plan: &Plan, options: LogOptions) -> Result<Sou
     // Reading diagnostics must also work when the service is stopped or its
     // registration is broken. No service manager query or mutation is needed.
     match &plan.manager {
-        #[cfg(any(target_os = "linux", test))]
         Manager::Systemd { .. } => {
             crate::system::shared::services::logs::FileBackend.source(paths, plan, options)
         }
-        #[cfg(any(target_os = "macos", test))]
         Manager::MacosAppService { .. } => {
             crate::system::macos::services::logs::source(paths, plan, options)
         }
-        #[cfg(any(target_os = "windows", test))]
         Manager::TaskScheduler { .. } | Manager::WindowsService => {
             crate::system::windows::services::logs::source(paths, plan, options)
         }
