@@ -42,15 +42,3 @@ pub fn elevated() -> Result<bool> {
         Ok(unsafe { libc::geteuid() } == 0)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn actual_elevation_selects_default_scope_and_flags_override_it() {
-        assert_eq!(Scope::select(false, false, false), Scope::User);
-        assert_eq!(Scope::select(false, false, true), Scope::System);
-        assert_eq!(Scope::select(true, false, true), Scope::User);
-        assert_eq!(Scope::select(false, true, false), Scope::System);
-    }
-}

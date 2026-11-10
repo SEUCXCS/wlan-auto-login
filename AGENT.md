@@ -97,6 +97,8 @@ Daemon checks return outcomes to the runtime, which logs the first result, chang
 
 All `wlan-app` tests belong at the bottom of the owning source file in `#[cfg(test)] mod tests`, even when long. Do not extract `tests.rs`, separate test directories, or tests via `#[path]`. Shared mocks may live in a relevant module's inline test module, such as `infra::command::tests`. Preserve the existing API protocol fixtures and integration tests.
 
+Maintain one suite for each cross-platform behavior and run it against the compile-time-selected native adapter. Common CLI tests belong in `app.rs`, infrastructure contracts in `infra.rs`, credential contracts in `system/define/credentials.rs`, and default uninstall transactions in `system/shared/flow/mod.rs`. Use table-driven inputs instead of copies. Keep only native exceptions in platform test modules and document the exception in CONTRIBUTING.md. Directory-redirection fixtures use the native filesystem test helper (Unix symlinks or Windows junctions); never skip a common protection on Windows merely because creating symlinks needs privileges.
+
 Use loopback mock portals, temporary directories, fake credentials and service commands, private D-Bus connections, and isolated signal child processes. Never access the real campus portal, change Wi-Fi, read actual saved credentials, or install, stop, or remove real services during development verification. `cargo test` needs local socket and subprocess permissions. If a sandbox rejects these, rerun only the isolated tests in an appropriately permitted environment and distinguish environment failures from product failures.
 
 The ignored `signal_child` helper is launched explicitly by a parent test. Do not run the whole suite with `--include-ignored`.

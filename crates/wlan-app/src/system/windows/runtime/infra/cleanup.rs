@@ -95,21 +95,3 @@ pub fn prune_empty_directories(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pruning_stops_before_the_shared_organization_even_when_empty() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let app = dir.path().join("SEUCXCS/wlanlogin");
-        let bin = app.join("data/bin");
-        fs::create_dir_all(&bin)?;
-        prune_empty_directories(&bin)?;
-        prune_empty_directories(&bin)?;
-        assert!(!app.exists());
-        assert!(dir.path().join("SEUCXCS").is_dir());
-        Ok(())
-    }
-}

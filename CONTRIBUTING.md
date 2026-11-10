@@ -150,6 +150,18 @@ macOS Core Location 的长期 RunLoop 每轮必须清空独立的 `autoreleasepo
 
 `wlan-app` 的测试一律放在所属文件末尾的 `#[cfg(test)] mod tests` 中；即使测试很长，也不要拆成 `tests.rs`、独立测试目录或 `#[path]` 引入的测试文件。共用假实现可放在相应基础模块的测试模块里，例如 `infra::command::tests`。协议库已有的集成测试和 fixtures 保持其现有组织。
 
+跨平台行为只维护一份测试，通过编译期选中的平台实现运行。CLI 公共契约放在 `app.rs`，基础设施公共契约放在 `infra.rs`，凭据公共契约放在 `system/define/credentials.rs`，默认卸载事务放在 `system/shared/flow/mod.rs`。同类型输入使用表驱动，断言应能定位失败的输入；平台目录只保留原生特例，不复制公共套件。测试代码也必须通过平台边界检查。
+
+| 测试内容 | Linux / macOS / Windows 的共同要求 | 平台特例 |
+| --- | --- | --- |
+| CLI | 服务命令、范围、清理选项、帮助、权限命令、交互冲突 | macOS 内部宿主与原生服务入口 |
+| 门户及 daemon | 协议、状态门槛、会话复检、重试、取消、单个在途凭据读取 | Linux 桌面会话、D-Bus 激活与身份竞态 |
+| 凭据契约 | 错误分类与脱敏、范围及目录绑定、代数失效、保存前失效、写入失败不得调用后端 | Linux 用户会话门槛；macOS Keychain；Windows DPAPI |
+| 基础设施 | 日志脱敏、范围选择、锁竞争、IPC 认证、保护共享目录、拒绝目录重定向 | Unix 信号及权限；Windows named pipe、ACL 与原生命令编码 |
+| 服务事务 | 启停失败、回滚、先停后删、普通卸载保留数据、purge 幂等与失败保留数据 | Linux systemd 链接；macOS 签名包；Windows 任务 XML 与注册快照 |
+
+目录重定向的公共测试通过平台文件中的测试辅助函数创建临时符号链接或 Windows junction。新增平台特例时说明对应的原生机制；某个平台已有的公共回归应加入公共套件，让其他平台执行同一个场景。
+
 优先覆盖业务约束：未知状态不登录、切换 SSID 后不提交凭据、回滚保留原安装、purge 只处理所选范围、取消能退出日志跟随或 daemon。不要只测试实现的逐行复刻。
 
 后台结果有效性测试必须覆盖：读取超时后完成再注销、保持单任务、会话 ID 复用／提示 ABA、保存删除的预先失效和失败路径、Wi-Fi await 后的最后校验。Linux 的就绪及身份查询通过私有 `dbus-daemon` 上的 systemd/logind 假服务验证，不访问宿主总线。编译检查不等于 Windows/macOS 原生测试；私有 D-Bus 测试也不能替代真实桌面登录竞争测试。

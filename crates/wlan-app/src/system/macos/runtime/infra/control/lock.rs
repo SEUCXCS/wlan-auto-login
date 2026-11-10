@@ -67,36 +67,3 @@ pub async fn wait_stopped(paths: &Paths) -> Result<()> {
     }
     bail!(Message::DaemonHasNotExitedStopTheRunningDaemon)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test(start_paused = true)]
-    async fn contended_operation_waits_until_the_lock_is_released() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let paths = Paths::test(dir.path());
-        let held = operation_lock(&paths).await?;
-        let waiting = operation_lock(&paths);
-        tokio::pin!(waiting);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), &mut waiting)
-                .await
-                .is_err()
-        );
-        drop(held);
-        let _acquired = tokio::time::timeout(Duration::from_secs(1), waiting).await??;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn instance_lock_is_exclusive_and_released_on_drop() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let paths = Paths::test(dir.path());
-        let lock = singleton(&paths)?;
-        assert!(singleton(&paths).is_err());
-        drop(lock);
-        assert!(singleton(&paths).is_ok());
-        Ok(())
-    }
-}

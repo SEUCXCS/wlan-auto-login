@@ -28,3 +28,24 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     temp.persist(path).map_err(|e| e.error)?;
     Ok(())
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    /// Junctions exercise reparse-point checks without requiring symlink privileges.
+    pub(crate) fn redirect_directory(
+        target: &std::path::Path,
+        link: &std::path::Path,
+    ) -> crate::infra::error::Result<()> {
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()?;
+        crate::infra::error::ensure!(
+            output.status.success(),
+            "cannot create test directory junction: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    }
+}
