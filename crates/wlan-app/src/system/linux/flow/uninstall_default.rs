@@ -170,45 +170,41 @@ async fn uninstall_with(
 }
 
 fn remove_enable_link(plan: &Plan) -> Result<()> {
-    match &plan.manager {
-        Manager::Systemd { system } => {
-            let parent = plan
-                .definition
-                .parent()
-                .context(Message::ServiceDefinitionHasNoParentDirectory)?;
-            let name = plan
-                .definition
-                .file_name()
-                .context(Message::ServiceDefinitionHasNoFileName)?;
-            let path = parent
-                .join(if *system {
-                    "multi-user.target.wants"
-                } else {
-                    "default.target.wants"
-                })
-                .join(name);
-            cleanup::validate_directory(
-                path.parent()
-                    .context(Message::ServiceLinkHasNoParentDirectory)?,
-            )?;
-            match std::fs::read_link(&path) {
-                Ok(target) => {
-                    ensure!(
-                        target == plan.definition
-                            || target == std::path::Path::new("..").join(name),
-                        Message::RefusingToRemoveAnAutostartLinkOwned {
-                            value0: (path.display()).to_string()
-                        }
-                    );
-                    cleanup::remove_file(&path)?;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(error).context(Message::FailedToRemoveServiceAutostartLink);
-                }
+    if let Manager::Systemd { system } = &plan.manager {
+        let parent = plan
+            .definition
+            .parent()
+            .context(Message::ServiceDefinitionHasNoParentDirectory)?;
+        let name = plan
+            .definition
+            .file_name()
+            .context(Message::ServiceDefinitionHasNoFileName)?;
+        let path = parent
+            .join(if *system {
+                "multi-user.target.wants"
+            } else {
+                "default.target.wants"
+            })
+            .join(name);
+        cleanup::validate_directory(
+            path.parent()
+                .context(Message::ServiceLinkHasNoParentDirectory)?,
+        )?;
+        match std::fs::read_link(&path) {
+            Ok(target) => {
+                ensure!(
+                    target == plan.definition || target == std::path::Path::new("..").join(name),
+                    Message::RefusingToRemoveAnAutostartLinkOwned {
+                        value0: (path.display()).to_string()
+                    }
+                );
+                cleanup::remove_file(&path)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).context(Message::FailedToRemoveServiceAutostartLink);
             }
         }
-        _ => {}
     }
 
     Ok(())

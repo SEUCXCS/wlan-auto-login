@@ -25,7 +25,7 @@ pub fn user_daemon_executable() -> Result<PathBuf> {
 }
 
 pub fn system_daemon_executable() -> Result<PathBuf> {
-    { Ok(app_dir("/usr/local/libexec").join(DAEMON_BINARY)) }
+    Ok(app_dir("/usr/local/libexec").join(DAEMON_BINARY))
 }
 
 #[derive(Clone)]

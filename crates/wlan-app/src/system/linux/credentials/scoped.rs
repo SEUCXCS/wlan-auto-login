@@ -64,7 +64,7 @@ impl ScopedStore {
                 });
         }
 
-        return user::load_for_daemon(session, permit).await;
+        user::load_for_daemon(session, permit).await
     }
 }
 
