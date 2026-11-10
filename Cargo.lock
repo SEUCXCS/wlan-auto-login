@@ -2846,7 +2846,7 @@ dependencies = [
 
 [[package]]
 name = "wlanlogin-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "block2",
@@ -2885,7 +2885,7 @@ dependencies = [
 
 [[package]]
 name = "wlanlogin-lib"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "reqwest",
  "serde",
@@ -2913,7 +2913,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
