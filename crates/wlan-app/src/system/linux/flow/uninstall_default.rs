@@ -208,7 +208,6 @@ fn remove_enable_link(plan: &Plan) -> Result<()> {
                 }
             }
         }
-        #[cfg(test)]
         _ => {}
     }
 

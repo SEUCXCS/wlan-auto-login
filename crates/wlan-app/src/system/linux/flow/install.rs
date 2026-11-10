@@ -186,6 +186,8 @@ pub(crate) async fn run(paths: &Paths) -> Result<()> {
     .await
 }
 
+pub(crate) use crate::system::shared::services::artifacts::ensure_no_conflicting_install as validate_scope;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,4 +324,3 @@ mod tests {
         Ok(())
     }
 }
-pub(crate) use crate::system::shared::services::artifacts::ensure_no_conflicting_install as validate_scope;
