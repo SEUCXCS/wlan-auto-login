@@ -62,6 +62,17 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
         }
     }
 
+    // Validate the actual encoded task file before stopping an existing service.
+    let definition_bytes = crate::system::windows::services::artifacts::definition_bytes(&plan);
+    let staged_definition = stage_definition(&plan.definition, &definition_bytes)?;
+    if matches!(
+        plan.manager,
+        crate::system::define::services::Manager::TaskScheduler { .. }
+    ) {
+        crate::system::windows::services::task::validate(staged_definition.path(), &SystemRunner)
+            .await?;
+    }
+
     // Capture both artifacts before staging the replacement executable.
     let old_definition = Backup::capture(&plan.definition)?;
     let old_executable = Backup::capture(&plan.executable)?;
@@ -78,7 +89,9 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
             staged.persist(&plan.executable).map_err(|e| e.error)?;
         }
 
-        write_definition(&plan.definition, plan.content.as_bytes())?;
+        staged_definition
+            .persist(&plan.definition)
+            .map_err(|e| e.error)?;
         for command in &plan.start {
             command.run().await?;
         }
@@ -157,7 +170,7 @@ async fn stop_before_replacing(paths: &Paths, plan: &Plan) -> Result<()> {
     Ok(())
 }
 use crate::system::shared::services::payload::Backup;
-pub(crate) fn write_definition(path: &Path, bytes: &[u8]) -> Result<()> {
+fn stage_definition(path: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
     use std::io::Write;
     let mut file = tempfile::NamedTempFile::new_in(
         path.parent()
@@ -165,9 +178,7 @@ pub(crate) fn write_definition(path: &Path, bytes: &[u8]) -> Result<()> {
     )?;
     file.write_all(bytes)?;
     file.as_file().sync_all()?;
-    file.persist(path).map_err(|e| e.error)?;
-
-    Ok(())
+    Ok(file)
 }
 
 pub(crate) use crate::system::shared::services::artifacts::ensure_no_conflicting_install as validate_scope;
