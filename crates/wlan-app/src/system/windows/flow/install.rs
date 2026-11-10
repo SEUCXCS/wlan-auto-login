@@ -69,12 +69,14 @@ async fn install_plan(
 
     // Validate the actual encoded task file before stopping an existing service.
     let definition_bytes = crate::system::windows::services::artifacts::definition_bytes(&plan);
-    let staged_definition = stage_definition(&plan.definition, &definition_bytes)?;
+    // TempPath keeps cleanup ownership while closing the writable Windows handle.
+    let staged_definition = stage_definition(&plan.definition, &definition_bytes)?.into_temp_path();
     if matches!(
         plan.manager,
         crate::system::define::services::Manager::TaskScheduler { .. }
     ) {
-        crate::system::windows::services::task::validate(staged_definition.path(), runner).await?;
+        crate::system::windows::services::task::validate(staged_definition.as_ref(), runner)
+            .await?;
     }
 
     // Registration is independent of stale files left by an earlier failed install.
@@ -482,6 +484,41 @@ Enabled=1",
             })
             .collect::<Vec<_>>();
         assert!(recovered.iter().any(|xml| xml == &native));
+        Ok(())
+    }
+    #[tokio::test]
+    async fn real_preflight_can_read_the_staged_file_before_any_native_mutation() -> Result<()> {
+        struct ValidateOnly {
+            commands: FakeRunner,
+        }
+        impl Runner for ValidateOnly {
+            async fn output(&self, command: &Invocation) -> Result<CommandOutput> {
+                if command.program == "powershell.exe"
+                    && command.args.last().is_some_and(|script| {
+                        script.to_string_lossy().contains("RegisterTask($null")
+                    })
+                {
+                    SystemRunner.output(command).await
+                } else {
+                    self.commands.output(command).await
+                }
+            }
+        }
+        let (_dir, paths, mut plan, source) = fixture(true)?;
+        plan.content = plan
+            .content
+            .replace("S-1-5-21-123", &crate::infra::scope::current_sid()?);
+        let binary = plan.executable.clone();
+        let runner = ValidateOnly {
+            commands: runner(&[(false, "snapshot sentinel")]),
+        };
+        let error = install_plan(&paths, plan, &source, &runner)
+            .await
+            .err()
+            .context("expected snapshot sentinel")?;
+        assert!(error.to_string().contains("snapshot sentinel"), "{error}");
+        assert_eq!(std::fs::read(binary)?, b"old binary");
+        assert_eq!(command_count(&runner.commands, "/End"), 0);
         Ok(())
     }
 }

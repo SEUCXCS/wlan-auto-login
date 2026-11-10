@@ -121,7 +121,8 @@ impl Snapshot {
         use std::ffi::OsStr;
         let file = self
             .stage(definition)?
-            .context("Task snapshot is missing")?;
+            .context("Task snapshot is missing")?
+            .into_temp_path();
         let command = Invocation::new(
             "schtasks",
             [
@@ -129,7 +130,7 @@ impl Snapshot {
                 OsStr::new("/TN"),
                 OsStr::new(name),
                 OsStr::new("/XML"),
-                file.path().as_os_str(),
+                file.as_os_str(),
                 OsStr::new("/F"),
             ],
         );
@@ -261,7 +262,23 @@ Enabled=1",
     }
     #[tokio::test]
     async fn snapshots_preserve_disabled_state_and_resume_only_running_tasks() -> Result<()> {
-        use crate::infra::command::tests::FakeRunner;
+        use crate::infra::command::{CommandOutput, SystemRunner, tests::FakeRunner};
+        struct Reader {
+            fake: FakeRunner,
+        }
+        impl Runner for Reader {
+            async fn output(&self, command: &Invocation) -> Result<CommandOutput> {
+                if command.args.first().is_some_and(|arg| arg == "/Create") {
+                    let script = format!(
+                        "$ErrorActionPreference = 'Stop'; $null=[System.IO.File]::ReadAllText({});",
+                        quoted(&command.args[4].to_string_lossy())
+                    );
+                    let read = powershell(&script);
+                    SystemRunner.output(&read).await?.check(&read)?;
+                }
+                self.fake.output(command).await
+            }
+        }
         use crate::system::define::services::ServiceState;
         for running in [false, true] {
             let dir = tempfile::tempdir()?;
@@ -289,9 +306,11 @@ Enabled=0",
                     ),
                 ])
             };
+            let runner = Reader { fake: runner };
             snapshot.restore("test", &definition, &runner).await?;
             assert_eq!(
                 runner
+                    .fake
                     .calls
                     .borrow()
                     .iter()
