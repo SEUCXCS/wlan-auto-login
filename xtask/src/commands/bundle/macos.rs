@@ -14,10 +14,7 @@ mod sign;
 
 pub fn run(options: &MacosArgs) -> Result<()> {
     // Validate before building or allocating a bundle build number.
-    ensure!(
-        cfg!(target_os = "macos"),
-        "macOS bundling requires a macOS host with Xcode Command Line Tools"
-    );
+    crate::support::platform::require_macos()?;
     if let Some(target) = &options.build.target {
         ensure!(
             target.ends_with("-apple-darwin"),

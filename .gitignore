@@ -6,3 +6,5 @@
 
 # macOS
 .DS_Store
+
+/.test-tmp/

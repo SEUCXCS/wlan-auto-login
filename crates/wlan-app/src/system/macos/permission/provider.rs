@@ -69,3 +69,25 @@ fn location_status(
         L::Unknown => P::Unknown,
     }
 }
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod boundary_tests {
+    use super::*;
+    use crate::system::define::permission::*;
+    #[tokio::test]
+    async fn foreign_platform_permissions_are_not_implemented() -> crate::infra::error::Result<()> {
+        let mac = Permissions;
+        let permissions = mac.permissions();
+        for permission in permissions {
+            assert_eq!(
+                mac.status(&permission.id).await?,
+                PermissionStatus::NotImplemented
+            );
+            assert_eq!(
+                mac.request(&permission.id).await?,
+                PermissionRequestOutcome::NotImplemented
+            );
+        }
+        Ok(())
+    }
+}

@@ -3,7 +3,6 @@ use crate::infra::identity::DISPLAY_NAME;
 #[cfg(target_os = "windows")]
 use crate::infra::paths::Paths;
 use crate::system::define::services::{LABEL, Manager, Plan};
-use crate::system::shared::services::artifacts::xml;
 
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
@@ -156,4 +155,13 @@ pub(crate) fn conflicting_definition(paths: &Paths) -> Result<Option<PathBuf>> {
         Scope::System => plan(&Paths::new(Scope::User)?)?.definition,
     };
     Ok(Some(other))
+}
+
+pub(crate) fn xml(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }

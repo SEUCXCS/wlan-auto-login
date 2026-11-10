@@ -6,19 +6,20 @@ use crate::infra::{
     error::Result,
 };
 use std::{future::Future, path::PathBuf};
+#[allow(dead_code)] // Native variants also support cross-platform protocol fixtures.
 #[derive(Clone, Debug)]
 pub(crate) enum Manager {
-    #[cfg(any(target_os = "linux", test))]
-    Systemd { system: bool },
-    #[cfg(any(target_os = "macos", test))]
+    Systemd {
+        system: bool,
+    },
     MacosAppService {
         domain: String,
         target: String,
         executable: PathBuf,
     },
-    #[cfg(any(target_os = "windows", test))]
-    TaskScheduler { name: String },
-    #[cfg(any(windows, test))]
+    TaskScheduler {
+        name: String,
+    },
     WindowsService,
 }
 

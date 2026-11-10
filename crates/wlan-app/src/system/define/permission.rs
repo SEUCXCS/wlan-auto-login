@@ -193,17 +193,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["macos.location", "macos.keychain"]
         );
-        #[cfg(not(target_os = "macos"))]
-        for permission in permissions {
-            assert_eq!(
-                mac.status(&permission.id).await?,
-                PermissionStatus::NotImplemented
-            );
-            assert_eq!(
-                mac.request(&permission.id).await?,
-                PermissionRequestOutcome::NotImplemented
-            );
-        }
+
         let unknown = PermissionId("unknown.custom.permission".into());
         assert!(mac.status(&unknown).await.is_err());
         assert!(mac.request(&unknown).await.is_err());

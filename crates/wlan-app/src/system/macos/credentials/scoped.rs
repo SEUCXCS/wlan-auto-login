@@ -1,0 +1,98 @@
+//! Scoped credential selection and shared encoding; native APIs live under each platform.
+use crate::infra::error::Message;
+pub(crate) use crate::system::define::credentials::{CredentialMode, Store};
+
+pub(crate) use crate::system::native::credentials::user::prepare_daemon;
+use crate::system::native::credentials::{machine, user};
+/// Delete without loading or decoding secrets, including damaged or duplicate files.
+pub async fn delete(paths: &crate::infra::paths::Paths) -> crate::infra::error::Result<()> {
+    match paths.scope {
+        crate::infra::scope::Scope::System => machine::delete(paths).await,
+        crate::infra::scope::Scope::User => user::delete().await,
+    }
+}
+
+use crate::infra::error::Result;
+use wlanlogin_lib::Credentials;
+
+pub struct ScopedStore {
+    machine: Option<machine::MachineStore>,
+    paths: crate::infra::paths::Paths,
+}
+
+impl ScopedStore {
+    pub fn new(paths: &crate::infra::paths::Paths, mode: Option<CredentialMode>) -> Result<Self> {
+        if paths.scope == crate::infra::scope::Scope::System {
+            Ok(Self {
+                paths: paths.clone(),
+                machine: Some(machine::MachineStore::new(paths.clone(), mode)?),
+            })
+        } else {
+            crate::infra::error::ensure!(
+                mode.is_none(),
+                Message::CredentialStoreIsOnlySupportedForSystem
+            );
+            Ok(Self {
+                machine: None,
+                paths: paths.clone(),
+            })
+        }
+    }
+
+    pub(crate) fn paths(&self) -> &crate::infra::paths::Paths {
+        &self.paths
+    }
+
+    pub(crate) async fn load_background(
+        &self,
+        session: tokio::sync::watch::Receiver<crate::system::define::credentials::SessionState>,
+    ) -> Result<crate::system::define::credentials::BackgroundRead> {
+        use crate::system::define::credentials::BackgroundRead;
+        let permit = validation::snapshot(&self.paths)?;
+        // System storage never depends on a user's graphical session.
+        if let Some(store) = &self.machine {
+            return store
+                .load(true)
+                .await
+                .map(|saved| BackgroundRead::from_saved(saved, permit))
+                .map_err(|error| {
+                    diagnostics::at(error, crate::infra::error::credentials::Stage::Read)
+                });
+        }
+
+        {
+            let _ = session;
+            user::load_for_daemon()
+                .await
+                .map(|saved| BackgroundRead::from_saved(saved, permit))
+                .map_err(|error| {
+                    diagnostics::at(error, crate::infra::error::credentials::Stage::Read)
+                })
+        }
+    }
+}
+
+impl Store for ScopedStore {
+    async fn load(&self) -> Result<Option<Credentials>> {
+        match &self.machine {
+            Some(store) => store.load(false).await,
+            None => user::load().await,
+        }
+    }
+
+    async fn save(&self, credentials: Credentials) -> Result<()> {
+        match &self.machine {
+            Some(store) => store.save(credentials).await,
+            None => user::save(credentials).await,
+        }
+    }
+}
+
+#[path = "../../shared/credentials/codec.rs"]
+mod codec;
+pub(crate) use codec::{decode, encode};
+
+#[path = "diagnostics.rs"]
+pub(crate) mod diagnostics;
+#[path = "validation.rs"]
+pub(crate) mod validation;

@@ -1,17 +1,15 @@
 use crate::infra::error::Message;
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
 use crate::infra::error::{Context, Result};
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
 use tokio::sync::{mpsc, oneshot};
 
 /// Own native handles on one thread. Blocking OS calls and handle cleanup must
 /// never occupy the daemon's event loop or prevent the process from exiting.
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
+#[allow(dead_code)]
 pub(crate) struct Worker<T> {
     requests: mpsc::Sender<oneshot::Sender<Result<T>>>,
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
+#[allow(dead_code)]
 impl<T: Send + 'static> Worker<T> {
     pub fn new<F, W>(initialize: F) -> Result<Self>
     where

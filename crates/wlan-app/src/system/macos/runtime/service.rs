@@ -5,7 +5,6 @@ use crate::infra::{
     paths::Paths,
 };
 use crate::system::define::services::Manager;
-#[cfg(test)]
 use crate::system::define::services::ServiceManager;
 
 /// Acquire before consulting launchd. After bootout, a delayed managed process
@@ -22,7 +21,6 @@ pub async fn guard(paths: &Paths) -> Result<std::fs::File> {
             )
             .await?
         }
-        #[cfg(test)]
         _ => {
             plan.manager
                 .query(&crate::infra::command::SystemRunner)

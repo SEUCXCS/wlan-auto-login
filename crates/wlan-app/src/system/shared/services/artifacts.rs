@@ -11,8 +11,10 @@ pub(crate) use crate::system::linux::services::definition::{linux_plan, linux_sy
 pub(crate) use crate::system::macos::services::definition::app_service_plan;
 pub(crate) use crate::system::native::services::definition::plan;
 #[cfg(test)]
+use crate::system::windows::services::definition::xml;
+#[cfg(test)]
 pub(crate) use crate::system::windows::services::definition::{windows_plan, windows_system_plan};
-#[cfg(any(unix, test))]
+#[cfg(test)]
 use std::path::PathBuf;
 use std::{fs, path::Path};
 pub(crate) fn ensure_no_conflicting_install(paths: &Paths) -> Result<()> {
@@ -27,41 +29,8 @@ pub(crate) fn ensure_no_conflicting_install(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-pub(crate) fn original_user_home() -> Result<Option<PathBuf>> {
-    let Some(uid) = std::env::var("SUDO_UID")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .filter(|uid| *uid != 0)
-    else {
-        return Ok(None);
-    };
-    // SUDO_UID is only a lookup hint for conflict detection, never authority for an operation.
-    let mut buffer = vec![0u8; 64 * 1024];
-    let mut record: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut result = std::ptr::null_mut();
-    // SAFETY: getpwuid_r writes pointers into our live buffer; copy the home path before returning.
-    unsafe {
-        let code = libc::getpwuid_r(
-            uid,
-            &mut record,
-            buffer.as_mut_ptr().cast(),
-            buffer.len(),
-            &mut result,
-        );
-        crate::infra::error::ensure!(
-            code == 0 && !result.is_null(),
-            Message::FailedToResolveTheOriginalSudoUser
-        );
-        use std::os::unix::ffi::OsStrExt;
-        Ok(Some(
-            std::ffi::OsStr::from_bytes(std::ffi::CStr::from_ptr(record.pw_dir).to_bytes()).into(),
-        ))
-    }
-}
-
 pub(crate) fn assert_owned(path: &Path) -> Result<()> {
-    match fs::read_to_string(path) {
+    match crate::system::native::services::artifacts::read_definition(path) {
         Ok(content) if !content.contains(LABEL) => {
             bail!(Message::RefusingToReplaceOrRemoveAService {
                 value0: (path.display()).to_string()
@@ -72,15 +41,6 @@ pub(crate) fn assert_owned(path: &Path) -> Result<()> {
         Err(e) => Err(e.into()),
     }
 }
-#[cfg(any(target_os = "windows", test))]
-pub(crate) fn xml(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
 
 pub(crate) use crate::system::define::services::Artifacts;
 
@@ -88,24 +48,17 @@ impl Artifacts {
     pub fn read(plan: &Plan) -> Result<Self> {
         assert_owned(&plan.definition)?;
         let executable = is_file(&plan.executable)?;
-        #[cfg(target_os = "macos")]
-        let executable = if let Some(app) =
-            crate::system::macos::services::bundle::enclosing(&plan.executable)
-        {
-            executable
-                && is_file(&app.join("Contents/Info.plist"))?
-                && is_file(&app.join("Contents/_CodeSignature/CodeResources"))?
-        } else {
-            executable
-        };
+
         Ok(Self {
             definition: is_file(&plan.definition)?,
-            executable,
+            executable: crate::system::native::services::artifacts::inspect_executable(
+                plan, executable,
+            )?,
         })
     }
 }
 
-fn is_file(path: &Path) -> Result<bool> {
+pub(crate) fn is_file(path: &Path) -> Result<bool> {
     match fs::metadata(path) {
         Ok(metadata) => Ok(metadata.is_file()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),

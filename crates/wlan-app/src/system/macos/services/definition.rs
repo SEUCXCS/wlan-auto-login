@@ -5,7 +5,7 @@ use crate::infra::error::{Context, Result};
 use crate::infra::paths::Paths;
 use crate::system::define::services::{LABEL, Manager, Plan};
 #[cfg(target_os = "macos")]
-use crate::system::shared::services::artifacts::original_user_home;
+use crate::system::macos::services::artifacts::original_user_home;
 use std::path::PathBuf;
 
 pub(crate) fn bundle_definition(executable: &std::path::Path, system: bool) -> Option<PathBuf> {

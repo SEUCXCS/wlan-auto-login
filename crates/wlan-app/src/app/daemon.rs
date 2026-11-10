@@ -21,19 +21,7 @@ fn ensure_scope(paths: &Paths) -> Result<()> {
 }
 pub async fn run(client: &Client, paths: &Paths, managed: bool) -> Result<()> {
     let mut shutdown = Shutdown::new()?;
-    let stop = async {
-        #[cfg(windows)]
-        {
-            tokio::select! {
-                result = shutdown.wait() => result,
-                _ = crate::system::windows::runtime::service::stop_signal() => Ok(()),
-            }
-        }
-        #[cfg(not(windows))]
-        {
-            shutdown.wait().await
-        }
-    };
+    let stop = crate::system::native::runtime::daemon::stop(&mut shutdown);
     until_stopped(run_inner(client, paths, managed), stop).await?;
     tracing::info!("{}", Message::DaemonStopped);
     Ok(())

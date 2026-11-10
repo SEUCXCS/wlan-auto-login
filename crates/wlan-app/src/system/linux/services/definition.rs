@@ -6,7 +6,7 @@ use crate::infra::identity::{APP_NAME, DISPLAY_NAME, ORGANIZATION, SYSTEMD_UNIT}
 use crate::infra::paths::Paths;
 use crate::system::define::services::{LABEL, Manager, Plan};
 #[cfg(target_os = "linux")]
-use crate::system::shared::services::artifacts::original_user_home;
+use crate::system::linux::services::artifacts::original_user_home;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn linux_system_plan(executable: PathBuf, definition: PathBuf) -> Result<Plan> {

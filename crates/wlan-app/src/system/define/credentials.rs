@@ -43,7 +43,7 @@ pub struct CredentialPermit {
     pub config: std::path::PathBuf,
     pub generation: u64,
     // The shared permit shape is identical; only Linux user storage consumes this field.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[allow(dead_code)]
     pub session: Option<SessionPermit>,
 }
 
@@ -68,7 +68,7 @@ pub struct SessionIdentity {
     pub started_at: u64,
 }
 #[derive(Clone)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // Native session proof is Linux-only.
+#[allow(dead_code)] // Native session proof is Linux-only.
 pub struct SessionPermit {
     pub identity: SessionIdentity,
     pub state: SessionState,

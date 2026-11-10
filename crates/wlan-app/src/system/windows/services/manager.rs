@@ -4,8 +4,8 @@ use crate::infra::{
     error::{Message, Result},
 };
 use crate::system::define::services::{Action, LABEL, Plan, ServiceState};
-use crate::system::shared::services::steps::wait_task_stopped;
 use crate::system::shared::services::{fields, steps::execute};
+use crate::system::windows::services::wait::wait_task_stopped;
 pub(crate) async fn query_task(name: &str, runner: &impl Runner) -> Result<ServiceState> {
     let command = windows_query(name);
     let result = runner.output(&command).await?;

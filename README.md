@@ -777,3 +777,5 @@ git diff --check
 ## 许可证
 
 [MIT License](LICENSE) © 2026 SEUCXCS contributors。
+
+开发时可执行 cargo xtask check-boundaries 检查平台边界。原生实现归属各平台目录，Windows 修改与 Linux/macOS 实现分离；维护规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。

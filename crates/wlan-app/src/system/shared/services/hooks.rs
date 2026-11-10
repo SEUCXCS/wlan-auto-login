@@ -34,7 +34,6 @@ pub(crate) trait UninstallHooks {
         Vec::new()
     }
 }
-#[cfg(not(target_os = "macos"))]
+#[allow(dead_code)] // Native bundle uninstall supplies custom hooks.
 pub(crate) struct DefaultHooks;
-#[cfg(not(target_os = "macos"))]
 impl UninstallHooks for DefaultHooks {}

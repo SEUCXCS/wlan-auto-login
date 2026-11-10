@@ -1,0 +1,130 @@
+use crate::infra::error::Message;
+use crate::infra::error::Result;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Scope {
+    #[default]
+    User,
+    System,
+}
+
+impl Scope {
+    pub fn select(user: bool, system: bool, elevated: bool) -> Self {
+        if system || (!user && elevated) {
+            Self::System
+        } else {
+            Self::User
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::System => "system",
+        }
+    }
+
+    pub fn require_access(self) -> Result<()> {
+        let elevated = elevated()?;
+        if self == Self::System && !elevated {
+            crate::infra::error::bail!(Message::ElevationRequired);
+        }
+        if self == Self::User && elevated {
+            crate::infra::error::bail!(Message::UserSessionRequired);
+        }
+        Ok(())
+    }
+}
+
+pub fn elevated() -> Result<bool> {
+    {
+        use windows_sys::Win32::{
+            Foundation::CloseHandle,
+            Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
+            System::Threading::{GetCurrentProcess, OpenProcessToken},
+        };
+        // SAFETY: token is closed on every path and the output buffer has the API's exact layout.
+        unsafe {
+            let mut token = std::ptr::null_mut();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let mut elevation: TOKEN_ELEVATION = std::mem::zeroed();
+            let mut length = 0;
+            let result = GetTokenInformation(
+                token,
+                TokenElevation,
+                (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+                std::mem::size_of_val(&elevation) as u32,
+                &mut length,
+            );
+            let error = std::io::Error::last_os_error();
+            CloseHandle(token);
+            if result == 0 {
+                return Err(error.into());
+            }
+            Ok(elevation.TokenIsElevated != 0)
+        }
+    }
+}
+
+pub fn current_sid() -> Result<String> {
+    use std::ptr;
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, LocalFree},
+        Security::{
+            Authorization::ConvertSidToStringSidW, GetTokenInformation, TOKEN_QUERY, TOKEN_USER,
+            TokenUser,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+    // SAFETY: the token and SID buffers live through each API call; the word
+    // buffer is pointer-aligned and all Windows allocations/handles are freed.
+    unsafe {
+        let mut token = ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let result = (|| {
+            let mut size = 0;
+            GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut size);
+            let mut buffer = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+            if GetTokenInformation(
+                token,
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                size,
+                &mut size,
+            ) == 0
+            {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let user = &*buffer.as_ptr().cast::<TOKEN_USER>();
+            let mut string = ptr::null_mut();
+            if ConvertSidToStringSidW(user.User.Sid, &mut string) == 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let mut length = 0;
+            while *string.add(length) != 0 {
+                length += 1;
+            }
+            let sid = String::from_utf16_lossy(std::slice::from_raw_parts(string, length));
+            LocalFree(string.cast());
+            Ok(sid)
+        })();
+        CloseHandle(token);
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn actual_elevation_selects_default_scope_and_flags_override_it() {
+        assert_eq!(Scope::select(false, false, false), Scope::User);
+        assert_eq!(Scope::select(false, false, true), Scope::System);
+        assert_eq!(Scope::select(true, false, true), Scope::User);
+        assert_eq!(Scope::select(false, true, false), Scope::System);
+    }
+}
