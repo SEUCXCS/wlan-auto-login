@@ -24,3 +24,25 @@ async fn run_service() -> ExitCode {
     })
     .await
 }
+
+pub(super) fn configure(
+    args: &crate::app::cli::Cli,
+    paths: &crate::infra::error::Result<crate::infra::paths::Paths>,
+) {
+    let _ = (args, paths);
+}
+pub(super) async fn dispatch(
+    command: crate::app::cli::Command,
+    paths: &crate::infra::paths::Paths,
+) -> crate::infra::error::Result<Option<crate::app::cli::Command>> {
+    let _ = paths;
+    Ok(Some(command))
+}
+pub(in crate::app) async fn prepare_login(
+    context: &crate::app::context::Context,
+    installing: bool,
+    non_interactive: bool,
+) -> crate::infra::error::Result<()> {
+    let _ = (context, installing, non_interactive);
+    Ok(())
+}

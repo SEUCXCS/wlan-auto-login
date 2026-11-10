@@ -57,7 +57,7 @@ pub(super) async fn run_loop(
 ) -> Result<()> {
     let mut policy = Policy::default();
     let mut store = credentials::BackgroundReader::new(paths)?;
-    let mut credential_events: Option<CredentialEvents> = None;
+    let mut credential_events = crate::system::native::runtime::daemon::CredentialEvents::default();
     let mut monitor = None;
     let mut scheduled = true;
     let mut last_outcome = None;
@@ -72,17 +72,7 @@ pub(super) async fn run_loop(
         // Session hints remain ephemeral; the native reader validates them live.
         session.borrow_and_update();
         store.session_changed(session.clone());
-        #[cfg(target_os = "linux")]
-        if paths.scope == crate::infra::scope::Scope::User && credential_events.is_none() {
-            // Event subscription is bounded and never requests credential activation.
-            credential_events = tokio::time::timeout(
-                Duration::from_secs(5),
-                crate::system::linux::runtime::credentials::Events::new(),
-            )
-            .await
-            .ok()
-            .and_then(std::result::Result::ok);
-        }
+        credential_events.refresh(paths.scope).await;
 
         if monitor.is_none() {
             match crate::system::flow::wifi::monitor::run().await {
@@ -163,9 +153,7 @@ pub(super) async fn run_loop(
             _ = next_scheduled_check(&mut policy) => { scheduled = true; },
             _ = wake.notified() => { scheduled = true; policy.credentials_changed(); },
             _ = session.changed() => { scheduled = true; policy.credentials_changed(); },
-            event = credential_change(&mut credential_events) => {
-                #[cfg(target_os = "linux")]
-                if event.is_err() { credential_events = None; }
+            event = credential_events.changed() => {
                 let _ = event;
                 policy.credentials_changed();
                 scheduled = true;
@@ -179,19 +167,6 @@ pub(super) async fn run_loop(
         }
     }
 }
-#[cfg(target_os = "linux")]
-type CredentialEvents = crate::system::linux::runtime::credentials::Events;
-#[cfg(not(target_os = "linux"))]
-type CredentialEvents = ();
-async fn credential_change(events: &mut Option<CredentialEvents>) -> Result<()> {
-    #[cfg(target_os = "linux")]
-    if let Some(events) = events {
-        return events.changed().await;
-    }
-    let _ = events;
-    std::future::pending().await
-}
-
 pub(super) async fn next_scheduled_check(policy: &mut Policy) {
     tokio::time::sleep_until(policy.next_deadline(Instant::now())).await;
     if policy.retry_deadline().is_some() {

@@ -30,22 +30,8 @@ async fn entry(args: cli::Cli) -> ExitCode {
     let selected =
         scope::elevated().map(|elevated| scope::Scope::select(args.user, args.system, elevated));
     let paths = selected.and_then(config::Paths::new);
-    #[cfg(target_os = "macos")]
-    if let Ok(paths) = &paths {
-        crate::system::macos::runtime::host::configure(paths.scope);
-        use std::io::IsTerminal;
-        let interactive = match &args.command {
-            cli::Command::Login(args)
-            | cli::Command::Service(cli::ServiceCommand::Install(args)) => !args.non_interactive,
-            cli::Command::Logout { .. }
-            | cli::Command::Service(cli::ServiceCommand::Uninstall { .. }) => true,
-            cli::Command::Permission(cli::PermissionCommand::Get { .. }) => {
-                std::io::stdin().is_terminal()
-            }
-            _ => false,
-        } && std::io::stderr().is_terminal();
-        crate::system::macos::credentials::access::configure_interaction(interactive);
-    }
+    platform::configure(&args, &paths);
+
     let log = if matches!(
         args.command,
         cli::Command::Service(cli::ServiceCommand::Run)
@@ -84,16 +70,7 @@ async fn dispatch(args: cli::Cli, paths: config::Paths) -> crate::infra::error::
         system,
         command,
     } = args;
-    #[cfg(target_os = "linux")]
-    match &command {
-        cli::Command::Service(cli::ServiceCommand::SessionReady) => {
-            return crate::system::flow::session::ready(&paths).await;
-        }
-        cli::Command::Service(cli::ServiceCommand::SessionEnd) => {
-            return crate::system::flow::session::end(&paths).await;
-        }
-        _ => {}
-    }
+
     let command = match command {
         cli::Command::Permission(command) => {
             if !matches!(command, cli::PermissionCommand::List { .. }) {
@@ -103,8 +80,7 @@ async fn dispatch(args: cli::Cli, paths: config::Paths) -> crate::infra::error::
         }
         command => command,
     };
-    #[cfg(target_os = "macos")]
-    let Some(command) = macos::dispatch(command, &paths).await? else {
+    let Some(command) = platform::dispatch(command, &paths).await? else {
         return Ok(());
     };
     let args = cli::Cli {
@@ -122,3 +98,10 @@ async fn dispatch(args: cli::Cli, paths: config::Paths) -> crate::infra::error::
     }
     cli::dispatch(args, &context).await
 }
+
+#[cfg(target_os = "linux")]
+pub(super) use linux as platform;
+#[cfg(target_os = "macos")]
+pub(super) use macos as platform;
+#[cfg(target_os = "windows")]
+pub(super) use windows as platform;

@@ -1,5 +1,8 @@
+#[path = "../../cli/login.rs"]
 mod login;
+#[path = "../../cli/output.rs"]
 mod output;
+#[path = "../../cli/permission.rs"]
 pub(super) mod permission;
 use crate::system::define::credentials::CredentialMode;
 use clap::{Args, Parser, Subcommand};
@@ -45,13 +48,8 @@ pub enum Command {
     Daemon {
         // Internal macOS mode that runs only the Wi-Fi/Location host in the desktop
         // user session. Used by foreground commands and system services; skips login.
-        #[cfg(target_os = "macos")]
-        #[arg(long, hide = true)]
-        internal_wifi_host: bool,
+
         // Select the desktop-user host serving system-scope clients, without root.
-        #[cfg(target_os = "macos")]
-        #[arg(long, hide = true, requires = "internal_wifi_host")]
-        system_helper: bool,
     },
     /// 管理用户或系统范围的后台服务
     #[command(subcommand)]
@@ -82,24 +80,11 @@ pub enum ServiceCommand {
     /// 查看服务日志
     Logs(LogsArgs),
     /// 图形会话就绪后同步激活环境并通知 daemon（Linux 用户范围）
-    #[cfg(target_os = "linux")]
     SessionReady,
     /// 注销前撤销当前图形会话的就绪通知（Linux 用户范围）
-    #[cfg(target_os = "linux")]
     SessionEnd,
     #[command(hide = true)]
     Run,
-    #[cfg(target_os = "macos")]
-    #[command(hide = true, subcommand)]
-    Native(NativeServiceCommand),
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Clone, Copy, Subcommand)]
-pub enum NativeServiceCommand {
-    Status,
-    Register,
-    Unregister,
 }
 
 #[derive(Subcommand)]
@@ -178,19 +163,7 @@ pub(super) async fn dispatch(
     }
     match args.command {
         Command::Login(args) => login::run(context, args, false).await,
-        Command::Logout { forget } => {
-            #[cfg(target_os = "macos")]
-            {
-                use std::io::IsTerminal;
-                if let Err(error) =
-                    crate::system::macos::runtime::host::prepare(std::io::stderr().is_terminal())
-                        .await
-                {
-                    tracing::warn!(%error, "Wi-Fi authorization unavailable during logout");
-                }
-            }
-            controller::logout::run(&context.client, paths, forget).await
-        }
+        Command::Logout { forget } => controller::logout::run(&context.client, paths, forget).await,
         Command::Daemon { .. } => controller::daemon::run(context, false).await,
         Command::Service(command) => match command {
             ServiceCommand::Install(args) => login::run(context, args, true).await,
@@ -218,15 +191,11 @@ pub(super) async fn dispatch(
                 )
                 .await
             }
-            #[cfg(target_os = "linux")]
+
             ServiceCommand::SessionReady | ServiceCommand::SessionEnd => {
                 unreachable!("session hooks are handled by bootstrap")
             }
             ServiceCommand::Run => unreachable!("service process entry is handled by bootstrap"),
-            #[cfg(target_os = "macos")]
-            ServiceCommand::Native(_) => {
-                unreachable!("native service entry is handled by bootstrap")
-            }
         },
         Command::Permission(_) => {
             unreachable!("permission entry is handled by bootstrap")
@@ -347,48 +316,6 @@ mod tests {
         assert!(Cli::try_parse_from(["app", "permission", "get"]).is_err());
     }
 
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn native_service_arguments_are_explicit() {
-        for args in [
-            vec!["app", "service", "native", "status"],
-            vec!["app", "--user", "service", "native", "register"],
-        ] {
-            assert!(Cli::try_parse_from(args).is_ok());
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn internal_wifi_host_selects_a_separate_daemon_mode() {
-        for system_helper in [false, true] {
-            let mut args = vec!["app", "daemon", "--internal-wifi-host"];
-            if system_helper {
-                args.push("--system-helper");
-            }
-            assert!(matches!(
-                Cli::try_parse_from(args),
-                Ok(Cli {
-                    command: Command::Daemon {
-                        internal_wifi_host: true,
-                        system_helper: actual,
-                    },
-                    ..
-                }) if actual == system_helper
-            ));
-        }
-        assert!(Cli::try_parse_from(["app", "daemon", "--system-helper"]).is_err());
-        assert!(matches!(
-            Cli::try_parse_from(["app", "daemon", "--internal-wifi-host", "--help"]),
-            Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp
-        ));
-        assert!(matches!(
-            Cli::try_parse_from(["app", "daemon", "--unsupported-host-option", "--help"]),
-            Err(error) if error.kind() == clap::error::ErrorKind::UnknownArgument
-        ));
-    }
-
-    #[cfg(not(target_os = "macos"))]
     #[test]
     fn internal_wifi_host_is_not_available_on_other_platforms() {
         for option in ["--internal-wifi-host", "--system-helper"] {
