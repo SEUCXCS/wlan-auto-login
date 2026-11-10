@@ -31,15 +31,7 @@ pub(crate) async fn validate(
     }
 
     // Only Linux user storage imposes the graphical-session prerequisite.
-    #[cfg(target_os = "linux")]
-    if paths.scope == crate::infra::scope::Scope::User {
-        let Some(session_permit) = &permit.session else {
-            return Ok(Validity::SessionExpired);
-        };
-        if !crate::system::linux::runtime::session::valid(session_permit, session).await? {
-            return Ok(Validity::SessionExpired);
-        }
-    }
+
     let _ = session;
 
     // A mutation while native session queries awaited also invalidates the result.
@@ -106,20 +98,7 @@ mod tests {
         assert!(validate(&wrong, &permit, &receiver).await.is_err());
         Ok(())
     }
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn linux_user_permit_without_session_is_rejected_without_bus_access() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let paths = Paths::test(dir.path());
-        let permit = snapshot(&paths)?;
-        let receiver = tokio::sync::watch::channel(SessionState::default()).1;
-        assert_eq!(
-            validate(&paths, &permit, &receiver).await?,
-            Validity::SessionExpired
-        );
-        Ok(())
-    }
-    #[cfg(not(target_os = "linux"))]
+
     #[tokio::test]
     async fn native_user_permits_need_no_linux_graphical_session() -> Result<()> {
         let dir = tempfile::tempdir()?;
