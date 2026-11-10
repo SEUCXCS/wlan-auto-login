@@ -380,15 +380,17 @@ pub(crate) fn write_machine_file(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::Read;
 
-    fn fixture() -> Result<Option<tempfile::TempDir>> {
+    pub(crate) fn machine_storage_fixture() -> Result<Option<tempfile::TempDir>> {
         if !scope::elevated()? {
             eprintln!("machine storage tests require an elevated Windows test process");
             return Ok(None);
         }
+        // A hosted runner's temporary directory can be owned by its user even
+        // when the process is elevated. Use a trusted owner for the test base.
         let dir = tempfile::tempdir()?;
         let file = open(dir.path(), READ_CONTROL | WRITE_DAC | WRITE_OWNER, true)?;
         Policy::machine().descriptor(false)?.apply(&file, true)?;
@@ -411,7 +413,7 @@ mod tests {
 
     #[test]
     fn machine_file_round_trip_and_missing_storage() -> Result<()> {
-        let Some(dir) = fixture()? else {
+        let Some(dir) = machine_storage_fixture()? else {
             return Ok(());
         };
         let secrets = dir.path().join("SEUCXCS/wlanlogin/secrets");
@@ -437,7 +439,7 @@ mod tests {
     #[test]
     fn attacker_owned_directories_and_ancestors_are_rejected_before_publication() -> Result<()> {
         for untrusted in 0..3 {
-            let Some(dir) = fixture()? else {
+            let Some(dir) = machine_storage_fixture()? else {
                 return Ok(());
             };
             let user = scope::current_sid()?;
@@ -472,7 +474,7 @@ mod tests {
 
     #[test]
     fn broadly_readable_existing_credentials_are_rejected() -> Result<()> {
-        let Some(dir) = fixture()? else {
+        let Some(dir) = machine_storage_fixture()? else {
             return Ok(());
         };
         let path = dir.path().join("SEUCXCS/wlanlogin/secrets/login.cred");
@@ -488,7 +490,7 @@ mod tests {
 
     #[tokio::test]
     async fn changed_permissions_invalidate_a_cached_machine_credential_read() -> Result<()> {
-        let Some(dir) = fixture()? else {
+        let Some(dir) = machine_storage_fixture()? else {
             return Ok(());
         };
         let mut paths =
@@ -526,7 +528,7 @@ mod tests {
 
     #[test]
     fn redirected_ancestors_are_rejected_without_touching_the_target() -> Result<()> {
-        let Some(dir) = fixture()? else {
+        let Some(dir) = machine_storage_fixture()? else {
             return Ok(());
         };
         let outside = dir.path().join("outside");
