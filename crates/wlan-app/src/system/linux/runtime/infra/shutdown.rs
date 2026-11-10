@@ -7,25 +7,14 @@ use std::{future::Future, time::Duration};
 pub const RUNTIME_GRACE: Duration = Duration::from_secs(2);
 
 pub struct Shutdown {
-    #[cfg(unix)]
     terminate: tokio::signal::unix::Signal,
-    #[cfg(unix)]
-    interrupt: tokio::signal::unix::Signal,
-    #[cfg(windows)]
-    console: Option<ConsoleSignals>,
-}
 
-#[cfg(windows)]
-struct ConsoleSignals {
-    interrupt: tokio::signal::windows::CtrlC,
-    close: tokio::signal::windows::CtrlClose,
-    ctrl_break: tokio::signal::windows::CtrlBreak,
+    interrupt: tokio::signal::unix::Signal,
 }
 
 impl Shutdown {
     // Register before doing any daemon work, and retain these listeners until exit.
     pub fn new() -> Result<Self> {
-        #[cfg(unix)]
         {
             use tokio::signal::unix::{SignalKind, signal};
             Ok(Self {
@@ -35,49 +24,14 @@ impl Shutdown {
                     .context(Message::FailedToRegisterSIGINTListener)?,
             })
         }
-        #[cfg(windows)]
-        {
-            use tokio::signal::windows;
-            // SCM services and detached scheduled tasks have no console. They
-            // use SCM / IPC stops; console registration must not gate startup.
-            // SAFETY: GetConsoleWindow only reads the current process attachment.
-            let attached =
-                unsafe { !windows_sys::Win32::System::Console::GetConsoleWindow().is_null() };
-            let console = if attached {
-                Some(ConsoleSignals {
-                    interrupt: windows::ctrl_c().context(Message::FailedToRegisterCtrlCListener)?,
-                    close: windows::ctrl_close()
-                        .context(Message::FailedToRegisterConsoleCloseListener)?,
-                    ctrl_break: windows::ctrl_break()
-                        .context(Message::FailedToRegisterCtrlBreakListener)?,
-                })
-            } else {
-                None
-            };
-            Ok(Self { console })
-        }
     }
 
     pub async fn wait(&mut self) -> Result<()> {
-        #[cfg(unix)]
         let received = tokio::select! {
             value = self.terminate.recv() => value,
             value = self.interrupt.recv() => value,
         };
-        #[cfg(windows)]
-        let received = tokio::select! {
 
-            value = async {
-                match &mut self.console {
-                    Some(signals) => tokio::select! {
-                        value = signals.interrupt.recv() => value,
-                        value = signals.close.recv() => value,
-                        value = signals.ctrl_break.recv() => value,
-                    },
-                    None => std::future::pending().await,
-                }
-            } => value,
-        };
         received.context(Message::ProcessShutdownSignalChannelClosed)
     }
 }
@@ -96,7 +50,7 @@ pub async fn until_stopped(
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::{

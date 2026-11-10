@@ -1,19 +1,10 @@
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
-#[cfg(unix)]
+
 use std::fs;
 use std::path::Path;
 
-#[cfg(windows)]
-pub(crate) mod windows;
-
 pub fn private_dir(path: &Path) -> Result<()> {
-    #[cfg(windows)]
-    {
-        windows::prepare_directory(path, false)?;
-        Ok(())
-    }
-    #[cfg(unix)]
     {
         fs::create_dir_all(path)?;
         let metadata = fs::symlink_metadata(path)?;
@@ -23,7 +14,7 @@ pub fn private_dir(path: &Path) -> Result<()> {
                 value0: (path.display()).to_string()
             }
         );
-        #[cfg(unix)]
+
         {
             use std::os::unix::fs::{MetadataExt, PermissionsExt};
             crate::infra::error::ensure!(
@@ -36,12 +27,6 @@ pub fn private_dir(path: &Path) -> Result<()> {
         }
         Ok(())
     }
-}
-
-#[cfg(windows)]
-pub fn restrict_windows(path: &Path, public: bool) -> Result<()> {
-    windows::prepare_directory(path, public)?;
-    Ok(())
 }
 
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {

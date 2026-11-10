@@ -29,7 +29,7 @@ impl Error {
         Self::Message(message.into())
     }
 
-    fn external(error: anyhow::Error) -> Self {
+    pub(crate) fn external(error: anyhow::Error) -> Self {
         let error = match error.downcast::<Self>() {
             Ok(error) => return error,
             Err(error) => error,
@@ -89,14 +89,6 @@ native_errors!(
     std::sync::mpsc::SendError<()>,
     anyhow::Error
 );
-#[cfg(target_os = "linux")]
-native_errors!(
-    zbus::Error,
-    zbus::zvariant::Error,
-    dbus_secret_service::Error
-);
-#[cfg(target_os = "macos")]
-native_errors!(security_framework::base::Error);
 
 pub trait Context<T> {
     fn context(self, message: impl Into<Message>) -> Result<T>;
@@ -137,3 +129,15 @@ macro_rules! ensure {
     ($condition:expr, $($args:tt)*) => { if !$condition { $crate::infra::error::bail!($($args)*); } };
 }
 pub(crate) use {bail, ensure, error};
+
+#[cfg(target_os = "linux")]
+#[path = "../system/linux/runtime/infra/error.rs"]
+mod platform;
+
+#[cfg(target_os = "macos")]
+#[path = "../system/macos/runtime/infra/error.rs"]
+mod platform;
+
+#[cfg(target_os = "windows")]
+#[path = "../system/windows/runtime/infra/error.rs"]
+mod platform;

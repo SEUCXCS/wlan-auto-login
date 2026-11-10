@@ -37,12 +37,6 @@ impl Scope {
 }
 
 pub fn elevated() -> Result<bool> {
-    #[cfg(unix)]
-    {
-        // SAFETY: geteuid has no preconditions and does not change process identity.
-        Ok(unsafe { libc::geteuid() } == 0)
-    }
-    #[cfg(windows)]
     {
         use windows_sys::Win32::{
             Foundation::CloseHandle,
@@ -74,7 +68,6 @@ pub fn elevated() -> Result<bool> {
     }
 }
 
-#[cfg(windows)]
 pub fn current_sid() -> Result<String> {
     use std::ptr;
     use windows_sys::Win32::{

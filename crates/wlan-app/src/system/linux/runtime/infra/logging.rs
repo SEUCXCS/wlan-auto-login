@@ -36,7 +36,6 @@ where
 }
 
 fn utc_time() -> String {
-    #[cfg(unix)]
     {
         // SAFETY: libc writes to our thread-local tm buffer; gmtime_r is thread safe.
         unsafe {
@@ -53,18 +52,6 @@ fn utc_time() -> String {
                 value.tm_hour,
                 value.tm_min,
                 value.tm_sec
-            )
-        }
-    }
-    #[cfg(windows)]
-    {
-        // SAFETY: GetSystemTime fills the correctly sized SYSTEMTIME buffer (Win7 supported).
-        unsafe {
-            let mut value = std::mem::zeroed();
-            windows_sys::Win32::System::SystemInformation::GetSystemTime(&mut value);
-            format!(
-                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-                value.wYear, value.wMonth, value.wDay, value.wHour, value.wMinute, value.wSecond
             )
         }
     }
@@ -98,7 +85,7 @@ pub(crate) fn background_log(paths: &Paths) -> Result<fs::File> {
     private_dir(&paths.config)?;
     let mut options = fs::OpenOptions::new();
     options.create(true).append(true);
-    #[cfg(unix)]
+
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);

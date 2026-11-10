@@ -13,7 +13,7 @@ fn open_lock(path: &Path) -> Result<File> {
     }
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
+
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
@@ -27,7 +27,6 @@ pub fn singleton(paths: &Paths) -> Result<File> {
     Ok(file)
 }
 
-#[cfg(target_os = "macos")]
 pub fn managed_lock(paths: &Paths) -> Result<File> {
     let file = open_lock(&paths.runtime.join("managed.lock"))?;
     fs2::FileExt::try_lock_exclusive(&file).context(Message::DaemonIsAlreadyRunning)?;
@@ -48,7 +47,7 @@ pub async fn operation_lock(paths: &Paths) -> Result<File> {
             Ok(()) => return Ok(file),
             Err(e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
-                    || (cfg!(windows)
+                    || (false
                         && e.raw_os_error() == fs2::lock_contended_error().raw_os_error()) =>
             {
                 tokio::time::sleep(Duration::from_millis(100)).await

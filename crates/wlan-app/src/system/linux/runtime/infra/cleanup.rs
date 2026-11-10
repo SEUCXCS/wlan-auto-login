@@ -26,16 +26,6 @@ pub fn validate_directory(path: &Path) -> Result<()> {
                         value0: (part.display()).to_string()
                     }
                 );
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::MetadataExt;
-                    ensure!(
-                        metadata.file_attributes() & 0x400 == 0,
-                        Message::RefusingToCleanDataThroughAReparse {
-                            value0: (part.display()).to_string()
-                        }
-                    );
-                }
             }
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => {
@@ -113,7 +103,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(unix)]
     #[test]
     fn cleanup_rejects_redirected_organization_and_app_directories() -> Result<()> {
         for redirect_organization in [false, true] {

@@ -5,21 +5,16 @@ pub const ORGANIZATION: &str = "SEUCXCS";
 pub const APP_NAME: &str = "wlanlogin";
 pub const DISPLAY_NAME: &str = "CXCS WLAN Login";
 pub const CREDENTIAL_ENTRY: &str = "saved-login";
-#[cfg(target_os = "macos")]
+#[allow(dead_code)]
 pub const APP_BUNDLE: &str = "wlanlogin.app";
 
-#[cfg(windows)]
-pub const DAEMON_BINARY: &str = "wlanlogin-daemon.exe";
-#[cfg(not(any(windows, target_os = "macos")))]
-pub const DAEMON_BINARY: &str = "wlanlogin-daemon";
-
-#[cfg(any(target_os = "linux", test))]
+#[allow(dead_code)]
 pub const SYSTEMD_UNIT: &str = "dev.cxcs.tools.wlanlogin.service";
-#[cfg(target_os = "macos")]
+#[allow(dead_code)]
 pub const LAUNCHD_PLIST: &str = "dev.cxcs.tools.wlanlogin.plist";
-#[cfg(target_os = "macos")]
+#[allow(dead_code)]
 pub const SYSTEM_CREDENTIAL_SERVICE: &str = "dev.cxcs.tools.wlanlogin.system";
-#[cfg(target_os = "macos")]
+#[allow(dead_code)]
 pub const NETWORK_QUEUE: &str = "dev.cxcs.tools.wlanlogin.network";
 
 // Shared with xtask, including when the app itself is built for another OS.
@@ -65,3 +60,16 @@ pub fn macos_service_plist(system: bool) -> String {
         .replace("@APP_ID@", APP_ID)
         .replace("@APP_NAME@", APP_NAME)
 }
+
+#[cfg(target_os = "linux")]
+#[path = "../system/linux/runtime/infra/identity.rs"]
+mod platform;
+#[cfg(target_os = "macos")]
+#[path = "../system/macos/runtime/infra/identity.rs"]
+mod platform;
+#[cfg(target_os = "windows")]
+#[path = "../system/windows/runtime/infra/identity.rs"]
+mod platform;
+#[cfg(not(target_os = "macos"))]
+#[allow(unused_imports)]
+pub(crate) use platform::DAEMON_BINARY;

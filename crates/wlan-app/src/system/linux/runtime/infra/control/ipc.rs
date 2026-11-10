@@ -30,14 +30,14 @@ pub struct Server {
     task: tokio::task::JoinHandle<()>,
     path: std::path::PathBuf,
     pub status: Arc<RwLock<RuntimeStatus>>,
-    #[cfg(unix)]
+
     socket: std::path::PathBuf,
 }
 impl Drop for Server {
     fn drop(&mut self) {
         self.task.abort();
         let _ = fs::remove_file(&self.path);
-        #[cfg(unix)]
+
         let _ = fs::remove_file(&self.socket);
     }
 }
@@ -138,7 +138,7 @@ pub async fn serve_with_mode(
             task,
             path,
             status,
-            #[cfg(unix)]
+
             socket: paths.runtime.join("daemon.sock"),
         },
         receiver,
@@ -186,47 +186,19 @@ pub async fn status(paths: &Paths) -> Result<RuntimeStatus> {
         .status
         .ok_or_else(|| crate::infra::error::error!(Message::ControlProtocol))
 }
-#[cfg(target_os = "linux")]
+
 pub async fn session_ready(paths: &Paths, session: String) -> Result<()> {
     request(paths, Command::SessionReady { session })
         .await
         .map(|_| ())
 }
-#[cfg(target_os = "linux")]
+
 pub async fn session_end(paths: &Paths, session: String) -> Result<()> {
     request(paths, Command::SessionEnd { session })
         .await
         .map(|_| ())
 }
 
-#[cfg(target_os = "macos")]
-pub async fn managed_running(paths: &Paths) -> bool {
-    request(paths, Command::ManagedRunning).await.is_ok()
-}
-#[cfg(target_os = "macos")]
-pub async fn managed_pid(paths: &Paths) -> Option<u32> {
-    let endpoint: Endpoint =
-        serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json")).ok()?).ok()?;
-    if endpoint.pid > 0 && managed_running(paths).await {
-        Some(endpoint.pid)
-    } else {
-        None
-    }
-}
-#[cfg(target_os = "macos")]
-pub async fn stop_managed(paths: &Paths) -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(25), async {
-        loop {
-            let _ = request(paths, Command::ManagedStop).await;
-            if super::lock::managed_lock(paths).is_ok() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .map_err(|_| crate::infra::error::error!(Message::DaemonHasNotExitedStopTheRunningDaemon))
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,25 +274,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
-    #[tokio::test]
-    async fn managed_stop_does_not_stop_a_foreground_replacement() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let paths = Paths::test(dir.path());
-        let (server, mut receiver) = serve_with_mode(&paths, true).await?;
-        assert!(managed_running(&paths).await);
-        assert!(request(&paths, Command::ManagedStop).await.is_ok());
-        assert_eq!(receiver.recv().await, Some(Signal::Stop));
-        drop(server);
-        let (_manual, mut receiver) = serve_with_mode(&paths, false).await?;
-        assert!(!managed_running(&paths).await);
-        stop_managed(&paths).await?;
-        assert!(receiver.try_recv().is_err());
-        wake(&paths).await;
-        assert_eq!(receiver.recv().await, Some(Signal::Wake));
-        Ok(())
-    }
-
     #[tokio::test]
     async fn local_ipc_requires_token_and_wakes_daemon() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -349,7 +302,7 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(1), receiver.recv()).await?,
             Some(Signal::Wake)
         );
-        #[cfg(unix)]
+
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(

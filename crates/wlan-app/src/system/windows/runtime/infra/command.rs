@@ -38,7 +38,7 @@ impl Invocation {
     pub(crate) async fn output(&self) -> Result<CommandOutput> {
         let mut command = tokio::process::Command::new(&self.program);
         command.args(&self.args).kill_on_drop(true);
-        #[cfg(windows)]
+
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW, available on Win7.
         let result = tokio::time::timeout(Duration::from_secs(30), command.output())
             .await

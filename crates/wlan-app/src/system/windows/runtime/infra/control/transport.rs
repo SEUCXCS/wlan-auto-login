@@ -1,48 +1,16 @@
 //! Local IPC restricted to the selected user or system scope. No TCP port is opened.
-#[cfg(unix)]
-use crate::infra::error::Message;
+
 use crate::infra::error::Result;
 use crate::infra::paths::Paths;
 
-#[cfg(unix)]
-pub type Stream = tokio::net::UnixStream;
-#[cfg(unix)]
-pub struct Listener {
-    inner: tokio::net::UnixListener,
-}
-#[cfg(unix)]
-impl Listener {
-    pub fn bind(paths: &Paths, _nonce: &str) -> Result<(Self, String)> {
-        use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-        let path = paths.runtime.join("daemon.sock");
-        match std::fs::symlink_metadata(&path) {
-            Ok(meta) if meta.file_type().is_socket() => std::fs::remove_file(&path)?,
-            Ok(_) => crate::infra::error::bail!(Message::ControlSocketPathIsOccupiedByAnotherFile),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
-        }
-        let inner = tokio::net::UnixListener::bind(&path)?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-        Ok((Self { inner }, path.to_string_lossy().into_owned()))
-    }
-    pub async fn accept(&mut self) -> Result<Stream> {
-        Ok(self.inner.accept().await?.0)
-    }
-}
-#[cfg(unix)]
-pub async fn connect(address: &str) -> Result<Stream> {
-    Ok(Stream::connect(address).await?)
-}
-
-#[cfg(windows)]
 pub type Stream = tokio::net::windows::named_pipe::NamedPipeServer;
-#[cfg(windows)]
+
 pub struct Listener {
     inner: Stream,
     address: String,
     scope: crate::infra::scope::Scope,
 }
-#[cfg(windows)]
+
 impl Listener {
     pub fn bind(paths: &Paths, nonce: &str) -> Result<(Self, String)> {
         let address = format!(r"\\.\pipe\{}-{nonce}", crate::infra::identity::APP_ID);
@@ -62,7 +30,7 @@ impl Listener {
         Ok(std::mem::replace(&mut self.inner, next))
     }
 }
-#[cfg(windows)]
+
 pub async fn connect(address: &str) -> Result<tokio::net::windows::named_pipe::NamedPipeClient> {
     // The enclosing IPC request supplies the deadline. A connected instance may
     // be busy until the server accepts it and creates its next listening instance.
@@ -80,7 +48,7 @@ pub async fn connect(address: &str) -> Result<tokio::net::windows::named_pipe::N
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -119,7 +87,6 @@ mod tests {
     }
 }
 
-#[cfg(windows)]
 fn pipe(address: &str, first: bool, scope: crate::infra::scope::Scope) -> Result<Stream> {
     use std::ptr;
     use windows_sys::Win32::{
