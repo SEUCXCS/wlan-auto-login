@@ -23,6 +23,7 @@ pub(crate) async fn wait_task_stopped(
     .context(Message::TimedOutWaitingForServiceStopNoNew)?
 }
 
+#[cfg(target_os = "windows")]
 pub(crate) async fn wait_task_started(
     manager: &Manager,
     runner: &impl Runner,
