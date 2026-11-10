@@ -12,3 +12,6 @@ mod dispatch;
 pub(crate) use dispatch::execute_optional;
 
 pub(crate) mod wait;
+
+#[cfg(target_os = "windows")]
+pub(crate) mod task;

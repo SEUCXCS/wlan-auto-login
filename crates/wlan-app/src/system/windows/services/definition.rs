@@ -83,7 +83,7 @@ pub(crate) fn windows_plan(executable: PathBuf, definition: PathBuf, sid: &str) 
     let name = format!("{LABEL}-{sid}");
     let sid = xml(sid);
     let content = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<?xml version="1.0" encoding="UTF-16"?>
 <!-- {LABEL} -->
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
 <RegistrationInfo><Description>{DISPLAY_NAME} — Student_CX automatic login</Description></RegistrationInfo>

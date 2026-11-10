@@ -194,3 +194,9 @@ Native infrastructure source under system/<platform>/runtime/infra is compiled e
 Installation orchestration lives in each platform flow. Windows and Linux reuse byte-preserving backups from shared/services/payload.rs; macOS retains its signed bundle transaction. Native artifact readers and service dispatch live under each platform services directory. Do not put native API, XML encoding, ACL, or task-registration branches in shared workflows.
 
 Run targeted tests during each feature, then the complete workspace suite once at final integration. On Windows, if an external tool has added untrusted write access to the user Temp ACL, use an isolated temporary directory with the current user and SYSTEM as the only writers; never weaken product storage validation to accommodate a test environment. Cross-target checks verify compilation, not native runtime behavior.
+
+### Windows installation verification
+
+Task definitions use matching UTF-16 declarations, UTF-16LE bytes and a BOM. Native read paths also accept legacy UTF-8 files. Validate the staged file with TASK_VALIDATE_ONLY before stopping a task. Snapshot actual registration XML independently of on-disk leftovers; only restart a restored task if it was previously running or queued. Absence must be confirmed through the numeric COM query before treating failed deletion as complete. Retain both native XML and file backups after incomplete rollback. Installation success requires a registered, enabled, running or queued task.
+
+Windows schtasks/sc diagnostics are decoded at the native process boundary using the system OEM code page. PowerShell queries explicitly emit UTF-8 and keep that separate protocol. Do not change global console or system locale settings. Native XML validation and missing-task diagnostics tests are read-only; install/rollback tests use FakeRunner and isolated files.
