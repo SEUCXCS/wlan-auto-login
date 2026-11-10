@@ -6,5 +6,5 @@ pub(crate) mod permission;
 #[cfg(target_os = "windows")]
 pub(crate) mod runtime;
 pub(crate) mod services;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 pub(crate) mod wifi;

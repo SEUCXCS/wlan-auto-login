@@ -68,7 +68,7 @@ try {{
     try {{ $task = $folder.GetTask('{name}') }} catch {{
         $cause = $_.Exception
         while ($null -ne $cause.InnerException) {{ $cause = $cause.InnerException }}
-        if (($cause -is [System.Runtime.InteropServices.COMException]) -and ($cause.ErrorCode -eq -2147024894)) {{
+        if ([System.Runtime.InteropServices.Marshal]::GetHRForException($cause) -eq -2147024894) {{
             [Console]::WriteLine('Installed=0')
             exit 0
         }}
@@ -190,6 +190,22 @@ mod tests {
     use super::*;
     use crate::infra::error::Context;
     use crate::system::define::services::ServiceManager;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn missing_task_is_absent_in_windows_powershell() -> Result<()> {
+        let name = format!(
+            "wlanlogin-missing-task-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .context("system clock is before the Unix epoch")?
+                .as_nanos()
+        );
+        let state = query_task(&name, &crate::infra::command::SystemRunner).await?;
+        assert!(!state.registered);
+        Ok(())
+    }
 
     #[test]
     fn scm_registration_commands_and_query_share_the_service_name() -> Result<()> {

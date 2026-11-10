@@ -64,7 +64,59 @@ impl Listener {
 }
 #[cfg(windows)]
 pub async fn connect(address: &str) -> Result<tokio::net::windows::named_pipe::NamedPipeClient> {
-    Ok(tokio::net::windows::named_pipe::ClientOptions::new().open(address)?)
+    // The enclosing IPC request supplies the deadline. A connected instance may
+    // be busy until the server accepts it and creates its next listening instance.
+    loop {
+        match tokio::net::windows::named_pipe::ClientOptions::new().open(address) {
+            Ok(client) => return Ok(client),
+            Err(error)
+                if error.raw_os_error()
+                    == Some(windows_sys::Win32::Foundation::ERROR_PIPE_BUSY as i32) =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn busy_pipe_waits_for_an_available_instance() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::test(dir.path());
+        let (mut listener, address) =
+            Listener::bind(&paths, &format!("busy-pipe-test-{}", std::process::id()))?;
+        let _first = connect(&address).await?;
+        let waiting = connect(&address);
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err()
+        );
+        let _accepted = listener.accept().await?;
+        let _second = tokio::time::timeout(Duration::from_secs(1), waiting).await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_pipe_fails_without_retrying() -> Result<()> {
+        let address = format!(
+            r"\\.\pipe\wlanlogin-missing-pipe-test-{}",
+            std::process::id()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), connect(&address))
+                .await?
+                .is_err()
+        );
+        Ok(())
+    }
 }
 
 #[cfg(windows)]
