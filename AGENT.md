@@ -40,6 +40,8 @@ Keep `CFBundleShortVersionString` tied to the Cargo release version. Reserve an 
 
 Run relevant checks after each logical change and the complete set before delivery of an architectural change:
 
+The `Tests` workflow (`.github/workflows/test.yml`) runs on pushes and pull requests targeting `main` or `develop`, and on manual dispatch. Its native Linux x86_64, Windows x86_64 MSVC, macOS Intel and Apple Silicon jobs run identical Clippy, workspace test, build and safe CLI smoke steps with stable Rust and the lockfile. Formatting and source-boundary checks run once separately. Preserve the common test coverage across the matrix; only documented native features may differ.
+
 ```sh
 cargo fmt --all -- --check
 cargo check --workspace --locked

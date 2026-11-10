@@ -148,6 +148,10 @@ macOS Core Location 的长期 RunLoop 每轮必须清空独立的 `autoreleasepo
 
 ## 测试与验证
 
+`.github/workflows/test.yml` 的 `Tests` 工作流覆盖推送至 `main` / `develop`、以它们为目标的 PR，以及手动触发。矩阵与发布平台一致：Linux x86_64、Windows x86_64 MSVC、macOS Intel 和 Apple Silicon。每项都在原生 runner 上运行相同的 Clippy、完整 workspace 测试、构建和安全 CLI smoke 检查；格式与平台边界检查独立运行一次。矩阵不会因另一个平台失败而提前取消，同一分支或 PR 的新提交会取消旧运行。
+
+CI 使用 stable Rust 和 `Cargo.lock`，缓存按工具链与平台隔离。Linux 安装 D-Bus 构建及私有总线测试依赖。不要通过过滤公共测试、运行整个 ignored 套件或使用真实系统服务来让某个平台通过。Windows 本地 Temp ACL 不满足存储校验时，使用仅当前用户和 SYSTEM 可写的隔离临时目录，不修改产品校验规则。
+
 `wlan-app` 的测试一律放在所属文件末尾的 `#[cfg(test)] mod tests` 中；即使测试很长，也不要拆成 `tests.rs`、独立测试目录或 `#[path]` 引入的测试文件。共用假实现可放在相应基础模块的测试模块里，例如 `infra::command::tests`。协议库已有的集成测试和 fixtures 保持其现有组织。
 
 跨平台行为只维护一份测试，通过编译期选中的平台实现运行。CLI 公共契约放在 `app.rs`，基础设施公共契约放在 `infra.rs`，凭据公共契约放在 `system/define/credentials.rs`，默认卸载事务放在 `system/shared/flow/mod.rs`。同类型输入使用表驱动，断言应能定位失败的输入；平台目录只保留原生特例，不复制公共套件。测试代码也必须通过平台边界检查。

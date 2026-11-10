@@ -765,6 +765,8 @@ macOS 后台程序位于对应应用包的 `Contents/MacOS/wlanlogin`。钥匙�
 
 开发验证使用模拟门户、临时目录、模拟服务命令和隔离 IPC。不访问真实校园网，不修改已安装服务或真实凭据。部分测试使用本地 socket 和子进程，Linux 测试还使用 `dbus-daemon`。
 
+`Tests` 工作流在推送至 `main`、`develop` 或提交以这两个分支为目标的 PR 时运行，也可手动触发。Linux x86_64、Windows x86_64 MSVC、macOS Intel 和 Apple Silicon 使用相同的 Clippy、workspace 测试、构建及 CLI 帮助／版本检查；格式与平台边界检查单独运行一次。公共行为共用测试套件，原生特例见[贡献指南](CONTRIBUTING.md#测试与验证)。
+
 在仓库根目录执行：
 
 ```sh
