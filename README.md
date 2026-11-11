@@ -268,7 +268,19 @@ macOS 安装会校验完整应用包。替换旧副本后，程序检查凭据�
 
 ### Windows
 
-1. 下载与 CPU 架构匹配的 Windows 附件并解压。
+下载与 CPU 架构匹配的 `wlanlogin-windows-setup-<arch>.exe`，双击进入安装向导。选择“仅当前用户”或“此计算机上的所有用户”，填写账号、密码和线路后开始安装。整机安装会请求管理员授权。
+
+向导将 `wlanlogin.exe`、`README.md` 和 `LICENSE` 安装到所选范围的目录，并加入对应的 PATH。安装完成后，打开新终端即可运行 `wlanlogin`。用户安装使用计划任务和 Credential Manager；整机安装使用 Windows 服务和机器 DPAPI。
+
+同一范围的升级会沿用已保存的账号、密码和线路，跳过账号页。同版本重新打包也走升级流程。更新期间保留服务凭据和配置。
+
+安装失败时，Windows Installer 回退程序文件和 PATH。全新范围通过 `service uninstall --purge` 清理；已有凭据、配置或服务时，安装器恢复原数据和运行状态。失败弹窗会列出 `setup.log` 路径，同目录的 `wlanlogin-form-*` 子目录包含 `action.log` 和 `cli.log`，发起安装的用户可直接读取这些日志。恢复失败时，请同时保留安装目录下的 `.installer-*` 恢复目录。
+
+在 Windows“已安装的应用”中卸载时，安装器执行所选范围的 `service uninstall --purge`，清除后台服务、凭据、配置和应用日志，再由 MSI 删除安装文件和对应 PATH 项。
+
+Release 同时提供原有的 `wlanlogin-windows-<arch>.zip`。使用压缩包时按以下步骤安装。
+
+1. 下载与 CPU 架构匹配的 Windows ZIP 附件并解压。
 
    解压后的程序名为 `wlanlogin.exe`。若没有对应附件，先[从源码构建](#build-windows)。
 
@@ -290,6 +302,10 @@ macOS 安装会校验完整应用包。替换旧副本后，程序检查凭据�
    设置后打开新终端。
 
 用户凭据保存到 Credential Manager。后台任务在当前用户登录后启动。
+
+安装器会先校验任务定义，再停止和替换已有任务。若旧版安装曾报告“(1,40) 无法切换编码”，更新程序后，在原来的范围重新执行 service install 即可，无需修改 Windows 的区域设置或系统 UTF-8 选项。
+
+安装失败时，程序会恢复已有任务的注册和原先的运行状态。若提示回滚未完成，请保留日志中列出的恢复文件；其中可能包括原生任务定义快照。确认恢复成功前不要手动删除这些文件。
 
 如果选择系统范围，在程序目录打开管理员 PowerShell，执行：
 
@@ -639,6 +655,16 @@ xtask 使用证书签名时启用 hardened runtime，并请求 Apple 时间戳�
 
 如果选择 GNU target，另行安装对应的 MinGW 工具链。仅添加 Rust target 不会安装原生链接工具。
 
+构建 Windows 安装包需要 Windows SDK 资源编译器、.NET 8 SDK，以及 WiX 6.0.2 和它的官方 UI 扩展。
+
+```powershell
+dotnet tool install --global wix --version 6.0.2
+wix extension add WixToolset.UI.wixext/6.0.2
+cargo xtask bundle windows --target x86_64-pc-windows-msvc
+```
+
+产物为 `target/x86_64-pc-windows-msvc/release/bundle/wlanlogin-windows-setup-x86_64.exe`。支持 `--profile`、`--target-dir` 和 `--wix <path>`，具体路径以 `Bundle:` 输出为准。安装器采用官方 WixUI 标准向导，图标为仓库中预先生成的 `packaging/windows/icon/icon.ico`，与 macOS 图标使用相同素材。
+
 ## 排障
 
 ### 日志
@@ -761,6 +787,8 @@ macOS 后台程序位于对应应用包的 `Contents/MacOS/wlanlogin`。钥匙�
 
 开发验证使用模拟门户、临时目录、模拟服务命令和隔离 IPC。不访问真实校园网，不修改已安装服务或真实凭据。部分测试使用本地 socket 和子进程，Linux 测试还使用 `dbus-daemon`。
 
+`Tests` 工作流在推送至 `main`、`develop` 或提交以这两个分支为目标的 PR 时运行，也可手动触发。Linux x86_64、Windows x86_64 MSVC、macOS Intel 和 Apple Silicon 使用相同的 Clippy、workspace 测试、构建及 CLI 帮助／版本检查；格式与平台边界检查单独运行一次。公共行为共用测试套件，原生特例见[贡献指南](CONTRIBUTING.md#测试与验证)。
+
 在仓库根目录执行：
 
 ```sh
@@ -777,3 +805,5 @@ git diff --check
 ## 许可证
 
 [MIT License](LICENSE) © 2026 SEUCXCS contributors。
+
+开发时可执行 cargo xtask check-boundaries 检查平台边界。原生实现归属各平台目录，Windows 修改与 Linux/macOS 实现分离；维护规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。

@@ -4,11 +4,11 @@ use crate::system::define::credentials::CredentialMode;
 use crate::system::shared::credentials::decode;
 use crate::system::shared::credentials::encode;
 
-use crate::infra::filesystem::{private_dir, write_private};
+use crate::infra::filesystem::windows::{machine_directory, open_machine_file, write_machine_file};
 use crate::infra::paths::Paths;
 use wlanlogin_lib::Credentials;
 
-use std::{fs, path::Path, sync::Mutex, time::SystemTime};
+use std::{fs, io::Read, sync::Mutex, time::SystemTime};
 
 pub struct MachineStore {
     paths: Paths,
@@ -22,7 +22,11 @@ pub async fn delete(paths: &Paths) -> Result<()> {
     {
         // Do not construct MachineStore: its validation intentionally rejects
         // conflicting storage modes, but cleanup must handle both files.
-        crate::infra::cleanup::validate_directory(&paths.secrets)?;
+        let _directory = match machine_directory(&paths.secrets, false) {
+            Ok(guard) => guard,
+            Err(error) if missing(&error) => return Ok(()),
+            Err(error) => return Err(error),
+        };
         let mut errors = Vec::new();
         for name in ["login.cred", "login.json"] {
             if let Err(error) = crate::infra::cleanup::remove_file(&paths.secrets.join(name)) {
@@ -65,19 +69,35 @@ impl MachineStore {
 
     pub async fn load(&self, background: bool) -> Result<Option<Credentials>> {
         {
-            let path = if self.native_file().try_exists()? {
-                self.native_file()
-            } else {
-                self.plain_file()
+            // Inspect the exact open file before using either disk content or a
+            // cached result, retaining the directory handles across the read.
+            let opened = match open_machine_file(&self.native_file()) {
+                Ok(opened) => Ok((self.native_file(), opened)),
+                Err(error) if missing(&error) => {
+                    open_machine_file(&self.plain_file()).map(|opened| (self.plain_file(), opened))
+                }
+                Err(error) => Err(error),
             };
-            let metadata = match fs::symlink_metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(error) => return Err(error.into()),
+            let (path, (mut file, _directory)) = match opened {
+                Ok(opened) => opened,
+                Err(error) if missing(&error) => return Ok(None),
+                Err(error) if error.downcast_ref::<std::io::Error>().is_some() => {
+                    return Err(crate::system::shared::credentials::diagnostics::at(
+                        error,
+                        crate::infra::error::credentials::Stage::Inspect,
+                    ));
+                }
+                Err(error) => {
+                    return Err(crate::system::shared::credentials::diagnostics::specific(
+                        error,
+                        crate::infra::error::credentials::Kind::UnsafeStorage,
+                        crate::infra::error::credentials::Stage::Inspect,
+                    ));
+                }
             };
-            validate_private(&path).map_err(|error| {
+            let metadata = file.metadata().map_err(|error| {
                 crate::system::shared::credentials::diagnostics::specific(
-                    error,
+                    error.into(),
                     crate::infra::error::credentials::Kind::UnsafeStorage,
                     crate::infra::error::credentials::Stage::Inspect,
                 )
@@ -99,7 +119,11 @@ impl MachineStore {
                     path == self.native_file(),
                     Message::PlaintextMachineCredentialsAreNotSupportedOn
                 );
-                decrypt(&fs::read(&path)?).map_err(|error| {
+                let mut encrypted = Zeroizing::new(Vec::new());
+                (&mut file)
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut encrypted)?;
+                decrypt(&encrypted).map_err(|error| {
                     crate::system::shared::credentials::diagnostics::specific(
                         error,
                         crate::infra::error::credentials::Kind::DecryptionFailed,
@@ -122,8 +146,6 @@ impl MachineStore {
         let text = encode(&credentials)?;
 
         {
-            private_dir(&self.paths.secrets)?;
-
             let plain = {
                 let _ = &self.mode;
                 false
@@ -135,7 +157,8 @@ impl MachineStore {
                 let bytes = encrypt(text.as_bytes())?;
                 (self.native_file(), bytes)
             };
-            write_private(&path, &bytes)?;
+            let _directory = machine_directory(&self.paths.secrets, true)?;
+            write_machine_file(&path, &bytes)?;
             let previous = if plain {
                 self.native_file()
             } else {
@@ -154,14 +177,10 @@ impl MachineStore {
     }
 }
 
-fn validate_private(path: &Path) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    crate::infra::error::ensure!(
-        metadata.is_file() && !metadata.file_type().is_symlink(),
-        Message::CredentialPathMustBeARegularFile
-    );
-
-    Ok(())
+fn missing(error: &crate::infra::error::Error) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
 }
 
 use windows_sys::Win32::{Foundation::LocalFree, Security::Cryptography::*};
@@ -225,12 +244,16 @@ fn transform(bytes: &[u8], encrypt: bool) -> Result<Zeroizing<Vec<u8>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::filesystem::windows::tests::machine_storage_fixture;
 
     #[tokio::test]
     async fn delete_removes_corrupt_and_conflicting_files_without_decrypting() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let paths = Paths::test(dir.path().join("SEUCXCS/wlanlogin/secrets"));
-        fs::create_dir_all(&paths.secrets)?;
+        let Some(dir) = machine_storage_fixture()? else {
+            return Ok(());
+        };
+        let mut paths = Paths::test(dir.path().join("SEUCXCS/wlanlogin/secrets"));
+        paths.scope = crate::infra::scope::Scope::System;
+        let _directory = machine_directory(&paths.secrets, true)?;
         for name in ["login.cred", "login.json"] {
             fs::write(paths.secrets.join(name), "invalid secret data")?;
         }

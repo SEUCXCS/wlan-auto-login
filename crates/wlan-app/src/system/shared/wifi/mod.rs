@@ -56,7 +56,6 @@ impl WifiConnection for WifiProbe {
 
 pub(crate) use crate::system::native::flow::wifi::state::run as wifi_state;
 
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod worker;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[allow(unused_imports)]
 pub(crate) use worker::Worker;

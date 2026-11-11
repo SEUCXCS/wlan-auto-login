@@ -3,7 +3,6 @@ use crate::infra::identity::DISPLAY_NAME;
 #[cfg(target_os = "windows")]
 use crate::infra::paths::Paths;
 use crate::system::define::services::{LABEL, Manager, Plan};
-use crate::system::shared::services::artifacts::xml;
 
 use crate::infra::error::Message;
 use crate::infra::error::{Context, Result};
@@ -84,7 +83,7 @@ pub(crate) fn windows_plan(executable: PathBuf, definition: PathBuf, sid: &str) 
     let name = format!("{LABEL}-{sid}");
     let sid = xml(sid);
     let content = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<?xml version="1.0" encoding="UTF-16"?>
 <!-- {LABEL} -->
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
 <RegistrationInfo><Description>{DISPLAY_NAME} — Student_CX automatic login</Description></RegistrationInfo>
@@ -156,4 +155,13 @@ pub(crate) fn conflicting_definition(paths: &Paths) -> Result<Option<PathBuf>> {
         Scope::System => plan(&Paths::new(Scope::User)?)?.definition,
     };
     Ok(Some(other))
+}
+
+pub(crate) fn xml(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }

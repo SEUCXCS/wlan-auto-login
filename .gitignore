@@ -1,4 +1,6 @@
 /target/
+/packaging/windows/target/
+/.wix/
 /.bundle-build/
 
 .env
@@ -6,3 +8,5 @@
 
 # macOS
 .DS_Store
+
+/.test-tmp/

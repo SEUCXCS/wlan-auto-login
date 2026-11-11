@@ -1,20 +1,14 @@
+use super::generations::{Generations, InterfaceId};
 use crate::infra::error::Message;
 use crate::infra::error::{Result, bail};
 use crate::system::{define::wifi::TARGET_SSID, shared::wifi::Worker};
-use std::{
-    ffi::c_void,
-    ptr,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::{ffi::c_void, ptr, sync::Arc};
 use tokio::sync::Notify;
 use windows_sys::Win32::{Foundation::HANDLE, NetworkManagement::WiFi::*};
 
 struct Events {
     notify: Notify,
-    generation: AtomicU64,
+    generations: Generations,
 }
 
 struct NativeMonitor {
@@ -31,7 +25,7 @@ impl Monitor {
     pub async fn new() -> Result<Self> {
         let events = Arc::new(Events {
             notify: Notify::new(),
-            generation: AtomicU64::new(0),
+            generations: Generations::default(),
         });
         let notifications = events.clone();
         let worker = Worker::new(move || {
@@ -142,7 +136,7 @@ impl NativeMonitor {
                         guid.data2,
                         guid.data3,
                         guid.data4,
-                        self.events.generation.load(Ordering::Relaxed)
+                        self.events.generations.current(interface_id(&guid))
                     );
                     drop(allocation);
                     return Ok(Some(id));
@@ -183,9 +177,20 @@ unsafe extern "system" fn changed(data: *mut L2_NOTIFICATION_DATA, context: *mut
     if code == wlan_notification_acm_connection_complete
         || code == wlan_notification_acm_disconnected
     {
-        events.generation.fetch_add(1, Ordering::Relaxed);
+        events
+            .generations
+            .advance(interface_id(&data.InterfaceGuid));
         events.notify.notify_one();
     }
+}
+
+fn interface_id(guid: &windows_sys::core::GUID) -> InterfaceId {
+    let mut id = [0; 16];
+    id[..4].copy_from_slice(&guid.data1.to_le_bytes());
+    id[4..6].copy_from_slice(&guid.data2.to_le_bytes());
+    id[6..8].copy_from_slice(&guid.data3.to_le_bytes());
+    id[8..].copy_from_slice(&guid.data4);
+    id
 }
 impl crate::system::define::wifi::WifiConnection for Monitor {
     async fn target_session(&self) -> Result<Option<String>> {

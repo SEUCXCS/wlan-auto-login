@@ -10,7 +10,8 @@
 | --- | --- | --- |
 | `crates/wlan-api` | `wlanlogin-lib` | 门户请求、JSONP 解析、认证状态和协议错误 |
 | `crates/wlan-app` | `wlanlogin-cli` | CLI / TUI、业务操作、daemon 与操作系统集成 |
-| `xtask` | `xtask` | 开发任务入口，目前提供 macOS 应用打包 |
+| `xtask` | `xtask` | macOS 应用和 Windows 安装器打包 |
+| `packaging/windows` | `wlanlogin-installer` | 独立构建的 Windows 向导和 MSI 动作 |
 | `docs` | — | 登录、注销、状态查询的协议依据 |
 
 安装 Rust、Cargo、rustfmt 和 Clippy，并提交应用依赖的 `Cargo.lock`。仓库没有 `rust-toolchain.toml`，也没有声明 MSRV；此前架构重构使用 Rust/Cargo `1.100.0-nightly` 验证，这不是强制 nightly 的声明。若要建立稳定工具链或最低版本要求，需要单独验证整个依赖树并更新文档。
@@ -39,6 +40,14 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 图标源文件为 `assets/icon/icon.svg`。
 
+Windows 安装器由 `cargo xtask bundle windows` 构建，使用固定版本 WiX 6.0.2 和 `WixToolset.UI.wixext/6.0.2`。`commands/bundle/windows.rs` 构建原 CLI、安装动作和事务初始化 DLL，生成两个作用域固定的 MSI，并嵌入单个 `wlanlogin-windows-setup-<arch>.exe`。每个 MSI 的 cabinet 会在构建期间解包，逐字节检查 CLI、README 和 LICENSE，同时检查 PATH 与回滚动作的作用域。这个检查通过 MSI 数据库 API 和 cabinet 解压完成。
+
+整机路径仅解析 Program Files 和 ProgramData Known Folders，支持无交互用户配置的 LocalSystem。`service.lock` 位于 `state`，`daemon.lock` 和 `operation.lock` 位于 `run`；就绪检查、快照及回滚使用同一组路径，用户范围的运行目录与配置目录相同。安装动作使用 GUI 子系统，CLI 及其子进程置于独立 Job Object，安装命令超过 180 秒时终止该进程树并进入回滚。`diagnostics.rs` 在安装器初始化的私有目录记录阶段，`cli.log` 保存 CLI 输出；引导器失败时保留 MSI 日志并显示路径。日志子目录继承引导器私有目录的 ACL，让发起安装的用户在提升权限结束后仍可读取诊断。升级通过 `WIX_UPGRADE_DETECTED` 跳过账号页，维护卸载调用 `service uninstall --purge`，旧产品被升级替换时跳过清理凭据的动作。
+
+`packaging/windows` 使用独立 Cargo workspace 和 lockfile。`installer.wxs` 维护官方 WixUI 页面、文件组件、PATH、升级和动作顺序；`initialize.rs` 在执行阶段准备唯一事务 ID 和一次性 DPAPI 凭据文件；`src/transaction.rs` 调用现有 CLI，`state.rs`、`credentials.rs` 和 `services.rs` 维护所选范围的备份和恢复。后台二进制继续由现有 `service install` 管理。恢复凭据时保持凭据代次递增。`icon/icon.ico` 包含现有 macOS 图标的 32、64、128、256 像素表示，转换后的图标随源码提交。
+
+安装器检查使用 `cargo fmt --manifest-path packaging/windows/Cargo.toml -- --check`、`cargo clippy --manifest-path packaging/windows/Cargo.toml --all-targets --locked -- -D warnings`、`cargo test --manifest-path packaging/windows/Cargo.toml --locked` 和 `rustfmt --edition 2024 --check packaging/windows/initialize.rs`。故障测试使用临时目录、测试凭据和模拟状态。ACL 测试解析实际 ACE 的数字 SID、权限及继承标志，不依赖 SDDL 的账号别名表示。真实服务的安装、更新、取消和卸载验证应在独立测试虚拟机中完成。Release 同时发布原 Windows ZIP 和安装 EXE，并将两者纳入校验和。
+
 `APP_NAME` 是命令、二进制和目录名 `wlanlogin`；`DISPLAY_NAME` 是显示名称 `CXCS WLAN Login`。macOS 的 `CFBundleName` / `CFBundleDisplayName`、Windows 服务显示名及任务描述、Linux 的 systemd 描述使用后者。
 
 `main.rs` 只调用 `app::run()`。不要向入口增加认证、服务管理或平台分支。
@@ -51,7 +60,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 | `app/bootstrap.rs` | 平台模块声明、普通 Tokio runtime 的创建、错误记录与限时关闭；共享 `entry()` 初始化日志、作用域与应用依赖并分发命令 |
 | `app/bootstrap/{linux,macos,windows}.rs` | 平台启动编排；Linux 普通入口、macOS AppKit 选择、Windows SCM 应用回调 |
 | `app/context.rs` | 门户客户端、所选路径及 Wi-Fi / 凭据适配器的构建 |
-| `app/cli.rs` | 参数声明、解析与命令分发；把 CLI 参数转换为 controller 请求 |
+| `app/bootstrap/<platform>/cli.rs` | 参数声明、解析与命令分发；把 CLI 参数转换为 controller 请求 |
 | `app/cli/login.rs` | stdin、交互选择、TUI 重试与安装时的凭据输入 |
 | `app/cli/output.rs` | controller 结果的终端展示与状态格式化 |
 | `app/tui.rs` | 终端生命周期、绘制、键盘事件和登录表单 |
@@ -92,7 +101,7 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 ### CLI 与业务操作
 
-在 `app/cli.rs` 声明参数，再将普通请求类型传给 `app/controller`。公开服务管理统一使用 `service install/uninstall/start/stop/restart/status/logs`；`daemon` 只运行当前进程的循环。各平台生成的服务定义使用隐藏 `service run`；Windows 系统范围由 bootstrap 接入 SCM，用户计划任务直接运行，macOS 用户范围保留 AppKit 事件循环。macOS bootstrap 处理 `service native` 和 Wi-Fi 宿主内部入口，共享 bootstrap 在构造门户客户端前处理跨平台权限入口。服务 controller 的生产操作统一调用 `system::flow`，不直接引用 shared 或某个原生平台；平台 flow 组合公共流程与原生适配器，前端负责交互及展示；返回结构化数据，或显式注入输出 writer、取消 future 等接口。服务状态查询不能靠日志文本判断成功与否。TUI 不直接调用门户或服务管理器。
+在 `app/bootstrap/<platform>/cli.rs` 声明参数，再将普通请求类型传给 `app/controller`。公开服务管理统一使用 `service install/uninstall/start/stop/restart/status/logs`；`daemon` 只运行当前进程的循环。各平台生成的服务定义使用隐藏 `service run`；Windows 系统范围由 bootstrap 接入 SCM，用户计划任务直接运行，macOS 用户范围保留 AppKit 事件循环。macOS bootstrap 处理 `service native` 和 Wi-Fi 宿主内部入口，共享 bootstrap 在构造门户客户端前处理跨平台权限入口。服务 controller 的生产操作统一调用 `system::flow`，不直接引用 shared 或某个原生平台；平台 flow 组合公共流程与原生适配器，前端负责交互及展示；返回结构化数据，或显式注入输出 writer、取消 future 等接口。服务状态查询不能靠日志文本判断成功与否。TUI 不直接调用门户或服务管理器。
 
 新增 daemon 行为先明确 `policy.rs` 中的状态转换，再接入单次检查或调度循环。保留持久化停止监听器、请求超时和单个后台凭据任务；Linux D-Bus 事件流必须持续排空。`AuthState::Unknown` 不得触发自动登录，手动登录只恢复相同作用域的 daemon。
 
@@ -148,7 +157,23 @@ macOS Core Location 的长期 RunLoop 每轮必须清空独立的 `autoreleasepo
 
 ## 测试与验证
 
+`.github/workflows/test.yml` 的 `Tests` 工作流覆盖推送至 `main` / `develop`、以它们为目标的 PR，以及手动触发。矩阵与发布平台一致：Linux x86_64、Windows x86_64 MSVC、macOS Intel 和 Apple Silicon。每项都在原生 runner 上运行相同的 Clippy、完整 workspace 测试、构建和安全 CLI smoke 检查；格式与平台边界检查独立运行一次。矩阵不会因另一个平台失败而提前取消，同一分支或 PR 的新提交会取消旧运行。
+
+CI 使用 stable Rust 和 `Cargo.lock`，缓存按工具链与平台隔离。Linux 安装 D-Bus 构建及私有总线测试依赖。不要通过过滤公共测试、运行整个 ignored 套件或使用真实系统服务来让某个平台通过。Windows 本地 Temp ACL 不满足存储校验时，使用仅当前用户和 SYSTEM 可写的隔离临时目录，不修改产品校验规则。
+
 `wlan-app` 的测试一律放在所属文件末尾的 `#[cfg(test)] mod tests` 中；即使测试很长，也不要拆成 `tests.rs`、独立测试目录或 `#[path]` 引入的测试文件。共用假实现可放在相应基础模块的测试模块里，例如 `infra::command::tests`。协议库已有的集成测试和 fixtures 保持其现有组织。
+
+跨平台行为只维护一份测试，通过编译期选中的平台实现运行。CLI 公共契约放在 `app.rs`，基础设施公共契约放在 `infra.rs`，凭据公共契约放在 `system/define/credentials.rs`，默认卸载事务放在 `system/shared/flow/mod.rs`。同类型输入使用表驱动，断言应能定位失败的输入；平台目录只保留原生特例，不复制公共套件。测试代码也必须通过平台边界检查。
+
+| 测试内容 | Linux / macOS / Windows 的共同要求 | 平台特例 |
+| --- | --- | --- |
+| CLI | 服务命令、范围、清理选项、帮助、权限命令、交互冲突 | macOS 内部宿主与原生服务入口 |
+| 门户及 daemon | 协议、状态门槛、会话复检、重试、取消、单个在途凭据读取 | Linux 桌面会话、D-Bus 激活与身份竞态 |
+| 凭据契约 | 错误分类与脱敏、范围及目录绑定、代数失效、保存前失效、写入失败不得调用后端 | Linux 用户会话门槛；macOS Keychain；Windows DPAPI |
+| 基础设施 | 日志脱敏、范围选择、锁竞争、IPC 认证、保护共享目录、拒绝目录重定向 | Unix 信号及权限；Windows named pipe、ACL 与原生命令编码 |
+| 服务事务 | 启停失败、回滚、先停后删、普通卸载保留数据、purge 幂等与失败保留数据 | Linux systemd 链接；macOS 签名包；Windows 任务 XML 与注册快照 |
+
+目录重定向的公共测试通过平台文件中的测试辅助函数创建临时符号链接或 Windows junction。新增平台特例时说明对应的原生机制；某个平台已有的公共回归应加入公共套件，让其他平台执行同一个场景。
 
 优先覆盖业务约束：未知状态不登录、切换 SSID 后不提交凭据、回滚保留原安装、purge 只处理所选范围、取消能退出日志跟随或 daemon。不要只测试实现的逐行复刻。
 
@@ -184,3 +209,19 @@ cargo check -p wlanlogin-cli --tests --locked --target aarch64-apple-darwin
 每完成一个可验证的功能就创建一个提交。使用 Conventional Commits，例如 `refactor(app): separate login controller from terminal input`、`fix(system): preserve service definition on rollback`、`docs: document contributor toolchain`。
 
 提交前检查 staged diff，只包含本次功能；保留其他维护者未提交的修改。PR 描述说明具体行为变化、影响范围和已执行的验证。平台只有编译检查时明确写出，不把它描述为运行测试。命令、目录职责或运行行为变化时同步维护 README、本指南及英文 [AGENT.md](AGENT.md)。
+
+## Platform source boundaries
+
+Target-dependent implementation belongs in system/linux, system/macos, or system/windows. Elsewhere, target cfg, cfg_attr, and cfg! are permitted only for module selection and re-exports at the facades checked by cargo xtask check-boundaries. Test code follows the same rule; ordinary #[cfg(test)] remains allowed. Do not replace compile-time branches with runtime OS-name checks.
+
+Native infrastructure source under system/<platform>/runtime/infra is compiled exactly once through the infra.rs facade, preserving existing module identities and app -> system -> infra dependencies. These are source-selected modules, not reverse calls from infra into system. Shared state and protocol files remain under infra/control. Platform CLI assembly stays under app/bootstrap/<platform>/cli.rs, keeping Clap out of system contracts.
+
+Installation orchestration lives in each platform flow. Windows and Linux reuse byte-preserving backups from shared/services/payload.rs; macOS retains its signed bundle transaction. Native artifact readers and service dispatch live under each platform services directory. Do not put native API, XML encoding, ACL, or task-registration branches in shared workflows.
+
+Run targeted tests during each feature, then the complete workspace suite once at final integration. On Windows, if an external tool has added untrusted write access to the user Temp ACL, use an isolated temporary directory with the current user and SYSTEM as the only writers; never weaken product storage validation to accommodate a test environment. Cross-target checks verify compilation, not native runtime behavior.
+
+### Windows installation verification
+
+Task definitions use matching UTF-16 declarations, UTF-16LE bytes and a BOM. Native read paths also accept legacy UTF-8 files. Validate the staged file with TASK_VALIDATE_ONLY before stopping a task. Snapshot actual registration XML independently of on-disk leftovers; only restart a restored task if it was previously running or queued. Absence must be confirmed through the numeric COM query before treating failed deletion as complete. Retain both native XML and file backups after incomplete rollback. Installation success requires a registered, enabled, running or queued task.
+
+Windows schtasks/sc diagnostics are decoded at the native process boundary using the system OEM code page. PowerShell queries explicitly emit UTF-8 and keep that separate protocol. Do not change global console or system locale settings. Native XML validation and missing-task diagnostics tests are read-only; install/rollback tests use FakeRunner and isolated files.

@@ -1,0 +1,135 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  quality:
+    name: Format and platform boundaries
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Cache Rust build files
+        uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+        with:
+          key: quality
+
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path packaging/windows/Cargo.toml -- --check
+          rustfmt --edition 2024 --check packaging/windows/initialize.rs
+
+      - name: Check platform source boundaries
+        run: cargo xtask check-boundaries
+
+  test:
+    name: Test ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+    env:
+      BUILD_TARGET: ${{ matrix.target }}
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+          components: clippy
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential pkg-config libdbus-1-dev dbus-daemon
+
+      - name: Cache Rust build files
+        uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+        with:
+          key: test-${{ matrix.target }}
+
+      - name: Lint all targets
+        run: cargo clippy --workspace --all-targets --locked --target "$BUILD_TARGET" -- -D warnings
+
+      - name: Run workspace tests
+        run: cargo test --workspace --locked --no-fail-fast --target "$BUILD_TARGET"
+
+      - name: Build workspace binaries
+        run: cargo build --workspace --locked --target "$BUILD_TARGET"
+
+      - name: Verify CLI startup
+        run: |
+          binary="target/$BUILD_TARGET/debug/wlanlogin"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            binary="$binary.exe"
+          fi
+          "$binary" --version
+          "$binary" --help
+          for command in login logout service permission daemon; do
+            "$binary" "$command" --help
+          done
+
+      - name: Check Windows installer code and payload
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo clippy --manifest-path packaging/windows/Cargo.toml --all-targets --locked -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path packaging/windows/Cargo.toml --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $wixTools = Join-Path $env:RUNNER_TEMP 'wlanlogin-wix'
+          dotnet tool install wix --version 6.0.2 --tool-path $wixTools
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $wix = Join-Path $wixTools 'wix.exe'
+          & $wix extension add WixToolset.UI.wixext/6.0.2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo xtask bundle windows --profile dev --target $env:BUILD_TARGET --target-dir target --wix $wix
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

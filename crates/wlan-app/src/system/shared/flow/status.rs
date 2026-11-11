@@ -29,7 +29,7 @@ impl Backend for DefaultBackend {
         plan.manager.query(runner).await
     }
 }
-#[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
 pub(crate) async fn run(paths: &Paths, discover: bool) -> Result<Vec<InstallationReport>> {
     run_with(paths, discover, &DefaultBackend).await
 }

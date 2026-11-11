@@ -1,0 +1,118 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <?if $(var.Scope) = user ?>
+    <?define PackageScope = "perUser" ?>
+  <?else?>
+    <?define PackageScope = "perMachine" ?>
+  <?endif?>
+  <Package Name="CXCS WLAN Login" Manufacturer="SEUCXCS" Version="$(var.Version)"
+    UpgradeCode="$(var.UpgradeCode)" Scope="$(var.PackageScope)" Language="2052" InstallerVersion="500">
+    <SummaryInformation Description="CXCS WLAN Login Windows Installer" />
+    <MajorUpgrade DowngradeErrorMessage="已安装更新版本的 CXCS WLAN Login。" Schedule="afterInstallInitialize" AllowSameVersionUpgrades="yes" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Icon Id="AppIcon" SourceFile="$(var.Icon)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="WLANLOGIN_SESSION" Secure="yes" />
+    <Property Id="WLANLOGIN_TRANSACTION" Secure="yes" />
+    <Property Id="WLANLOGIN_LOG_ROOT" Secure="yes" />
+    <Property Id="WLANLOGIN_DIAGNOSTICS" Secure="yes" />
+    <Property Id="MsiLogging" Value="voicewarmup" />
+    <Property Id="WLANLOGIN_SCOPE" Value="$(var.Scope)" Secure="yes" />
+    <Property Id="WLANLOGIN_USERNAME" Hidden="yes" Secure="yes" />
+    <Property Id="WLANLOGIN_PASSWORD" Hidden="yes" Secure="yes" />
+    <Property Id="WLANLOGIN_LINE" Value="free1" Secure="yes" />
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLDIR" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <UI>
+      <ProgressText Action="InstallService" Message="正在安装并启动后台自动登录服务" />
+      <ProgressText Action="RemoveService" Message="正在停止服务并清除凭据、配置和日志" />
+      <ProgressText Action="RollbackService" Message="正在恢复安装前的状态" />
+      <Dialog Id="CredentialsDlg" Width="370" Height="270" Title="[ProductName] 安装">
+        <Control Id="Banner" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="yes" Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}校园网账号" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="310" Height="15" Transparent="yes" NoPrefix="yes" Text="设置后台自动登录使用的账号和线路。" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="UsernameLabel" Type="Text" X="25" Y="68" Width="65" Height="15" Text="账号" />
+        <Control Id="Username" Type="Edit" X="100" Y="65" Width="240" Height="18" Property="WLANLOGIN_USERNAME" />
+        <Control Id="PasswordLabel" Type="Text" X="25" Y="101" Width="65" Height="15" Text="密码" />
+        <Control Id="Password" Type="Edit" X="100" Y="98" Width="240" Height="18" Property="WLANLOGIN_PASSWORD" Password="yes" />
+        <Control Id="LineLabel" Type="Text" X="25" Y="134" Width="65" Height="15" Text="线路" />
+        <Control Id="Line" Type="ComboBox" X="100" Y="131" Width="240" Height="18" Property="WLANLOGIN_LINE" ComboList="yes" />
+        <Control Id="Notice" Type="Text" X="25" Y="169" Width="315" Height="30" Text="账号将保存到所选范围，用于连接 Student_CX 后自动登录。" />
+        <Control Id="Destination" Type="Text" X="25" Y="202" Width="315" Height="25" Text="安装目录：[INSTALLDIR]" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" EnableCondition="WLANLOGIN_USERNAME AND WLANLOGIN_PASSWORD">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+      <ComboBox Property="WLANLOGIN_LINE">
+        <ListItem Value="free1" Text="临时免费 1（free1）" /><ListItem Value="free2" Text="免费 2（free2）" /><ListItem Value="campus" Text="内网（campus）" />
+      </ComboBox>
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="CredentialsDlg" Order="2" Condition='LicenseAccepted = "1" AND NOT Installed AND NOT WIX_UPGRADE_DETECTED' />
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="3" Condition='LicenseAccepted = "1" AND (Installed OR WIX_UPGRADE_DETECTED)' />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="CredentialsDlg" Order="3" Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="LicenseAgreementDlg" Order="4" Condition="NOT Installed AND WIX_UPGRADE_DETECTED" />
+    </UI>
+    <Launch Condition="Installed OR NOT RollbackDisabled" Message="安装需要启用 Windows Installer 回滚。" />
+    <StandardDirectory Id="$(var.RootFolder)">
+      <?if $(var.Scope) = user ?>
+      <Directory Id="UserPrograms" Name="Programs">
+      <?endif?>
+      <Directory Id="Organization" Name="SEUCXCS">
+        <Directory Id="INSTALLDIR" Name="wlanlogin">
+          <Component Id="ApplicationFiles" Guid="A832803F-1135-4DF7-A938-$(var.ComponentSuffix)">
+            <File Id="Cli" Name="wlanlogin.exe" Source="$(var.Cli)" />
+            <RegistryValue Root="$(var.RegistryRoot)" Key="Software\SEUCXCS\wlanlogin\Installer\Files" Name="Cli" Value="[INSTALLDIR]wlanlogin.exe" Type="string" KeyPath="yes" />
+          </Component>
+          <Component Id="ReadmeFile" Guid="A8328040-1135-4DF7-A938-$(var.ComponentSuffix)">
+            <File Name="README.md" Source="$(var.Readme)" />
+            <RegistryValue Root="$(var.RegistryRoot)" Key="Software\SEUCXCS\wlanlogin\Installer\Files" Name="Readme" Value="[INSTALLDIR]README.md" Type="string" KeyPath="yes" />
+          </Component>
+          <Component Id="LicenseFile" Guid="A8328041-1135-4DF7-A938-$(var.ComponentSuffix)">
+            <File Name="LICENSE" Source="$(var.License)" />
+            <RegistryValue Root="$(var.RegistryRoot)" Key="Software\SEUCXCS\wlanlogin\Installer\Files" Name="License" Value="[INSTALLDIR]LICENSE" Type="string" KeyPath="yes" />
+          </Component>
+          <Component Id="CommandPath" Guid="*">
+            <RegistryValue Root="$(var.RegistryRoot)" Key="Software\SEUCXCS\wlanlogin\Installer"
+              Name="Directory" Value="[INSTALLDIR]" Type="string" KeyPath="yes" />
+            <Environment Id="Path" Name="PATH" Value="[INSTALLDIR]" Action="set" Part="last"
+              System="$(var.System)" Permanent="no" />
+            <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLDIR" On="uninstall" />
+          </Component>
+        </Directory>
+      </Directory>
+      <?if $(var.Scope) = user ?>
+      </Directory>
+      <?endif?>
+    </StandardDirectory>
+    <Feature Id="Application" Title="CXCS WLAN Login" Level="1">
+      <ComponentRef Id="ApplicationFiles" /><ComponentRef Id="ReadmeFile" /><ComponentRef Id="LicenseFile" /><ComponentRef Id="CommandPath" />
+    </Feature>
+    <Binary Id="InstallerAction" SourceFile="$(var.Action)" />
+    <Binary Id="Initializer" SourceFile="$(var.Initializer)" />
+    <CustomAction Id="InitializeTransaction" BinaryRef="Initializer" DllEntry="InitializeTransaction" Return="check" />
+    <CustomAction Id="RollbackService" BinaryRef="InstallerAction" Execute="rollback" Return="check"
+      Impersonate="$(var.Impersonate)" ExeCommand='rollback $(var.Scope) "[WLANLOGIN_TRANSACTION]" "[WLANLOGIN_SESSION]" "[INSTALLDIR]wlanlogin.exe" "[WLANLOGIN_DIAGNOSTICS]"' />
+    <CustomAction Id="InstallService" BinaryRef="InstallerAction" Execute="deferred" Return="check"
+      Impersonate="$(var.Impersonate)" ExeCommand='install $(var.Scope) "[WLANLOGIN_TRANSACTION]" "[WLANLOGIN_SESSION]" "[INSTALLDIR]wlanlogin.exe" "[WLANLOGIN_DIAGNOSTICS]"' />
+    <CustomAction Id="CommitService" BinaryRef="InstallerAction" Execute="commit" Return="ignore"
+      Impersonate="$(var.Impersonate)" ExeCommand='commit $(var.Scope) "[WLANLOGIN_TRANSACTION]" "[WLANLOGIN_SESSION]" "[INSTALLDIR]wlanlogin.exe" "[WLANLOGIN_DIAGNOSTICS]"' />
+    <CustomAction Id="RemoveService" BinaryRef="InstallerAction" Execute="deferred" Return="check"
+      Impersonate="$(var.Impersonate)" ExeCommand='uninstall $(var.Scope) "[WLANLOGIN_TRANSACTION]" "[WLANLOGIN_SESSION]" "[INSTALLDIR]wlanlogin.exe" "[WLANLOGIN_DIAGNOSTICS]"' />
+    <CustomAction Id="RollbackRemoval" BinaryRef="InstallerAction" Execute="rollback" Return="check"
+      Impersonate="$(var.Impersonate)" ExeCommand='rollback $(var.Scope) "[WLANLOGIN_TRANSACTION]" "[WLANLOGIN_SESSION]" "[INSTALLDIR]wlanlogin.exe" "[WLANLOGIN_DIAGNOSTICS]"' />
+    <InstallExecuteSequence>
+      <Custom Action="InitializeTransaction" Before="InstallInitialize" Condition="NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="RollbackService" After="InstallFiles" Condition='NOT REMOVE~="ALL"' />
+      <Custom Action="InstallService" After="RollbackService" Condition='NOT REMOVE~="ALL"' />
+      <Custom Action="CommitService" After="InstallService" Condition='NOT UPGRADINGPRODUCTCODE' />
+      <Custom Action="RollbackRemoval" Before="RemoveService" Condition='REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE' />
+      <Custom Action="RemoveService" Before="RemoveFiles" Condition='REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE' />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>
