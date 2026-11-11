@@ -1,4 +1,6 @@
 /target/
+/packaging/windows/target/
+/.wix/
 /.bundle-build/
 
 .env
