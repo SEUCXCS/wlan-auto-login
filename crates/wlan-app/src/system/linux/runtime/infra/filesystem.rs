@@ -39,3 +39,14 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     temp.persist(path).map_err(|e| e.error)?;
     Ok(())
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    pub(crate) fn redirect_directory(
+        target: &std::path::Path,
+        link: &std::path::Path,
+    ) -> crate::infra::error::Result<()> {
+        std::os::unix::fs::symlink(target, link)?;
+        Ok(())
+    }
+}

@@ -11,7 +11,7 @@ use tracing_subscriber::{
     registry::LookupSpan,
 };
 
-struct Format;
+pub(crate) struct Format;
 impl<S, N> FormatEvent<S, N> for Format
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
@@ -91,62 +91,4 @@ pub(crate) fn background_log(paths: &Paths) -> Result<fs::File> {
         options.mode(0o600);
     }
     Ok(options.open(path)?)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::{
-        io::Write,
-        sync::{Arc, Mutex},
-    };
-
-    #[derive(Clone)]
-    struct Buffer(Arc<Mutex<Vec<u8>>>);
-    impl Write for Buffer {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .map_err(|_| std::io::Error::other("buffer poisoned"))?
-                .extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn logs_include_utc_level_target_and_safe_structured_diagnostics() -> Result<()> {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let writer = Buffer(bytes.clone());
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .event_format(Format)
-            .finish();
-        let error = crate::infra::error::Error::from(wlanlogin_lib::Error::Rejected {
-            message: "password=never-log-this\nforged log entry".into(),
-            credential_rejected: true,
-        });
-        tracing::subscriber::with_default(subscriber, || {
-            tracing::warn!(target: "wlan::daemon", error = %error, retry_after_secs = 30, "{}", Message::CheckFailed);
-        });
-        let output = String::from_utf8(
-            bytes
-                .lock()
-                .map_err(|_| crate::infra::error::error!("buffer poisoned"))?
-                .clone(),
-        )?;
-        assert_eq!(output.lines().count(), 1);
-        assert_eq!(&output[10..11], "T");
-        assert_eq!(&output[19..20], "Z");
-        assert!(output.contains("WARN  wlan::daemon:"));
-        assert!(output.contains("retry_after_secs=30"));
-        assert!(output.contains("Credentials rejected"));
-        assert!(!output.contains("never-log-this"));
-        assert!(!output.contains("forged"));
-        assert!(output.is_ascii());
-        Ok(())
-    }
 }

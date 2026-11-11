@@ -244,14 +244,13 @@ fn transform(bytes: &[u8], encrypt: bool) -> Result<Zeroizing<Vec<u8>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::filesystem::windows::tests::machine_storage_fixture;
 
     #[tokio::test]
     async fn delete_removes_corrupt_and_conflicting_files_without_decrypting() -> Result<()> {
-        if !crate::infra::scope::elevated()? {
-            eprintln!("machine storage tests require an elevated Windows test process");
+        let Some(dir) = machine_storage_fixture()? else {
             return Ok(());
-        }
-        let dir = tempfile::tempdir()?;
+        };
         let mut paths = Paths::test(dir.path().join("SEUCXCS/wlanlogin/secrets"));
         paths.scope = crate::infra::scope::Scope::System;
         let _directory = machine_directory(&paths.secrets, true)?;

@@ -40,6 +40,8 @@ Keep `CFBundleShortVersionString` tied to the Cargo release version. Reserve an 
 
 Run relevant checks after each logical change and the complete set before delivery of an architectural change:
 
+The `Tests` workflow (`.github/workflows/test.yml`) runs on pushes and pull requests targeting `main` or `develop`, and on manual dispatch. Its native Linux x86_64, Windows x86_64 MSVC, macOS Intel and Apple Silicon jobs run identical Clippy, workspace test, build and safe CLI smoke steps with stable Rust and the lockfile. Formatting and source-boundary checks run once separately. Preserve the common test coverage across the matrix; only documented native features may differ.
+
 ```sh
 cargo fmt --all -- --check
 cargo check --workspace --locked
@@ -96,6 +98,8 @@ Use `tracing` with structured fields such as `error`, `scope`, and `retry_after_
 Daemon checks return outcomes to the runtime, which logs the first result, changes and recovery after failures at `info`, with `outcome` and `next_check_secs`. Log when a retry starts without repeating unchanged waiting states on every poll. On macOS, SSID and BSSID can both be redacted by Location access controls; use interface mode to detect a connected interface with an unreadable name and return an error so retries remain visible and credentials stay protected.
 
 All `wlan-app` tests belong at the bottom of the owning source file in `#[cfg(test)] mod tests`, even when long. Do not extract `tests.rs`, separate test directories, or tests via `#[path]`. Shared mocks may live in a relevant module's inline test module, such as `infra::command::tests`. Preserve the existing API protocol fixtures and integration tests.
+
+Maintain one suite for each cross-platform behavior and run it against the compile-time-selected native adapter. Common CLI tests belong in `app.rs`, infrastructure contracts in `infra.rs`, credential contracts in `system/define/credentials.rs`, and default uninstall transactions in `system/shared/flow/mod.rs`. Use table-driven inputs instead of copies. Keep only native exceptions in platform test modules and document the exception in CONTRIBUTING.md. Directory-redirection fixtures use the native filesystem test helper (Unix symlinks or Windows junctions); never skip a common protection on Windows merely because creating symlinks needs privileges.
 
 Use loopback mock portals, temporary directories, fake credentials and service commands, private D-Bus connections, and isolated signal child processes. Never access the real campus portal, change Wi-Fi, read actual saved credentials, or install, stop, or remove real services during development verification. `cargo test` needs local socket and subprocess permissions. If a sandbox rejects these, rerun only the isolated tests in an appropriately permitted environment and distinguish environment failures from product failures.
 

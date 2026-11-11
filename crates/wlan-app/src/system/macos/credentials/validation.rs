@@ -44,60 +44,7 @@ pub(crate) async fn validate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::scope::Scope;
-    use wlanlogin_lib::Credentials;
-
-    impl crate::system::define::credentials::BackgroundCredentials {
-        pub(crate) fn fixture(
-            paths: &crate::infra::paths::Paths,
-            credentials: Credentials,
-        ) -> Result<Self> {
-            Ok(Self {
-                credentials,
-                permit: snapshot(paths)?,
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn generations_are_scope_local_and_system_reads_ignore_desktop_changes() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let user = Paths::test(dir.path().join("user"));
-        let mut system = Paths::test(dir.path().join("system"));
-        system.scope = Scope::System;
-        let permit = snapshot(&system)?;
-        let (sender, receiver) = tokio::sync::watch::channel(SessionState::default());
-        State::invalidate_credentials(&user)?;
-        let mut state = receiver.borrow().clone();
-        state.update(Some("!old-desktop".into()))?;
-        sender.send_replace(state);
-        assert_eq!(
-            validate(&system, &permit, &receiver).await?,
-            Validity::Valid
-        );
-        State::invalidate_credentials(&system)?;
-        assert_eq!(
-            validate(&system, &permit, &receiver).await?,
-            Validity::CredentialsChanged
-        );
-        assert_eq!(State::load(&user)?.credential_generation, 1);
-        Ok(())
-    }
-    #[tokio::test]
-    async fn permits_are_bound_to_scope_and_config_root() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let mut paths = Paths::test(dir.path().join("one"));
-        paths.scope = Scope::System;
-        let permit = snapshot(&paths)?;
-        let receiver = tokio::sync::watch::channel(SessionState::default()).1;
-        let mut wrong = paths.clone();
-        wrong.scope = Scope::User;
-        assert!(validate(&wrong, &permit, &receiver).await.is_err());
-        wrong = Paths::test(dir.path().join("two"));
-        wrong.scope = Scope::System;
-        assert!(validate(&wrong, &permit, &receiver).await.is_err());
-        Ok(())
-    }
+    use crate::infra::error::Result;
 
     #[tokio::test]
     async fn native_user_permits_need_no_linux_graphical_session() -> Result<()> {
