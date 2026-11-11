@@ -221,6 +221,80 @@ pub unsafe extern "system" fn InitializeTransaction(session: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use crate::win;
+    use anyhow::{Result, ensure};
+    use std::{ffi::c_void, ptr};
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::{
+            ACCESS_ALLOWED_ACE, ACE_HEADER,
+            Authorization::{
+                ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+            },
+            CONTAINER_INHERIT_ACE, GetAce, GetSecurityDescriptorDacl, INHERITED_ACE,
+            OBJECT_INHERIT_ACE,
+        },
+        Storage::FileSystem::FILE_ALL_ACCESS,
+    };
+
+    struct LocalAllocation(*mut c_void);
+    impl Drop for LocalAllocation {
+        fn drop(&mut self) {
+            unsafe {
+                LocalFree(self.0);
+            }
+        }
+    }
+
+    fn allowed_entries(sddl: &str) -> Result<Vec<(String, u32, u8)>> {
+        unsafe {
+            let mut descriptor = LocalAllocation(ptr::null_mut());
+            win::check(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                win::wide(sddl).as_ptr(),
+                1,
+                &mut descriptor.0,
+                ptr::null_mut(),
+            ))?;
+            let mut present = 0;
+            let mut defaulted = 0;
+            let mut acl = ptr::null_mut();
+            win::check(GetSecurityDescriptorDacl(
+                descriptor.0,
+                &mut present,
+                &mut acl,
+                &mut defaulted,
+            ))?;
+            ensure!(present != 0 && !acl.is_null(), "Missing private DACL");
+            let mut entries = Vec::new();
+            for index in 0..u32::from((*acl).AceCount) {
+                let mut raw = ptr::null_mut();
+                win::check(GetAce(acl, index, &mut raw))?;
+                let header = &*raw.cast::<ACE_HEADER>();
+                // ACCESS_ALLOWED_ACE_TYPE is zero; reject any other ACE format.
+                ensure!(header.AceType == 0, "Unexpected ACE type");
+                ensure!(
+                    usize::from(header.AceSize) >= std::mem::size_of::<ACCESS_ALLOWED_ACE>(),
+                    "Incomplete access-allowed ACE"
+                );
+                let ace = &mut *raw.cast::<ACCESS_ALLOWED_ACE>();
+                let mut sid = ptr::null_mut();
+                win::check(ConvertSidToStringSidW(
+                    ptr::addr_of_mut!(ace.SidStart).cast(),
+                    &mut sid,
+                ))?;
+                let sid = LocalAllocation(sid.cast());
+                entries.push((
+                    win::string_from_ptr(sid.0.cast()),
+                    ace.Mask,
+                    // The inherited marker does not change effective access or propagation.
+                    ace.Header.AceFlags & !(INHERITED_ACE as u8),
+                ));
+            }
+            entries.sort_unstable();
+            Ok(entries)
+        }
+    }
+
     #[test]
     fn diagnostics_inherit_the_bootstrap_users_private_access() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
@@ -228,11 +302,14 @@ mod tests {
         let directory = root.path().join("wlanlogin-form-test");
         super::create_diagnostics_directory(&directory, true)
             .map_err(|code| anyhow::anyhow!("Directory creation failed ({code})"))?;
-        let security = crate::win::security(&directory)?;
-        assert!(security.contains(&crate::win::sid()?));
-        assert!(security.contains(";;;SY)"));
-        assert!(!security.contains(";;;BA)"));
-        assert!(!security.contains(";;;WD)"));
+        let flags = (CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE) as u8;
+        let mut expected = vec![
+            (win::sid()?, FILE_ALL_ACCESS, flags),
+            ("S-1-5-18".into(), FILE_ALL_ACCESS, flags),
+        ];
+        expected.sort_unstable();
+        // SDDL may use aliases such as LA; compare decoded numeric SIDs and access rights.
+        assert_eq!(allowed_entries(&win::security(&directory)?)?, expected);
         Ok(())
     }
 }
