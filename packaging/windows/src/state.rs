@@ -15,6 +15,7 @@ use std::{
 
 pub struct Paths {
     pub config: PathBuf,
+    pub runtime: PathBuf,
     pub binary: PathBuf,
     pub definition: PathBuf,
     pub secrets: PathBuf,
@@ -41,6 +42,7 @@ impl Paths {
             let install = win::program_files()?.join("SEUCXCS/wlanlogin");
             return Ok(Self {
                 config: data.join("state"),
+                runtime: data.join("run"),
                 secrets: data.join("secrets"),
                 definition: data.join("service.json"),
                 binary: install.join("wlanlogin-daemon.exe"),
@@ -52,10 +54,19 @@ impl Paths {
         Ok(Self {
             definition: config.join("daemon-task.xml"),
             secrets: config.clone(),
+            runtime: config.clone(),
             config,
             binary: user.data_local_dir().join("bin/wlanlogin-daemon.exe"),
             install: base.data_local_dir().join("Programs/SEUCXCS/wlanlogin"),
         })
+    }
+    // Match the CLI's service, singleton and authentication lock locations and order.
+    pub fn lock_paths(&self) -> [PathBuf; 3] {
+        [
+            self.config.join("service.lock"),
+            self.runtime.join("daemon.lock"),
+            self.runtime.join("operation.lock"),
+        ]
     }
     fn files(&self, scope: Scope) -> Vec<PathBuf> {
         let mut result = vec![
@@ -155,6 +166,7 @@ impl Snapshot {
     ) -> Result<Self> {
         let directory_roots = vec![
             paths.config.clone(),
+            paths.runtime.clone(),
             paths.secrets.clone(),
             paths
                 .binary
@@ -195,8 +207,8 @@ impl Snapshot {
             .collect::<Result<Vec<_>>>()?;
         // The daemon may be running during an update; serialize only service mutation and authentication.
         let mut locks = Vec::new();
-        for name in ["service.lock", "operation.lock"] {
-            let path = paths.config.join(name);
+        let [service_lock, _, operation_lock] = paths.lock_paths();
+        for path in [service_lock, operation_lock] {
             win::plain_path(&path)?;
             let lock = match fs::OpenOptions::new().read(true).write(true).open(path) {
                 Ok(lock) => lock,
@@ -240,10 +252,10 @@ impl Snapshot {
         } else {
             generation(paths)?
         };
-        let lock_files = ["service.lock", "operation.lock", "daemon.lock"]
+        let lock_files = paths
+            .lock_paths()
             .into_iter()
-            .map(|name| {
-                let path = paths.config.join(name);
+            .map(|path| {
                 let exists = path.try_exists()?;
                 Ok((path, exists))
             })
@@ -394,6 +406,10 @@ mod tests {
             anyhow::bail!("No interactive Windows profile")
         })?;
         assert!(paths.config.starts_with(win::program_data()?));
+        assert_eq!(
+            paths.runtime,
+            win::program_data()?.join("SEUCXCS/wlanlogin/run")
+        );
         assert!(paths.install.starts_with(win::program_files()?));
         assert!(
             Paths::resolve(Scope::User, || anyhow::bail!(
@@ -422,6 +438,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let paths = Paths {
             config: directory.path().join("state"),
+            runtime: directory.path().join("run"),
             binary: directory.path().join("bin/daemon.exe"),
             definition: directory.path().join("service.json"),
             secrets: directory.path().join("secrets"),

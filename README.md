@@ -274,7 +274,7 @@ macOS 安装会校验完整应用包。替换旧副本后，程序检查凭据�
 
 同一范围的升级会沿用已保存的账号、密码和线路，跳过账号页。同版本重新打包也走升级流程。更新期间保留服务凭据和配置。
 
-安装失败时，Windows Installer 回退程序文件和 PATH。全新范围通过 `service uninstall --purge` 清理；已有凭据、配置或服务时，安装器恢复原数据和运行状态。失败弹窗会列出 `setup.log` 路径，同目录的 `wlanlogin-form-*` 子目录包含 `action.log` 和 `cli.log`。恢复失败时，请同时保留安装目录下的 `.installer-*` 恢复目录。
+安装失败时，Windows Installer 回退程序文件和 PATH。全新范围通过 `service uninstall --purge` 清理；已有凭据、配置或服务时，安装器恢复原数据和运行状态。失败弹窗会列出 `setup.log` 路径，同目录的 `wlanlogin-form-*` 子目录包含 `action.log` 和 `cli.log`，发起安装的用户可直接读取这些日志。恢复失败时，请同时保留安装目录下的 `.installer-*` 恢复目录。
 
 在 Windows“已安装的应用”中卸载时，安装器执行所选范围的 `service uninstall --purge`，清除后台服务、凭据、配置和应用日志，再由 MSI 删除安装文件和对应 PATH 项。
 

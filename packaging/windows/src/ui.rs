@@ -100,7 +100,7 @@ pub fn run(user_msi: &'static [u8], machine_msi: &'static [u8]) -> Result<()> {
     if result != 0 && result != 3010 {
         let _ = logs.keep();
         anyhow::bail!(
-            "Windows Installer returned {result}.\n安装日志：{}\n同目录下的 action.log 和 cli.log 记录失败步骤与 CLI 输出。",
+            "Windows Installer returned {result}.\n安装日志：{}\nwlanlogin-form-* 子目录中的 action.log 和 cli.log 记录失败步骤与 CLI 输出。",
             log_file.display()
         );
     }

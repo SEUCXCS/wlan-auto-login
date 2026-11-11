@@ -5,6 +5,9 @@ pub mod cli;
 mod credentials;
 #[cfg(windows)]
 pub mod diagnostics;
+#[cfg(all(windows, test))]
+#[path = "../initialize.rs"]
+mod initialize;
 #[cfg(windows)]
 pub mod ipc;
 #[cfg(windows)]

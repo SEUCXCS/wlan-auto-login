@@ -211,10 +211,12 @@ fn rollback(
 }
 
 pub(crate) fn lock_state(paths: &Paths) -> Result<Vec<File>> {
+    win::plain_path(&paths.config)?;
+    win::plain_path(&paths.runtime)?;
     fs::create_dir_all(&paths.config)?;
+    fs::create_dir_all(&paths.runtime)?;
     let mut locks = Vec::new();
-    for name in ["service.lock", "daemon.lock", "operation.lock"] {
-        let path = paths.config.join(name);
+    for path in paths.lock_paths() {
         win::plain_path(&path)?;
         let lock = OpenOptions::new()
             .create(true)
@@ -232,12 +234,7 @@ pub(crate) fn lock_state(paths: &Paths) -> Result<Vec<File>> {
 fn wait_runtime(paths: &Paths) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        if let Ok(lock) = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(paths.config.join("daemon.lock"))
-            && lock.try_lock_exclusive().is_err()
-        {
+        if runtime_ready(paths)? {
             return Ok(());
         }
         ensure!(
@@ -245,6 +242,26 @@ fn wait_runtime(paths: &Paths) -> Result<()> {
             "The registered background process did not become ready"
         );
         std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn runtime_ready(paths: &Paths) -> Result<bool> {
+    let path = paths.runtime.join("daemon.lock");
+    win::plain_path(&path)?;
+    let lock = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("Could not open the daemon readiness lock"),
+    };
+    match lock.try_lock_exclusive() {
+        Ok(()) => Ok(false),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::WouldBlock
+                || error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+        {
+            Ok(true)
+        }
+        Err(error) => Err(error).context("Could not inspect the daemon readiness lock"),
     }
 }
 
@@ -274,6 +291,44 @@ fn cleanup(journal: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn machine_readiness_and_rollback_use_runtime_locks() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let paths = Paths {
+            config: directory.path().join("state"),
+            runtime: directory.path().join("run"),
+            binary: directory.path().join("bin/daemon.exe"),
+            definition: directory.path().join("service.json"),
+            secrets: directory.path().join("secrets"),
+            install: directory.path().join("program"),
+        };
+        fs::create_dir_all(&paths.config)?;
+        let decoy = File::create(paths.config.join("daemon.lock"))?;
+        decoy.try_lock_exclusive()?;
+        assert!(!runtime_ready(&paths)?);
+
+        let mut locks = lock_state(&paths)?;
+        assert!(paths.config.join("service.lock").is_file());
+        assert!(paths.runtime.join("operation.lock").is_file());
+        assert!(!paths.config.join("operation.lock").exists());
+        assert!(runtime_ready(&paths)?);
+        // Rollback releases only the singleton lock before restarting the old service.
+        drop(locks.remove(1));
+        assert!(!runtime_ready(&paths)?);
+        let operation = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(paths.runtime.join("operation.lock"))?;
+        assert!(operation.try_lock_exclusive().is_err());
+        drop(locks);
+        operation.try_lock_exclusive()?;
+        // An inaccessible or malformed lock path is a failure, never readiness.
+        fs::remove_file(paths.runtime.join("daemon.lock"))?;
+        fs::create_dir(paths.runtime.join("daemon.lock"))?;
+        assert!(runtime_ready(&paths).is_err());
+        Ok(())
+    }
+
     #[test]
     fn recovery_cleanup_validates_the_entire_inventory_before_deleting() -> Result<()> {
         let directory = tempfile::tempdir()?;
