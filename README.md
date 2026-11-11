@@ -268,7 +268,15 @@ macOS 安装会校验完整应用包。替换旧副本后，程序检查凭据�
 
 ### Windows
 
-1. 下载与 CPU 架构匹配的 Windows 附件并解压。
+下载与 CPU 架构匹配的 `wlanlogin-windows-setup-<arch>.exe`，双击进入安装向导。选择“仅当前用户”或“此计算机上的所有用户”，填写账号、密码和线路后开始安装。整机安装会请求管理员授权。
+
+向导将 `wlanlogin.exe`、`README.md` 和 `LICENSE` 安装到所选范围的目录，并加入对应的 PATH。安装完成后，打开新终端即可运行 `wlanlogin`。用户安装使用计划任务和 Credential Manager；整机安装使用 Windows 服务和机器 DPAPI。
+
+安装失败时，Windows Installer 回退程序文件和 PATH。全新范围通过 `service uninstall --purge` 清理；已有凭据、配置或服务时，安装器恢复原数据和运行状态。恢复失败时，请保留安装目录下的 `.installer-*` 恢复目录。正常卸载可在 Windows“已安装的应用”中进行，默认保留校园网凭据。
+
+Release 同时提供原有的 `wlanlogin-windows-<arch>.zip`。使用压缩包时按以下步骤安装。
+
+1. 下载与 CPU 架构匹配的 Windows ZIP 附件并解压。
 
    解压后的程序名为 `wlanlogin.exe`。若没有对应附件，先[从源码构建](#build-windows)。
 
@@ -642,6 +650,16 @@ xtask 使用证书签名时启用 hardened runtime，并请求 Apple 时间戳�
 5. 按 [Windows 安装](#quick-windows)配置命令和服务。
 
 如果选择 GNU target，另行安装对应的 MinGW 工具链。仅添加 Rust target 不会安装原生链接工具。
+
+构建 Windows 安装包需要 Windows SDK 资源编译器、.NET 8 SDK，以及 WiX 6.0.2 和它的官方 UI 扩展。
+
+```powershell
+dotnet tool install --global wix --version 6.0.2
+wix extension add WixToolset.UI.wixext/6.0.2
+cargo xtask bundle windows --target x86_64-pc-windows-msvc
+```
+
+产物为 `target/x86_64-pc-windows-msvc/release/bundle/wlanlogin-windows-setup-x86_64.exe`。支持 `--profile`、`--target-dir` 和 `--wix <path>`，具体路径以 `Bundle:` 输出为准。安装器采用官方 WixUI 标准向导，图标为仓库中预先生成的 `packaging/windows/icon/icon.ico`，与 macOS 图标使用相同素材。
 
 ## 排障
 

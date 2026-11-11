@@ -64,7 +64,9 @@ mod tests {
         let Command::Bundle(bundle) = cli.command else {
             panic!("expected bundle command")
         };
-        let BundlePlatform::Macos(options) = bundle.platform;
+        let BundlePlatform::Macos(options) = bundle.platform else {
+            panic!("expected macOS options")
+        };
         let build = BuildOptions::from(&options.build);
         assert_eq!(build.profile, "dev");
         assert_eq!(build.target.as_deref(), Some("aarch64-apple-darwin"));
@@ -123,7 +125,9 @@ mod tests {
         let Command::Bundle(bundle) = cli.command else {
             panic!("expected bundle command")
         };
-        let BundlePlatform::Macos(options) = bundle.platform;
+        let BundlePlatform::Macos(options) = bundle.platform else {
+            panic!("expected macOS options")
+        };
         assert_eq!(options.build.profile, "release");
         assert_eq!(options.build.target, None);
         let (identity, directory) = match case.as_str() {
@@ -143,6 +147,7 @@ mod tests {
             vec!["xtask", "--help"],
             vec!["xtask", "bundle", "--help"],
             vec!["xtask", "bundle", "macos", "--help"],
+            vec!["xtask", "bundle", "windows", "--help"],
         ] {
             let error = match Cli::try_parse_from(arguments) {
                 Err(error) => error,
@@ -150,5 +155,33 @@ mod tests {
             };
             assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
         }
+    }
+
+    #[test]
+    fn windows_options_are_scoped_to_the_platform() -> anyhow::Result<()> {
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "bundle",
+            "windows",
+            "--target",
+            "aarch64-pc-windows-msvc",
+            "--wix",
+            "custom tools/wix.exe",
+        ])?;
+        let Command::Bundle(bundle) = cli.command else {
+            panic!("expected bundle")
+        };
+        let BundlePlatform::Windows(options) = bundle.platform else {
+            panic!("expected Windows")
+        };
+        assert_eq!(
+            options.build.target.as_deref(),
+            Some("aarch64-pc-windows-msvc")
+        );
+        assert_eq!(options.wix, PathBuf::from("custom tools/wix.exe"));
+        assert!(
+            Cli::try_parse_from(["xtask", "bundle", "windows", "--codesign-identity=-"]).is_err()
+        );
+        Ok(())
     }
 }
