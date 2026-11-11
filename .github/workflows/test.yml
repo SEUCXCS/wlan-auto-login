@@ -45,7 +45,10 @@ jobs:
           key: quality
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path packaging/windows/Cargo.toml -- --check
+          rustfmt --edition 2024 --check packaging/windows/initialize.rs
 
       - name: Check platform source boundaries
         run: cargo xtask check-boundaries
@@ -113,3 +116,20 @@ jobs:
           for command in login logout service permission daemon; do
             "$binary" "$command" --help
           done
+
+      - name: Check Windows installer code and payload
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo clippy --manifest-path packaging/windows/Cargo.toml --all-targets --locked -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path packaging/windows/Cargo.toml --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $wixTools = Join-Path $env:RUNNER_TEMP 'wlanlogin-wix'
+          dotnet tool install wix --version 6.0.2 --tool-path $wixTools
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $wix = Join-Path $wixTools 'wix.exe'
+          & $wix extension add WixToolset.UI.wixext/6.0.2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo xtask bundle windows --profile dev --target $env:BUILD_TARGET --target-dir target --wix $wix
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

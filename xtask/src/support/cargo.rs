@@ -13,6 +13,16 @@ pub struct BuildOptions {
 }
 
 pub fn build(root: &Path, package: &str, binary: &str, options: &BuildOptions) -> Result<PathBuf> {
+    build_with(root, package, binary, options, |_| {})
+}
+
+pub fn build_with(
+    root: &Path,
+    package: &str,
+    binary: &str,
+    options: &BuildOptions,
+    configure: impl FnOnce(&mut Command),
+) -> Result<PathBuf> {
     let mut command = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     command.current_dir(root).args([
         "build",
@@ -31,6 +41,7 @@ pub fn build(root: &Path, package: &str, binary: &str, options: &BuildOptions) -
     if let Some(directory) = &options.target_dir {
         command.arg("--target-dir").arg(directory);
     }
+    configure(&mut command);
     let mut child = command
         .stdout(Stdio::piped())
         .spawn()
