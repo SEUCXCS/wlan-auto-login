@@ -1,3 +1,5 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--help") {
         println!("Internal Windows Installer action. Use wlanlogin-setup.exe to install.");
@@ -20,5 +22,9 @@ fn execute() -> anyhow::Result<()> {
     {
         return wlanlogin_installer::verify::run(&arguments[1..]);
     }
-    wlanlogin_installer::transaction::dispatch(arguments)
+    let result = wlanlogin_installer::transaction::dispatch(arguments.clone());
+    if let Err(error) = &result {
+        wlanlogin_installer::diagnostics::report_error(&arguments, error);
+    }
+    result
 }

@@ -6,7 +6,10 @@ use windows_sys::Win32::{
     Foundation::CloseHandle,
     System::{
         ApplicationInstallationAndServicing::{
-            INSTALLUILEVEL_FULL, MsiInstallProductW, MsiSetInternalUI,
+            INSTALLLOGATTRIBUTES_FLUSHEACHLINE, INSTALLLOGMODE_ACTIONDATA,
+            INSTALLLOGMODE_ACTIONSTART, INSTALLLOGMODE_ERROR, INSTALLLOGMODE_INFO,
+            INSTALLLOGMODE_PROPERTYDUMP, INSTALLLOGMODE_VERBOSE, INSTALLLOGMODE_WARNING,
+            INSTALLUILEVEL_FULL, MsiEnableLogW, MsiInstallProductW, MsiSetInternalUI,
         },
         LibraryLoader::GetModuleHandleW,
         Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject},
@@ -55,21 +58,52 @@ pub fn run(user_msi: &'static [u8], machine_msi: &'static [u8]) -> Result<()> {
             user_msi
         },
     )?;
+    let logs = tempfile::Builder::new()
+        .prefix("wlanlogin-setup-logs-")
+        .tempdir()?;
+    // Keep diagnostics readable by the initiating Windows user after elevation ends.
+    win::private_directory(logs.path(), false)?;
+    let log_file = crate::diagnostics::log_file(logs.path());
     let result = unsafe {
+        let logging = MsiEnableLogW(
+            (INSTALLLOGMODE_ERROR
+                | INSTALLLOGMODE_WARNING
+                | INSTALLLOGMODE_INFO
+                | INSTALLLOGMODE_ACTIONSTART
+                | INSTALLLOGMODE_ACTIONDATA
+                | INSTALLLOGMODE_PROPERTYDUMP
+                | INSTALLLOGMODE_VERBOSE) as u32,
+            win::wide(&log_file).as_ptr(),
+            INSTALLLOGATTRIBUTES_FLUSHEACHLINE as u32,
+        );
+        ensure!(
+            logging == 0,
+            "Could not enable Windows Installer diagnostics ({logging})"
+        );
         MsiSetInternalUI(INSTALLUILEVEL_FULL, ptr::null_mut());
-        MsiInstallProductW(
+        let result = MsiInstallProductW(
             win::wide(msi).as_ptr(),
-            win::wide("REBOOT=ReallySuppress").as_ptr(),
-        )
+            win::wide(format!(
+                "REBOOT=ReallySuppress WLANLOGIN_LOG_ROOT=\"{}\"",
+                logs.path().display()
+            ))
+            .as_ptr(),
+        );
+        MsiEnableLogW(0, ptr::null(), 0);
+        result
     };
     if result == 1602 {
+        let _ = logs.keep();
         drop(temporary);
         std::process::exit(1602);
     }
-    ensure!(
-        result == 0 || result == 3010,
-        "Windows Installer returned {result}. Recovery details, if needed, are in the installation directory's .installer-* folder."
-    );
+    if result != 0 && result != 3010 {
+        let _ = logs.keep();
+        anyhow::bail!(
+            "Windows Installer returned {result}.\n安装日志：{}\n同目录下的 action.log 和 cli.log 记录失败步骤与 CLI 输出。",
+            log_file.display()
+        );
+    }
     unsafe {
         let mut ignored = 0;
         SendMessageTimeoutW(

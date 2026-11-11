@@ -77,6 +77,31 @@ pub fn run(arguments: &[String]) -> Result<()> {
     let mut database = 0;
     result(unsafe { MsiOpenDatabaseW(win::wide(msi).as_ptr(), ptr::null(), &mut database) })?;
     let database = Handle(database);
+    let credential_routes = rows(
+        &database,
+        "SELECT `Condition` FROM `ControlEvent` WHERE `Dialog_`='LicenseAgreementDlg' AND `Control_`='Next' AND `Argument`='CredentialsDlg'",
+    )?;
+    ensure!(
+        credential_routes.len() == 1
+            && credential_routes[0][0].contains("NOT WIX_UPGRADE_DETECTED"),
+        "Upgrades must reuse stored credentials without showing the account page"
+    );
+    let upgrade_routes = rows(
+        &database,
+        "SELECT `Condition` FROM `ControlEvent` WHERE `Dialog_`='LicenseAgreementDlg' AND `Control_`='Next' AND `Argument`='VerifyReadyDlg'",
+    )?;
+    ensure!(
+        upgrade_routes
+            .iter()
+            .any(|row| row[0].contains("WIX_UPGRADE_DETECTED")),
+        "Missing password-free upgrade route"
+    );
+    let action_bytes = fs::read(std::env::current_exe()?)?;
+    let pe = u32::from_le_bytes(action_bytes[0x3c..0x40].try_into()?) as usize;
+    ensure!(
+        u16::from_le_bytes(action_bytes[pe + 92..pe + 94].try_into()?) == 2,
+        "The MSI action must use the Windows GUI subsystem to avoid console windows"
+    );
     let files = rows(&database, "SELECT `File`, `FileName` FROM `File`")?;
     ensure!(
         files.len() == 3,

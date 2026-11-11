@@ -89,10 +89,13 @@ fn initialize(session: u32) -> Result<(), u32> {
         property(session, "WLANLOGIN_PASSWORD")?,
         property(session, "WLANLOGIN_LINE")?,
     ]);
-    if fields.0[0].is_empty() && fields.0[1].is_empty() {
-        return Ok(());
-    }
-    let directory = std::env::temp_dir().join(format!("wlanlogin-form-{transaction}"));
+    let log_root = property(session, "WLANLOGIN_LOG_ROOT")?;
+    let root = if log_root.is_empty() {
+        std::env::temp_dir()
+    } else {
+        std::path::PathBuf::from(log_root)
+    };
+    let directory = root.join(format!("wlanlogin-form-{transaction}"));
     let mut descriptor = ptr::null_mut();
     unsafe {
         if ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -114,6 +117,19 @@ fn initialize(session: u32) -> Result<(), u32> {
         if created == 0 {
             return Err(1603);
         }
+    }
+    set_property(
+        session,
+        "WLANLOGIN_DIAGNOSTICS",
+        &directory.to_string_lossy(),
+    )?;
+    std::fs::write(
+        directory.join("action.log"),
+        b"Prepared Windows Installer action context\n",
+    )
+    .map_err(|_| 1603u32)?;
+    if fields.0[0].is_empty() && fields.0[1].is_empty() {
+        return Ok(());
     }
     let file = directory.join("credentials.bin");
     let outcome = (|| {

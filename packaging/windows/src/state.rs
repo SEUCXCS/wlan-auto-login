@@ -22,32 +22,40 @@ pub struct Paths {
 }
 impl Paths {
     pub fn new(scope: Scope) -> Result<Self> {
-        let user = directories::ProjectDirs::from_path(
-            PathBuf::from(identity::ORGANIZATION).join(identity::APP_NAME),
-        )
-        .context("User folders unavailable")?;
-        let base = directories::BaseDirs::new().context("Windows profile unavailable")?;
-        if scope == Scope::User {
-            let config = user.config_dir().to_path_buf();
-            Ok(Self {
-                definition: config.join("daemon-task.xml"),
-                secrets: config.clone(),
-                config,
-                binary: user.data_local_dir().join("bin/wlanlogin-daemon.exe"),
-                install: base.data_local_dir().join("Programs/SEUCXCS/wlanlogin"),
-            })
-        } else {
-            let data = std::env::var_os("ProgramData").context("ProgramData unavailable")?;
-            let data = PathBuf::from(data).join("SEUCXCS/wlanlogin");
+        Self::resolve(scope, || {
+            let user = directories::ProjectDirs::from_path(
+                PathBuf::from(identity::ORGANIZATION).join(identity::APP_NAME),
+            )
+            .context("User folders unavailable")?;
+            let base = directories::BaseDirs::new().context("Windows profile unavailable")?;
+            Ok((user, base))
+        })
+    }
+    fn resolve(
+        scope: Scope,
+        user_folders: impl FnOnce() -> Result<(directories::ProjectDirs, directories::BaseDirs)>,
+    ) -> Result<Self> {
+        // LocalSystem has no interactive profile. Machine paths use only global Known Folders.
+        if scope == Scope::Machine {
+            let data = win::program_data()?.join("SEUCXCS/wlanlogin");
             let install = win::program_files()?.join("SEUCXCS/wlanlogin");
-            Ok(Self {
+            return Ok(Self {
                 config: data.join("state"),
                 secrets: data.join("secrets"),
                 definition: data.join("service.json"),
                 binary: install.join("wlanlogin-daemon.exe"),
                 install,
-            })
+            });
         }
+        let (user, base) = user_folders()?;
+        let config = user.config_dir().to_path_buf();
+        Ok(Self {
+            definition: config.join("daemon-task.xml"),
+            secrets: config.clone(),
+            config,
+            binary: user.data_local_dir().join("bin/wlanlogin-daemon.exe"),
+            install: base.data_local_dir().join("Programs/SEUCXCS/wlanlogin"),
+        })
     }
     fn files(&self, scope: Scope) -> Vec<PathBuf> {
         let mut result = vec![
@@ -125,6 +133,8 @@ pub struct Snapshot {
     files: Vec<File>,
     directories: Vec<Directory>,
     locks: Vec<(PathBuf, bool)>,
+    #[serde(default)]
+    control_invalid: bool,
     credential: Option<Credential>,
     pub registration: Option<Registration>,
     pub generation: u64,
@@ -132,6 +142,17 @@ pub struct Snapshot {
 }
 impl Snapshot {
     pub fn capture(paths: &Paths, scope: Scope, changes_credentials: bool) -> Result<Self> {
+        Self::capture_with(paths, scope, changes_credentials, false)
+    }
+    pub fn capture_for_removal(paths: &Paths, scope: Scope) -> Result<Self> {
+        Self::capture_with(paths, scope, false, true)
+    }
+    fn capture_with(
+        paths: &Paths,
+        scope: Scope,
+        changes_credentials: bool,
+        allow_invalid_control: bool,
+    ) -> Result<Self> {
         let directory_roots = vec![
             paths.config.clone(),
             paths.secrets.clone(),
@@ -206,7 +227,19 @@ impl Snapshot {
                 "Service ownership marker mismatch"
             );
         }
-        let generation = generation(paths)?;
+        let control_invalid = files
+            .iter()
+            .find(|file| file.path == paths.config.join("control.json"))
+            .and_then(|file| file.bytes.as_ref())
+            .is_some_and(|bytes| {
+                serde_json::from_slice::<serde_json::Value>(bytes)
+                    .map_or(true, |value| !value.is_object())
+            });
+        let generation = if control_invalid && allow_invalid_control {
+            0
+        } else {
+            generation(paths)?
+        };
         let lock_files = ["service.lock", "operation.lock", "daemon.lock"]
             .into_iter()
             .map(|name| {
@@ -222,6 +255,7 @@ impl Snapshot {
             files,
             directories,
             locks: lock_files,
+            control_invalid,
             credential,
             registration,
             generation,
@@ -252,13 +286,14 @@ impl Snapshot {
         Ok(())
     }
     pub fn restore_files(&self, paths: &Paths) -> Result<()> {
-        let current_generation = generation(paths)?;
+        let current_generation = self.current_generation(paths)?;
         ensure!(
             current_generation <= self.maximum_generation,
             "Credentials changed concurrently; snapshot retained for recovery"
         );
         // The caller has stopped the daemon and holds both daemon and operation locks.
-        if !self.fresh() {
+        let restore_generation = !self.fresh() && !self.control_invalid;
+        if restore_generation {
             // Restoring credentials must invalidate every permit issued before rollback.
             let control = paths.config.join("control.json");
             let original = self
@@ -281,7 +316,7 @@ impl Snapshot {
             win::write_atomic(&control, &serde_json::to_vec(&state)?)?;
         }
         for file in &self.files {
-            if !self.fresh() && file.path == paths.config.join("control.json") {
+            if restore_generation && file.path == paths.config.join("control.json") {
                 continue;
             }
             file.restore()?;
@@ -290,6 +325,12 @@ impl Snapshot {
             credentials::restore(self.credential.as_ref())?;
         }
         Ok(())
+    }
+    pub fn current_generation(&self, paths: &Paths) -> Result<u64> {
+        match generation(paths) {
+            Err(_) if self.control_invalid => Ok(0),
+            value => value,
+        }
     }
     pub fn restore_directories(&self) -> Result<()> {
         if !self
@@ -348,6 +389,21 @@ pub fn remove_file(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn machine_paths_work_without_an_interactive_user_profile() -> Result<()> {
+        let paths = Paths::resolve(Scope::Machine, || {
+            anyhow::bail!("No interactive Windows profile")
+        })?;
+        assert!(paths.config.starts_with(win::program_data()?));
+        assert!(paths.install.starts_with(win::program_files()?));
+        assert!(
+            Paths::resolve(Scope::User, || anyhow::bail!(
+                "No interactive Windows profile"
+            ))
+            .is_err()
+        );
+        Ok(())
+    }
+    #[test]
     fn backup_restores_existing_files_and_removes_new_files() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("preferences.json");
@@ -392,6 +448,7 @@ mod tests {
             files,
             directories: Vec::new(),
             locks: Vec::new(),
+            control_invalid: false,
             credential: None,
             registration: None,
             generation: 8,
@@ -438,6 +495,23 @@ mod tests {
             fs::read(paths.config.join("preferences.json"))?,
             b"concurrent preferences"
         );
+        Ok(())
+    }
+    #[test]
+    fn a_failed_purge_can_restore_corrupt_control_data() -> Result<()> {
+        let (_directory, paths, mut snapshot) = fixture()?;
+        let control = paths.config.join("control.json");
+        let original = b"previous corrupt control data";
+        snapshot
+            .files
+            .iter_mut()
+            .find(|file| file.path == control)
+            .expect("control backup")
+            .bytes = Some(original.to_vec());
+        snapshot.control_invalid = true;
+        fs::remove_file(&control)?;
+        snapshot.restore_files(&paths)?;
+        assert_eq!(fs::read(&control)?, original);
         Ok(())
     }
 }

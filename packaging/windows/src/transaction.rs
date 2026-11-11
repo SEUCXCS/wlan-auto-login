@@ -1,6 +1,8 @@
 //! MSI owns the payload and PATH; these actions compose the existing CLI operations.
 use crate::{
-    Scope, cli, ipc, services,
+    Scope, cli,
+    diagnostics::Diagnostics,
+    ipc, services,
     state::{self, Paths, Snapshot},
     validate_id, win,
 };
@@ -14,10 +16,13 @@ use std::{
 use zeroize::Zeroizing;
 
 pub fn dispatch(arguments: Vec<String>) -> Result<()> {
-    let [action, scope, product, session, binary] = arguments.as_slice() else {
+    let [action, scope, product, session, binary, log_directory] = arguments.as_slice() else {
         bail!("Invalid installer action arguments");
     };
     let scope = Scope::parse(scope)?;
+    let diagnostics = Diagnostics::open(log_directory, product)?;
+    diagnostics.stage(&format!("action={action} scope={scope:?} starting"))?;
+    diagnostics.stage(&format!("process elevated={}", win::elevated()?))?;
     ensure!(
         win::elevated()? == (scope == Scope::Machine),
         "The MSI action is running under the wrong Windows identity"
@@ -42,10 +47,18 @@ pub fn dispatch(arguments: Vec<String>) -> Result<()> {
     lock.try_lock_exclusive()
         .context("Another installer action is in progress")?;
     let result = match action.as_str() {
-        "install" => install(&paths, scope, session, product, Path::new(binary), &journal),
-        "rollback" => rollback(&paths, scope, Path::new(binary), &journal),
+        "install" => install(
+            &paths,
+            scope,
+            session,
+            product,
+            Path::new(binary),
+            &journal,
+            &diagnostics,
+        ),
+        "rollback" => rollback(&paths, scope, Path::new(binary), &journal, &diagnostics),
         "commit" => cleanup(&journal),
-        "uninstall" => uninstall(&paths, scope, Path::new(binary), &journal),
+        "uninstall" => uninstall(&paths, scope, Path::new(binary), &journal, &diagnostics),
         _ => bail!("Unknown installer action"),
     };
     ipc::cleanup(session, product)?;
@@ -58,6 +71,13 @@ pub fn dispatch(arguments: Vec<String>) -> Result<()> {
             let _ = fs::write(journal.join("error.txt"), format!("{error:#}\n"));
         }
     }
+    diagnostics.stage(&format!(
+        "action={action} finished success={}",
+        result.is_ok()
+    ))?;
+    if action == "commit" && result.is_ok() {
+        diagnostics.cleanup()?;
+    }
     result
 }
 
@@ -68,6 +88,7 @@ fn install(
     transaction: &str,
     binary: &Path,
     journal: &Path,
+    diagnostics: &Diagnostics,
 ) -> Result<()> {
     ensure!(
         !journal.try_exists()?,
@@ -79,29 +100,46 @@ fn install(
     } else {
         Some(ipc::receive(session, transaction, scope)?)
     };
+    diagnostics.stage("Capturing the original scope state")?;
     let snapshot = Snapshot::capture(paths, scope, form.is_some())?;
     persist(&snapshot, scope, journal)?;
+    diagnostics.stage("Invoking service install")?;
     // The public CLI takes its own operation/service locks and performs its existing rollback.
     cli::run(
         binary,
         scope,
         &["service", "install", "--non-interactive"],
         form.as_ref(),
+        &diagnostics.cli_log(),
     )?;
+    diagnostics.stage("Checking service registration and daemon readiness")?;
     services::wait(scope, true)?;
     wait_runtime(paths)?;
     Ok(())
 }
 
-fn uninstall(paths: &Paths, scope: Scope, binary: &Path, journal: &Path) -> Result<()> {
+fn uninstall(
+    paths: &Paths,
+    scope: Scope,
+    binary: &Path,
+    journal: &Path,
+    diagnostics: &Diagnostics,
+) -> Result<()> {
     ensure!(
         !journal.try_exists()?,
         "A recovery snapshot already exists at {}",
         journal.display()
     );
-    let snapshot = Snapshot::capture(paths, scope, false)?;
+    let snapshot = Snapshot::capture_for_removal(paths, scope)?;
     persist(&snapshot, scope, journal)?;
-    cli::run(binary, scope, &["service", "uninstall"], None)
+    diagnostics.stage("Invoking service uninstall --purge")?;
+    cli::run(
+        binary,
+        scope,
+        &["service", "uninstall", "--purge"],
+        None,
+        &diagnostics.cli_log(),
+    )
 }
 
 fn persist(snapshot: &Snapshot, scope: Scope, journal: &Path) -> Result<()> {
@@ -111,7 +149,13 @@ fn persist(snapshot: &Snapshot, scope: Scope, journal: &Path) -> Result<()> {
     win::write_atomic(&journal.join("snapshot.bin"), &encrypted)
 }
 
-fn rollback(paths: &Paths, scope: Scope, binary: &Path, journal: &Path) -> Result<()> {
+fn rollback(
+    paths: &Paths,
+    scope: Scope,
+    binary: &Path,
+    journal: &Path,
+    diagnostics: &Diagnostics,
+) -> Result<()> {
     let snapshot_file = journal.join("snapshot.bin");
     if !snapshot_file.try_exists()? {
         return Ok(());
@@ -121,22 +165,36 @@ fn rollback(paths: &Paths, scope: Scope, binary: &Path, journal: &Path) -> Resul
     let mut snapshot: Snapshot = serde_json::from_slice(&bytes)?;
     snapshot.validate(paths, scope)?;
     ensure!(
-        state::generation(paths)? <= snapshot.maximum_generation,
+        snapshot.current_generation(paths)? <= snapshot.maximum_generation,
         "Concurrent credential change detected; recovery snapshot retained at {}",
         journal.display()
     );
 
     if snapshot.fresh() {
         // A fresh scope has no older credentials or files to preserve.
-        cli::run(binary, scope, &["service", "uninstall", "--purge"], None)?;
+        cli::run(
+            binary,
+            scope,
+            &["service", "uninstall", "--purge"],
+            None,
+            &diagnostics.cli_log(),
+        )?;
     } else {
         // Uninstall stops/unregisters before any file restoration and keeps saved credentials.
-        cli::run(binary, scope, &["service", "uninstall"], None)?;
+        cli::run(
+            binary,
+            scope,
+            &["service", "uninstall"],
+            None,
+            &diagnostics.cli_log(),
+        )?;
     }
     services::wait(scope, false)?;
     let mut locks = lock_state(paths)?;
     if !snapshot.fresh() {
-        snapshot.maximum_generation = state::generation(paths)?
+        snapshot.maximum_generation = snapshot
+            .current_generation(paths)?
+            .max(snapshot.generation)
             .checked_add(1)
             .context("Credential generation exhausted")?;
         persist(&snapshot, scope, journal)?;

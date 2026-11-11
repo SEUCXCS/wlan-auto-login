@@ -4,6 +4,8 @@ pub mod cli;
 #[cfg(windows)]
 mod credentials;
 #[cfg(windows)]
+pub mod diagnostics;
+#[cfg(windows)]
 pub mod ipc;
 #[cfg(windows)]
 mod services;

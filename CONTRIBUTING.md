@@ -42,6 +42,8 @@ Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbu
 
 Windows 安装器由 `cargo xtask bundle windows` 构建，使用固定版本 WiX 6.0.2 和 `WixToolset.UI.wixext/6.0.2`。`commands/bundle/windows.rs` 构建原 CLI、安装动作和事务初始化 DLL，生成两个作用域固定的 MSI，并嵌入单个 `wlanlogin-windows-setup-<arch>.exe`。每个 MSI 的 cabinet 会在构建期间解包，逐字节检查 CLI、README 和 LICENSE，同时检查 PATH 与回滚动作的作用域。这个检查通过 MSI 数据库 API 和 cabinet 解压完成。
 
+整机路径仅解析 Program Files 和 ProgramData Known Folders，支持无交互用户配置的 LocalSystem。安装动作使用 GUI 子系统，CLI 及其子进程置于独立 Job Object，安装命令超过 180 秒时终止该进程树并进入回滚。`diagnostics.rs` 在安装器初始化的私有目录记录阶段，`cli.log` 保存 CLI 输出；引导器失败时保留 MSI 日志并显示路径。升级通过 `WIX_UPGRADE_DETECTED` 跳过账号页，维护卸载调用 `service uninstall --purge`，旧产品被升级替换时跳过清理凭据的动作。
+
 `packaging/windows` 使用独立 Cargo workspace 和 lockfile。`installer.wxs` 维护官方 WixUI 页面、文件组件、PATH、升级和动作顺序；`initialize.rs` 在执行阶段准备唯一事务 ID 和一次性 DPAPI 凭据文件；`src/transaction.rs` 调用现有 CLI，`state.rs`、`credentials.rs` 和 `services.rs` 维护所选范围的备份和恢复。后台二进制继续由现有 `service install` 管理。恢复凭据时保持凭据代次递增。`icon/icon.ico` 包含现有 macOS 图标的 32、64、128、256 像素表示，转换后的图标随源码提交。
 
 安装器检查使用 `cargo fmt --manifest-path packaging/windows/Cargo.toml -- --check`、`cargo clippy --manifest-path packaging/windows/Cargo.toml --all-targets --locked -- -D warnings`、`cargo test --manifest-path packaging/windows/Cargo.toml --locked` 和 `rustfmt --edition 2024 --check packaging/windows/initialize.rs`。故障测试使用临时目录、测试凭据和模拟状态。真实服务的安装、更新、取消和卸载验证应在独立测试虚拟机中完成。Release 同时发布原 Windows ZIP 和安装 EXE，并将两者纳入校验和。

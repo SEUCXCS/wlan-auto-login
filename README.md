@@ -272,7 +272,11 @@ macOS 安装会校验完整应用包。替换旧副本后，程序检查凭据�
 
 向导将 `wlanlogin.exe`、`README.md` 和 `LICENSE` 安装到所选范围的目录，并加入对应的 PATH。安装完成后，打开新终端即可运行 `wlanlogin`。用户安装使用计划任务和 Credential Manager；整机安装使用 Windows 服务和机器 DPAPI。
 
-安装失败时，Windows Installer 回退程序文件和 PATH。全新范围通过 `service uninstall --purge` 清理；已有凭据、配置或服务时，安装器恢复原数据和运行状态。恢复失败时，请保留安装目录下的 `.installer-*` 恢复目录。正常卸载可在 Windows“已安装的应用”中进行，默认保留校园网凭据。
+同一范围的升级会沿用已保存的账号、密码和线路，跳过账号页。同版本重新打包也走升级流程。更新期间保留服务凭据和配置。
+
+安装失败时，Windows Installer 回退程序文件和 PATH。全新范围通过 `service uninstall --purge` 清理；已有凭据、配置或服务时，安装器恢复原数据和运行状态。失败弹窗会列出 `setup.log` 路径，同目录的 `wlanlogin-form-*` 子目录包含 `action.log` 和 `cli.log`。恢复失败时，请同时保留安装目录下的 `.installer-*` 恢复目录。
+
+在 Windows“已安装的应用”中卸载时，安装器执行所选范围的 `service uninstall --purge`，清除后台服务、凭据、配置和应用日志，再由 MSI 删除安装文件和对应 PATH 项。
 
 Release 同时提供原有的 `wlanlogin-windows-<arch>.zip`。使用压缩包时按以下步骤安装。
 

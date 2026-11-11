@@ -57,6 +57,7 @@ pub fn cleanup(file: &str, transaction: &str) -> Result<()> {
         match fs::remove_dir(directory) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
             Err(error) => return Err(error.into()),
         }
     }

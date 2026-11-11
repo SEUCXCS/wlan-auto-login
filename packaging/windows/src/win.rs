@@ -25,7 +25,7 @@ use windows_sys::Win32::{
         Threading::{GetCurrentProcess, OpenProcessToken},
     },
     UI::{
-        Shell::{FOLDERID_ProgramFiles, SHGetKnownFolderPath},
+        Shell::{FOLDERID_ProgramData, FOLDERID_ProgramFiles, SHGetKnownFolderPath},
         WindowsAndMessaging::{MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MessageBoxW},
     },
 };
@@ -132,10 +132,19 @@ pub unsafe fn string_from_ptr(value: *const u16) -> String {
 }
 
 pub fn program_files() -> Result<PathBuf> {
+    known_folder(&FOLDERID_ProgramFiles)
+}
+pub fn program_data() -> Result<PathBuf> {
+    known_folder(&FOLDERID_ProgramData)
+}
+fn known_folder(folder: &windows_sys::core::GUID) -> Result<PathBuf> {
     unsafe {
         let mut path = ptr::null_mut();
-        let result = SHGetKnownFolderPath(&FOLDERID_ProgramFiles, 0, ptr::null_mut(), &mut path);
-        ensure!(result >= 0, "Could not resolve Program Files ({result:#x})");
+        let result = SHGetKnownFolderPath(folder, 0, ptr::null_mut(), &mut path);
+        ensure!(
+            result >= 0,
+            "Could not resolve a global Windows folder ({result:#x})"
+        );
         let value = PathBuf::from(string_from_ptr(path));
         CoTaskMemFree(path.cast());
         Ok(value)
