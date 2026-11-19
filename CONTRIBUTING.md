@@ -127,6 +127,8 @@ macOS Wi-Fi 宿主使用有长度限制的 IPC 帧、协议版本和请求 ID；
 
 安装前后及应用包回滚的凭据检查均由实际目标程序执行 `permission check macos.keychain --json`；检查报告必须包含正确的版本、范围和权限 ID。先静默检查；已授权不得改 ACL；锁定时先解锁并重新检查；缺失、不可用、未知或子进程检查失败不得尝试重写。只有确需授权时才复制现有 `SecAccess`，扩展一条仅含 decrypt 的 ACL；无此条目则新增仅含 decrypt 的 ACL，不修改混合权限 ACL、所有者、partition ACL 或其他条目。再次静默检查成功才能继续安装或恢复原服务；未完成回滚保留恢复目录。launchd 定义必须包含 `AssociatedBundleIdentifiers` 与固定应用 ID，关联后台活动归属，服务生命周期由原生 SMAppService 托管。每次重新启动产生新的 Wi-Fi 会话标识，原生查询有超时。
 
+macOS 安装通过 daemon 控制接口确认服务就绪。若 `launchd` 报告代码签名启动失败且标记需要更新 LWCR，安装器允许系统完成受 `ThrottleInterval` 限制的重试。如果该重试报告 `EX_CONFIG` 且仍标记需要更新 LWCR，使用同一个已安装的签名应用重新注册一次。确认就绪前保留回滚副本，失败时报告 `launchd` 的状态和退出信息。调整原生定义的 `ThrottleInterval` 时同步核对恢复等待时间。
+
 ### Linux 后台凭据时序
 
 `define/credentials.rs` 定义存储契约和 Available / Missing / Waiting / Failed 状态；`shared/credentials/codec.rs` 实现持久化格式，`shared/credentials/mod.rs` 选择作用域后端。`flow/credentials` 是操作入口。查询流程属于 shared/flow，define 不应读取文件、查询网络或启动服务。
