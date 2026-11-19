@@ -106,13 +106,7 @@ async fn install(paths: &Paths, previous_plan: Plan) -> Result<()> {
             crate::system::macos::services::app_service::output(command, &SystemRunner).await?;
         }
 
-        // Background approval is distinct from managed-daemon liveness.
-        let registered = plan.manager.query(&SystemRunner).await?;
-        if registered.registered && registered.enabled == Some(false) {
-            return Ok::<_, crate::infra::error::Error>(false);
-        }
-        crate::system::macos::services::readiness::wait_ready(paths, &plan).await?;
-        Ok(true)
+        crate::system::macos::services::readiness::wait_installed(paths, &plan).await
     }
     .await;
 
