@@ -1,140 +1,74 @@
-# ePortal 校园网注销协议
+# ePortal 校园网注销接口
 
-本文记录当前门户注销页实际使用的请求结构，作为自动登录实现中“注销”能力的协议基础。
+注销用于结束当前终端的门户认证会话。`Client::logout()` 使用端口 `803` 的新版接口。注销前先通过 `chkstatus` 取得本机有效 IPv4，再以在线页参数加载门户配置。[状态查询接口](./eportal-status.md)
 
-> 本次只查看了 `http://172.18.254.6/` 的页面结构、按钮逻辑和公开静态脚本，没有点击注销，也没有实际调用注销接口。以下结论尚未经过真实注销响应验证。
-
-## 1. 当前页面如何触发注销
-
-访问：
+## 新版注销
 
 ```http
-GET http://172.18.254.6/
+GET http://172.18.254.6:803/eportal/portal/logout
 ```
 
-当前会话已登录时，页面标题为“注销页”，页面包含一个“注销”按钮：
+### 请求参数
 
-```html
-<input name="logout" type="button" onclick="javascript:wc()" value="注 销">
+| 参数 | 取值 |
+| --- | --- |
+| `login_method` | 本校 Portal 认证使用 `1` |
+| `user_account`、`user_password` | 协议占位值 `drcom`、`123` |
+| `ac_logout` | 页面配置指定的注销方式。门户脚本定义 `0` 为默认方式，`1` 为 RADIUS，`2` 为全业务接口。本校配置使用 `1` |
+| `register_mode` | 页面配置指定的后台类型。本校配置使用 `1` |
+| `wlan_user_ip`、`wlan_user_ipv6` | 当前终端的地址，以文本传递 |
+| `wlan_vlan_id` | 当前在线页上下文的 VLAN |
+| `wlan_user_mac` | 终端 MAC。浏览器可传全零占位值 `000000000000` |
+| `wlan_ac_ip`、`wlan_ac_name` | 接入控制器 IP 和名称。无对应值时可传空 |
+| `program_index`、`page_index` | `page/loadConfig` 返回的方案、页面索引 |
+| `callback`、`jsVersion`、`v`、`lang` | 回调名、`4.5.1`、防缓存值、`zh` |
+
+浏览器的在线页可使用 VLAN `1` 和 IPv6 `::`，即使登录页的 VLAN 为 `0`、IPv6 为空。示例采用在线页的取值，替换了设备 IPv4、页面索引和防缓存值。
+
+```http
+GET http://172.18.254.6:803/eportal/portal/logout?callback=dr1002&login_method=1&user_account=drcom&user_password=123&ac_logout=1&register_mode=1&wlan_user_ip=10.0.0.100&wlan_user_ipv6=%3A%3A&wlan_vlan_id=1&wlan_user_mac=000000000000&wlan_ac_ip=&wlan_ac_name=&jsVersion=4.5.1&program_index=example-program&page_index=example-page&v=1234&lang=zh
 ```
 
-页面脚本中的调用链为：
+浏览器携带门户首页 Referer 和当前 `PHPSESSID` 会话 Cookie。这些请求头是否必需、服务端接受的最小查询参数集合均待确认。
 
-```text
-wc()
-  -> 弹出注销确认框
-  -> exit()
-  -> logout.init()
-  -> logout.logout_portal()
-  -> logout.portal_logout(data)
-  -> JSONP 请求注销接口
+客户端使用同一组终端参数加载配置和提交注销。按本校在线页的取值，状态 VLAN 为 `0` 时，注销使用 `1`，缺失的 IPv6 使用 `::`。其他 VLAN 和 IPv6 值取自本机状态。配置中的 `ac_logout`、`register_mode` 缺失时使用页面脚本的默认值 `0`。
+
+### 响应字段
+
+| 字段 | 示例类型 | 含义 |
+| --- | --- | --- |
+| `result` | 整数 | `1` 表示注销成功，`0` 表示本次注销失败 |
+| `msg` | 字符串 | 门户提示。失败提示可同时列出未在线、页面过期等可能原因 |
+
+```javascript
+dr1002({"result":1,"msg":"Radius注销成功！"})
+dr1002({"result":0,"msg":"注销失败，可能不在线或者页面已过期，请刷新页面重试！"})
 ```
 
-页面脚本会先检查 `wlan_user_ip`。如果 IP 不存在或仍为 `000.000.000.000`，脚本会中止注销，因此注销前必须先获得当前设备的校园网 IP。
+以正文 `result` 判断操作结果。客户端也接受 `result` 为 `"1"` 或 `"ok"` 的成功响应。随后以 `chkstatus` 确认同一终端 IPv4 已离线。相同请求参数可能得到成功或失败结果，通用提示只能用来报告失败。`online_list` 空列表也可能出现在本机在线时。[状态查询接口](./eportal-status.md)
 
-## 2. 主注销接口
-
-当前页面分支使用的接口是：
+## 旧版注销
 
 ```http
 GET http://172.18.254.6:801/eportal/?c=Portal&a=logout
 ```
 
-完整请求结构：
+| 参数 | 旧版客户端传值 |
+| --- | --- |
+| `c`、`a` | `Portal`、`logout` |
+| `login_method` | `1` |
+| `user_account`、`user_password` | `drcom`、`123` |
+| `ac_logout`、`register_mode` | `0`、`1` |
+| `wlan_user_ip`、`wlan_user_ipv6`、`wlan_user_mac`、`wlan_vlan_id` | 来自 `chkstatus` |
+| `wlan_ac_ip`、`wlan_ac_name` | 优先使用 `chkstatus` 的值，缺失时默认 `172.18.255.6`、`NAS` |
+| `callback`、`jsVersion`、`v` | `dr1`、`3.3.3`、Unix 毫秒时间戳 |
 
-```text
-http://172.18.254.6:801/eportal/?c=Portal&a=logout&callback=<JSONP回调名>&login_method=1&user_account=drcom&user_password=123&ac_logout=0&register_mode=1&wlan_user_ip=<当前设备校园网IP>&wlan_user_ipv6=<当前设备IPv6或空>&wlan_vlan_id=<VLAN ID>&wlan_user_mac=<设备MAC或占位值>&wlan_ac_ip=<接入控制器IP或空>&wlan_ac_name=<接入控制器名称或空>&jsVersion=3.3.3&v=<随机数>
+```http
+GET http://172.18.254.6:801/eportal/?c=Portal&a=logout&callback=dr1&login_method=1&user_account=drcom&user_password=123&ac_logout=0&register_mode=1&wlan_user_ip=10.0.0.100&wlan_user_ipv6=&wlan_vlan_id=1&wlan_user_mac=001122334455&wlan_ac_ip=172.18.255.6&wlan_ac_name=NAS&jsVersion=3.3.3&v=1234
 ```
 
-### 注销参数
+旧版页面在 `login_method=0` 时另有 `/drcom/logout` 分支。页面元数据中还列有 `/eportal/?c=ACSetting&a=Logout&ver=1.0` 作为 Dr.COM 客户端的注销路径。
 
-| 参数 | 页面中的值或来源 | 是否必需 | 说明 |
-| --- | --- | --- | --- |
-| `c` | `Portal` | 是 | 固定值。 |
-| `a` | `logout` | 是 | 固定值，表示标准 Portal 注销。 |
-| `callback` | 动态生成 | 是 | JSONP 回调名。页面脚本从 `1000` 递增生成，例如 `dr1001`、`dr1002`。 |
-| `login_method` | `page.loginMethod` | 是 | 当前加载的 IP 匹配配置中为 `1`，对应 PORTAL 协议。 |
-| `user_account` | `drcom` | 是 | 注销接口使用的固定占位账号，不是用户的学号。 |
-| `user_password` | `123` | 是 | 注销接口使用的固定占位密码，不是用户的校园网密码。 |
-| `ac_logout` | `0` | 是 | 当前页面配置值为 `0`，表示不走额外的 AC 注销接口。 |
-| `register_mode` | `1` | 是 | 当前页面配置值。 |
-| `wlan_user_ip` | `term.ip` | 是 | 当前设备的校园网 IP；为空时页面不会发起注销。 |
-| `wlan_user_ipv6` | `term.ipv6` | 是 | 默认为空；只有页面通过 `UserV6IP` 参数得到 IPv6 地址时才赋值。 |
-| `wlan_vlan_id` | `term.vlan` | 是 | 当前设备 VLAN ID；页面无法读取时默认可能为 `1`。 |
-| `wlan_user_mac` | `term.mac` | 是 | 当前设备 MAC；页面无法读取时可能使用 `000000000000`。 |
-| `wlan_ac_ip` | `term.wlanacip` | 是 | 页面从 URL 参数中读取。当前登录协议已知的接入控制器 IP 为 `172.18.255.6`。 |
-| `wlan_ac_name` | `term.wlanacname` | 是 | 页面从 URL 参数中读取。当前登录协议已知的接入控制器名称为 `NAS`。 |
-| `jsVersion` | `3.3.3` | 是 | 当前页面脚本版本。 |
-| `v` | 随机数 | 是 | 页面每次生成 `500` 至 `10499` 之间的随机值，用于避免缓存。 |
+## 客户端调用约定
 
-`user_account=drcom` 和 `user_password=123` 是注销脚本内部写死的协议占位值，不能与登录时使用的真实学号和密码混淆。
-
-### 请求示例
-
-以下示例只展示拼接方式，所有尖括号内容都需要替换：
-
-```text
-http://172.18.254.6:801/eportal/?c=Portal&a=logout&callback=dr1001&login_method=1&user_account=drcom&user_password=123&ac_logout=0&register_mode=1&wlan_user_ip=10.0.0.100&wlan_user_ipv6=&wlan_vlan_id=1&wlan_user_mac=001122334455&wlan_ac_ip=172.18.255.6&wlan_ac_name=NAS&jsVersion=3.3.3&v=1234
-```
-
-## 3. 成功响应判断
-
-页面脚本使用 JSONP 接收响应，并认为以下结果表示注销成功：
-
-```text
-json.result == 1
-json.result == "ok"
-```
-
-其他结果会被页面视为注销失败。该判断来自页面脚本，尚未通过真实注销请求验证，也不代表已经掌握完整的错误码列表。
-
-## 4. 兼容或旧式注销路径
-
-页面内联配置还提供了以下 Dr.COM 客户端元数据：
-
-```text
-authlogoutport=80
-authlogoutpath='/eportal/?c=ACSetting&a=Logout&ver=1.0'
-```
-
-但当前“注销”按钮的逻辑没有使用这条路径。按当前脚本分支，实际调用的是：
-
-```text
-/eportal/?c=Portal&a=logout
-```
-
-脚本还存在一个非 Portal 协议的回退分支：
-
-```text
-http://172.18.254.6/drcom/logout
-```
-
-该分支仅在 `page.loginMethod == 0` 时使用。当前 Portal 协议配置为 `1`，因此不属于当前页面的主路径。
-
-## 5. 实现注销时的要求
-
-1. 注销必须有明确的用户操作触发，不能在程序启动或网络恢复时自动执行。
-2. 发起注销前必须确认 `wlan_user_ip` 有效，不能使用空值或 `000.000.000.000`。
-3. 应优先复用登录流程已经取得的 VLAN、MAC、接入控制器 IP 和接入控制器名称。
-4. `wlan_ac_ip` 和 `wlan_ac_name` 在注销脚本中来自页面上下文，不保证始终有值；当前登录协议中已知值为 `172.18.255.6` 和 `NAS`。
-5. 所有参数都应进行 URL 编码，`callback`、`v` 可以按页面逻辑动态生成。
-6. 网页自身会先显示确认框。CLI 按当前产品要求以显式 `logout` 命令作为用户操作意图，不再添加二次确认；同时协调 daemon 暂停当前连接期间的自动登录，防止立即重新登录。
-7. 页面脚本无论成功或失败都会修改界面状态，因此真实请求应避免重复并发发送。
-
-CLI 的 `logout --forget` 是本地完全登出选项，不向门户增加额外参数。它会停止所选范围的后台进程，并删除对应的用户密钥库条目或机器凭据。离开 `Student_CX` 时跳过门户注销；门户失败或 Wi-Fi 状态无法确认时仍尝试删除本地凭据，但会明确返回未完成的错误。此选项不会在失败后恢复自动登录，也不会把“凭据已删除”当作远端会话已注销的证明。
-
-## 6. 尚未确认的事项
-
-- 注销接口接受的最小参数集合；
-- `wlan_ac_ip`、`wlan_ac_name` 为空时是否仍能成功注销；
-- 真实成功和失败响应的完整示例；
-- 是否需要 Cookie、会话或特定请求头；
-- 注销后当前设备 IP 和页面状态如何变化；
-- 多次注销、会话过期和接口超时的处理方式。
-
-在完成受控验证前，实现应把此处内容视为当前门户页面所展示的已知协议，而不是完整的通用 ePortal 注销规范。
-
-## 7. 相关文档
-
-- 设备 IP、接入信息及认证状态：[Dr.COM 校园网状态查询协议](./eportal-status.md)
-- [ePortal 校园网登录协议](./eportal-login.md)
+CLI 的 `logout` 暂停当前连接的后台自动认证。初次查询已确认离线时，命令直接完成。若门户接受注销但复查未能确认离线，命令报告下线未确认，后台保持暂停。`logout --forget` 另外停止相应作用域的后台进程并删除本地保存的凭据。远端注销失败时，`--forget` 仍尝试本地清理，并报告远端操作失败。[登录接口](./eportal-login.md)、[客户端实现](../crates/wlan-api/src/client.rs)

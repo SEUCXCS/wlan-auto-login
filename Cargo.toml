@@ -10,6 +10,7 @@ license = "MIT"
 
 [workspace.dependencies]
 wlanlogin-lib = { path = "crates/wlan-api" }
+base64 = "0.22"
 reqwest = { version = "0.13", default-features = false, features = ["query"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

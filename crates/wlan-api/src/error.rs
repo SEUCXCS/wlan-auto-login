@@ -29,6 +29,11 @@ pub enum Error {
     Protocol(&'static str),
     #[error("门户响应中没有有效的设备 IPv4 地址")]
     MissingIp,
+    #[error("门户已接受注销，但无法确认设备离线")]
+    LogoutUnconfirmed {
+        #[source]
+        source: Option<Box<Error>>,
+    },
     #[error("账号或密码不能为空")]
     EmptyCredentials,
     #[error("门户拒绝操作: {message}")]
@@ -68,7 +73,7 @@ impl Error {
 
 impl From<reqwest::Error> for Error {
     fn from(error: reqwest::Error) -> Self {
-        // Request URLs contain the password for this legacy GET protocol.
+        // Portal login URLs contain credentials.
         Self::Transport(error.without_url())
     }
 }

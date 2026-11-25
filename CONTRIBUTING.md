@@ -105,6 +105,8 @@ Windows 安装器由 `cargo xtask bundle windows` 构建，使用固定版本 Wi
 
 新增 daemon 行为先明确 `policy.rs` 中的状态转换，再接入单次检查或调度循环。保留持久化停止监听器、请求超时和单个后台凭据任务；Linux D-Bus 事件流必须持续排空。`AuthState::Unknown` 不得触发自动登录，手动登录只恢复相同作用域的 daemon。
 
+门户登录协议由 `wlan-api` 维护。`PortalConfig` 分别配置状态、页面配置、登录和注销地址。页面和方案索引随登录现场请求获取。调整协议时同步更新脱敏的 loopback fixtures 和[登录协议](docs/eportal-login.md)，测试中分别覆盖无凭据的配置请求和凭据提交。
+
 ### 平台适配
 
 先在 `system/define/` 定义必要契约，再在平台目录实现。服务模板、管理器命令及状态解析分别归 `definition.rs`、`manager.rs`；共享安装器负责备份、回滚和停止后的清理顺序。构造服务计划与命令应能在不调用真实服务管理器的情况下测试。
