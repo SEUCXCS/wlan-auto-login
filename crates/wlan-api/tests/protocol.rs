@@ -174,7 +174,7 @@ fn query(request: &str) -> std::collections::HashMap<String, String> {
 
 #[tokio::test]
 async fn login_encodes_credentials_and_uses_fresh_device_ip() -> TestResult {
-    let (client, task) = server(vec![OFFLINE, PAGE_CONFIG, r#"dr1({"result":1});"#]).await?;
+    let (client, task) = server(vec![OFFLINE, PAGE_CONFIG, r#"dr0001({"result":1});"#]).await?;
     assert_eq!(
         client
             .login(
@@ -193,6 +193,7 @@ async fn login_encodes_credentials_and_uses_fresh_device_ip() -> TestResult {
     let config = query(&requests[1]);
     assert_eq!(BASE64.decode(&config["wlan_user_ip"])?, b"10.0.0.12");
     assert_eq!(config["wlan_vlan_id"], "0");
+    assert_eq!(config["callback"], "dr1");
     assert_eq!(config["program_index"], "");
     assert_eq!(config["page_index"], "");
     assert_eq!(config["jsVersion"], "4.X");
@@ -491,7 +492,7 @@ async fn logout_loads_the_online_page_and_confirms_the_same_device_is_offline() 
         let (client, task) = server(vec![
             status,
             page_response,
-            r#"dr1({"result":1,"msg":"Radius注销成功！"});"#,
+            r#"dr0001({"result":1,"msg":"Radius注销成功！"});"#,
             OFFLINE,
         ])
         .await?;

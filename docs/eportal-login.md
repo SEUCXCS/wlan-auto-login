@@ -7,6 +7,8 @@
 
 两者使用 URL 查询参数和 JSONP 响应。浏览器从当前门户会话发送 `PHPSESSID` 和首页 Referer。服务端对这些请求头及各查询参数的最小要求尚未确定。
 
+客户端发送 `callback=dr1`。新版门户可以将回调名补零为 `dr0001`，客户端在登录和页面配置接口上识别 `dr1` 与 `dr0001` 两种回调名。
+
 ## 页面配置
 
 页面配置返回门户方案、页面索引和认证选项。先取得当前设备的 IPv4，再用终端接入信息加载配置。登录、注销和 `online_list` 请求使用返回的索引。[设备状态查询](./eportal-status.md)
@@ -25,7 +27,7 @@
 | `v`、`lang` | 防缓存值、`zh` |
 
 ```http
-GET http://172.18.254.6:803/eportal/portal/page/loadConfig?callback=dr1001&program_index=&page_index=&wlan_vlan_id=0&wlan_user_ip=MTAuMC4wLjEwMA%3D%3D&wlan_user_ipv6=&wlan_user_ssid=&wlan_user_areaid=&wlan_ac_ip=&wlan_ap_mac=000000000000&gw_id=000000000000&jsVersion=4.X&v=1234&lang=zh
+GET http://172.18.254.6:803/eportal/portal/page/loadConfig?callback=dr1&program_index=&page_index=&wlan_vlan_id=0&wlan_user_ip=MTAuMC4wLjEwMA%3D%3D&wlan_user_ipv6=&wlan_user_ssid=&wlan_user_areaid=&wlan_ac_ip=&wlan_ap_mac=000000000000&gw_id=000000000000&jsVersion=4.X&v=1234&lang=zh
 ```
 
 ### 响应字段
@@ -45,7 +47,7 @@ GET http://172.18.254.6:803/eportal/portal/page/loadConfig?callback=dr1001&progr
 成功响应示例省略了与账号认证无关的页面配置。
 
 ```javascript
-dr1001({
+dr0001({
   "code": 1,
   "data": {
     "program_index": "example-program",
