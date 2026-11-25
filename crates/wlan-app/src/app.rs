@@ -93,6 +93,26 @@ mod tests {
     }
 
     #[test]
+    fn config_commands_use_the_selected_scope() {
+        use super::cli::config::ConfigCommand;
+
+        assert!(matches!(
+            Cli::try_parse_from(["app", "--user", "config", "set", "log.level", "debug"]),
+            Ok(Cli { user: true, command: Command::Config(ConfigCommand::Set { name, value }), .. })
+                if name == "log.level" && value == "debug"
+        ));
+        for scope in ["--user", "--system"] {
+            for command in ["get", "remove"] {
+                assert!(
+                    Cli::try_parse_from(["app", scope, "config", command, "log.level"]).is_ok()
+                );
+            }
+            assert!(Cli::try_parse_from(["app", "config", "list", scope]).is_ok());
+        }
+        assert!(Cli::try_parse_from(["app", "config", "set", "log.level"]).is_err());
+    }
+
+    #[test]
     fn public_help_exposes_service_and_hides_process_entries() {
         let mut command = Cli::command();
         let help = command.render_help().to_string();

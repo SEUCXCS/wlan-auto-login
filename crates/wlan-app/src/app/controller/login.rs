@@ -220,7 +220,8 @@ mod tests {
         let base = format!("http://{}", listener.local_addr()?);
         let client = Client::new(PortalConfig {
             status_url: format!("{base}/status"),
-            action_url: format!("{base}/action"),
+            page_config_url: format!("{base}/page/loadConfig"),
+            login_url: format!("{base}/login"),
             timeout: Duration::from_secs(1),
             ..PortalConfig::default()
         })?;
@@ -371,10 +372,19 @@ mod tests {
             };
             let serve = async {
                 let status = reply(&listener, r#"dr1({"v46ip":"10.0.0.12","online":0});"#).await?;
+                let page = reply(
+                    &listener,
+                    include_str!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../wlan-api/tests/fixtures/login-page-config.jsonp"
+                    )),
+                )
+                .await?;
                 let login = reply(&listener, r#"dr1({"result":1});"#).await?;
                 assert!(status.starts_with("GET /status?"));
-                assert!(login.starts_with("GET /action?"));
-                assert!(login.contains("&a=login&"));
+                assert!(page.starts_with("GET /page/loadConfig?"));
+                assert!(login.starts_with("GET /login?"));
+                assert!(login.contains("&operate=portal_login&"));
                 Ok::<_, crate::infra::error::Error>(())
             };
             let (result, served) = tokio::join!(

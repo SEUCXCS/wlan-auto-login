@@ -1,160 +1,136 @@
-# ePortal 校园网登录协议
+# ePortal 校园网登录接口
 
-本文记录 WLAN 自动登录功能依赖的基础请求结构，后续实现、测试和排障均应以这里整理的内容为基准。
+| 接口 | 方法 | 地址 |
+| --- | --- | --- |
+| 页面配置 | GET | `http://172.18.254.6:803/eportal/portal/page/loadConfig` |
+| 账号登录 | GET | `http://172.18.254.6:803/eportal/portal/login` |
 
-> 当前仅根据已知请求结构整理协议，未实际调用登录接口，也未验证响应字段、返回码及异常场景。本文中的“已确认”仅表示该值或行为已由现有请求结构证明，不代表所有环境永久不变。
+两项接口均使用 URL 查询参数并返回 JSONP。浏览器请求还会附带 `PHPSESSID` Cookie 与门户首页 Referer，服务端是否强制校验待确认。
 
-## 1. 涉及的服务地址
+客户端固定发送 `callback=dr1`。新版门户可能将回调名补零返回为 `dr0001`，客户端同时兼容 `dr1` 与 `dr0001`。
 
-| 用途 | 地址 |
+## 页面配置（`loadConfig`）
+
+登录前先通过[状态查询接口](./eportal-status.md)获取本机 IPv4，再调用此接口获取门户的 `program_index`、`page_index` 及认证配置。后续登录、注销与 `online_list` 请求均依赖这两项索引。
+
+### 请求参数
+
+| 参数 | 说明 |
 | --- | --- |
-| ePortal 登录接口 | `http://172.18.254.6:801/eportal/` |
-| 当前设备状态查询接口 | `http://172.18.254.6/drcom/chkstatus` |
-
-登录请求中的接入控制器信息是：
-
-| 参数 | 值 |
-| --- | --- |
-| `wlan_ac_ip` | `172.18.255.6` |
-| `wlan_ac_name` | `NAS` |
-
-## 2. 登录流程
-
-自动登录至少需要两个步骤：
-
-1. 请求状态查询接口，获取当前设备的校园网 IP。
-2. 将该 IP 作为 `wlan_user_ip`，连同学号和密码请求 ePortal 登录接口。
-
-```text
-查询当前设备状态
-        |
-        v
-解析 wlan_user_ip
-        |
-        v
-构造 ePortal 登录请求
-        |
-        v
-提交登录
-```
-
-## 3. 查询当前设备 IP
-
-### 请求
+| `program_index`、`page_index` | 首次加载传空 |
+| `wlan_vlan_id` | VLAN 标识，取自状态查询 |
+| `wlan_user_ip`、`wlan_user_ipv6`、`wlan_ac_ip` | 先经标准 Base64 编码，再做 URL 编码；缺失的 IPv6 与 AC IP 传空 |
+| `wlan_user_ssid`、`wlan_user_areaid` | SSID 与区域标识，缺失传空 |
+| `wlan_ap_mac`、`gw_id` | AP MAC 与网关标识，缺失传 `000000000000` |
+| `callback` | JSONP 回调名，客户端使用 `dr1` |
+| `jsVersion` | 页面配置使用 `4.X`（登录接口使用 `4.5.1`） |
+| `v`、`lang` | 防缓存随机数、`zh` |
 
 ```http
-GET http://172.18.254.6/drcom/chkstatus?callback=dr1&v=1234
+GET http://172.18.254.6:803/eportal/portal/page/loadConfig?callback=dr1&program_index=&page_index=&wlan_vlan_id=0&wlan_user_ip=MTAuMC4wLjEwMA%3D%3D&wlan_user_ipv6=&wlan_user_ssid=&wlan_user_areaid=&wlan_ac_ip=&wlan_ap_mac=000000000000&gw_id=000000000000&jsVersion=4.X&v=1234&lang=zh
 ```
 
-| 参数 | 是否必需 | 说明 |
+### 响应字段
+
+| 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `callback` | 是 | 使用 `dr1`，表明接口采用 JSONP 风格的回调包装。 |
-| `v` | 是 | 已知请求示例使用 `1234`；当前客户端使用 Unix 毫秒时间戳。 |
+| `code` | 整数 | `1` 表示成功，`0` 表示失败 |
+| `msg` | 字符串 | 门户提示信息 |
+| `data.program_index`、`data.page_index` | 字符串 | 方案索引、页面索引 |
+| `data.login_method` | 整数 | 认证方式，本校 Portal 账号认证为 `1` |
+| `data.account_prefix` | 字符串 | 账号前缀开关，本校启用 `,0,` 前缀 |
+| `data.check_online_method` | 字符串 | 在线状态查询方式，为 `1` 时浏览器调用 `online_list` |
+| `data.ac_logout`、`data.register_mode` | 字符串 | 注销方式与后台类型，本校均为 `1` |
+| `data.enable_r3` | 整数 | PPPoE 代拨开关，缺失时默认 `0` |
+| `data.rcn` | 字符串 | 页面随机数，缺失时默认空字符串 |
 
-### 用途
+响应示例（仅列出认证相关字段）：
 
-从响应中取得当前设备的校园网 IP，并写入后续登录请求的 `wlan_user_ip` 参数。当前客户端识别的 IP 字段、认证状态、响应示例及后台检查行为见 [Dr.COM 校园网状态查询协议](./eportal-status.md)。该文档区分客户端兼容规则与尚待确认的服务端行为。
+```javascript
+dr0001({
+  "code": 1,
+  "data": {
+    "program_index": "example-program",
+    "page_index": "example-page",
+    "login_method": 1,
+    "account_prefix": "1",
+    "check_online_method": "1",
+    "ac_logout": "1",
+    "register_mode": "1"
+  }
+})
+```
 
-## 4. ePortal 登录请求
+`Client::login()` 每次提交认证前都会重新加载页面配置；配置请求失败、返回 `code=0` 或缺少索引时直接终止登录。
 
-### 请求结构
+## 账号登录（`login`）
 
-以下 URL 中的尖括号部分需要替换为真实值：
+### 请求参数
+
+| 参数 | 说明 |
+| --- | --- |
+| `login_method`、`business_type` | `1`、`1`（Portal 账号认证） |
+| `operate`、`is_base64encode` | `portal_login`、`1` |
+| `user_account` | 按下文格式构造后，对 UTF-8 字节做标准 Base64 编码 |
+| `user_password` | 对密码 UTF-8 字节做标准 Base64 编码 |
+| `wlan_user_ip`、`wlan_user_ipv6` | 终端地址明文，IPv6 缺失传空 |
+| `wlan_user_mac`、`wlan_vlan_id` | MAC 去除分隔符（缺失传 `000000000000`）；VLAN 取自状态查询 |
+| `wlan_ac_ip`、`wlan_ac_name` | 接入控制器 IP 与名称，缺失传空 |
+| `program_index`、`page_index` | `loadConfig` 返回的索引 |
+| `terminal_type`、`mac_type` | 桌面端固定 `1`、`0` |
+| `user_agent` | 浏览器传自身 User-Agent，客户端传 `wlanlogin/<版本>` |
+| `enable_r3`、`rcn` | 取自页面配置 |
+| `authex_enable`、`uuid` | 传空 |
+| `callback`、`jsVersion`、`v` | JSONP 回调名、`4.5.1`、防缓存随机数 |
+| `lang` | 与浏览器保持一致，依次传递两个同名参数 `zh-cn` 与 `zh` |
+
+全部查询参数（包括 Base64 填充符 `=`）均需 URL 编码：
 
 ```http
-GET http://172.18.254.6:801/eportal/?c=Portal&a=login&callback=dr1&login_method=1&user_account=<学号><账号后缀>&user_password=<密码>&wlan_user_ip=<当前设备校园网IP>&wlan_user_ipv6=&wlan_user_mac=&wlan_ac_ip=172.18.255.6&wlan_ac_name=NAS&jsVersion=3.3.3&v=1234
+GET http://172.18.254.6:803/eportal/portal/login?callback=dr1&login_method=1&is_base64encode=1&user_account=LDAsMjAyNjAwMDAwMEBkaWFueGlu&user_password=ZXhhbXBsZS1wYXNzd29yZA%3D%3D&wlan_user_ip=10.0.0.100&wlan_user_ipv6=&wlan_user_mac=000000000000&wlan_vlan_id=0&wlan_ac_ip=&wlan_ac_name=&authex_enable=&jsVersion=4.5.1&uuid=&terminal_type=1&lang=zh-cn&user_agent=wlanlogin%2F0.1.1&enable_r3=0&mac_type=0&rcn=&operate=portal_login&business_type=1&program_index=example-program&page_index=example-page&v=1234&lang=zh
 ```
 
-### 登录参数
+### 账号格式与线路
 
-| 参数 | 示例值 | 是否必需 | 说明 |
-| --- | --- | --- | --- |
-| `c` | `Portal` | 是 | 固定值。 |
-| `a` | `login` | 是 | 固定值，表示登录操作。 |
-| `callback` | `dr1` | 是 | 固定值，与状态查询接口一致。 |
-| `login_method` | `1` | 是 | 固定值。 |
-| `user_account` | `<学号><账号后缀>` | 是 | 由学号和所选服务类型的后缀组成，见下表。 |
-| `user_password` | `<密码>` | 是 | 用户的校园网密码。 |
-| `wlan_user_ip` | `<当前设备校园网IP>` | 是 | 使用状态查询接口取得的 IP。 |
-| `wlan_user_ipv6` | 空 | 是 | 当前请求中保留为空。 |
-| `wlan_user_mac` | 空 | 是 | 当前请求中允许为空。 |
-| `wlan_ac_ip` | `172.18.255.6` | 是 | 固定接入控制器 IP。 |
-| `wlan_ac_name` | `NAS` | 是 | 固定接入控制器名称。 |
-| `jsVersion` | `3.3.3` | 是 | 当前接口版本标识。 |
-| `v` | `1234` | 是 | 当前请求结构中使用的版本或缓存参数。 |
+默认拼接格式为 `,0,<学号><线路后缀>`；仅当页面配置明确返回 `account_prefix=0` 时省略 `,0,` 前缀。
 
-### 账号类型与后缀
-
-三种服务使用同一个登录接口，仅在 `user_account` 后缀上不同：
-
-| 服务类型 | `user_account` 格式 | 示例（学号 `2026000000`） |
-| --- | --- | --- |
-| 临时免费 1 | `<学号>@dianxin` | `2026000000@dianxin` |
-| 内网 | `<学号>@xyw` | `2026000000@xyw` |
-| 免费 2 | `<学号>@free` | `2026000000@free` |
-
-URL 编码时，`@` 可以写为 `%40`，例如 `2026000000%40dianxin`。
-
-### 参数替换示例（临时免费 1）
-
-假设：
-
-- 学号为 `2026000000`
-- 密码为 `example-password`
-- 状态查询得到的校园网 IP 为 `10.0.0.100`
-
-则逻辑上的登录地址为：
-
-```text
-http://172.18.254.6:801/eportal/?c=Portal&a=login&callback=dr1&login_method=1&user_account=2026000000%40dianxin&user_password=example-password&wlan_user_ip=10.0.0.100&wlan_user_ipv6=&wlan_user_mac=&wlan_ac_ip=172.18.255.6&wlan_ac_name=NAS&jsVersion=3.3.3&v=1234
-```
-
-以上只是参数替换示意，不是可复用的真实凭据，也不应在项目仓库中保存真实密码。
-
-## 5. 构造请求时的要求
-
-1. 先执行状态查询，再执行登录，不建议直接猜测或复用其他设备的 `wlan_user_ip`。
-2. 所有查询参数都应进行 URL 编码，尤其是密码内的 `@`、`&`、`=`、`+` 等字符。
-3. `user_account` 必须根据所选服务类型选择 `@dianxin`、`@xyw` 或 `@free`；其中的 `@` 编码为 `%40` 更稳妥，服务端通常也能接受未编码形式。
-4. `wlan_user_ipv6` 和 `wlan_user_mac` 在当前已知请求中留空即可。
-5. 学号、密码等敏感信息必须来自本地配置、环境变量或安全凭据存储，不能写入仓库。
-6. 实现层应统一维护主机、接入控制器和固定参数，避免在多个位置重复拼接请求。
-
-## 6. 当前客户端的在线与拒绝处理
-
-2026-09-23 只读查询状态并核对门户 `a41.js` / `a42.js` 后，客户端按以下规则处理：
-
-- `chkstatus.result=1` 表示当前设备已在线。`Client::login()` 返回 `LoginOutcome::AlreadyOnline`，不提交登录；CLI 明确说明本次提供的凭据和线路没有在线验证。要切换当前会话的账号或线路，应先显式注销。
-- 发送登录请求并收到成功结果时，返回 `LoginOutcome::Authenticated`。
-- `result` 为失败且缺少文字说明时，仍读取 `ret_code`，同时保留失败阶段和数值码；`ret_code=2` 本身不会被当作本次凭据验证成功。
-
-| `ret_code` | 门户脚本定义 |
+| 线路 | 后缀 |
 | --- | --- |
-| `1` | 账号或密码不正确；后台暂停自动重试 |
-| `2` | 终端 IP 已经在线 |
+| 临时免费 1（`free1`） | `@dianxin` |
+| 免费 2（`free2`） | `@free` |
+| 内网（`campus`） | `@xyw` |
+
+> [!NOTE]
+> Base64 可直接还原原文，分享日志或抓包样本前需脱敏 `user_account`、`user_password` 与会话 Cookie。
+
+### 响应字段
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `result` | 整数 | `1` 表示成功（客户端兼容 `"1"` 与 `"ok"`），`0` 表示失败 |
+| `msg` | 字符串 | 门户提示信息 |
+| `ret_code` | 整数 | 失败时附带的错误码 |
+
+```javascript
+dr1({"result":1,"msg":"Portal协议认证成功！"})
+dr1({"result":0,"msg":"终端IP已在线！","ret_code":2})
+dr1({"result":0,"msg":"Portal协议认证超时！","ret_code":8})
+```
+
+认证超时后应先查询 `chkstatus` 确认终端状态，再决定是否重试。错误码定义如下（来源于门户前端脚本，新版已实测确认 `2` 与 `8`）：
+
+| `ret_code` | 含义 |
+| --- | --- |
+| `1` | 账号或密码错误 |
+| `2` | 终端 IP 已在线 |
 | `3` | 系统繁忙 |
 | `4` | 未知错误 |
-| `5` / `6` | REQ_CHALLENGE 失败 / 超时 |
-| `7` / `8` | Radius 认证失败 / 超时 |
-| `9` / `10` | Radius 下线失败 / 超时 |
+| `5` / `6` | `REQ_CHALLENGE` 失败 / 超时 |
+| `7` / `8` | 认证失败 / 超时 |
+| `9` / `10` | RADIUS 下线失败 / 超时 |
 | `11` | 其他错误 |
 | `998` | Portal 协议参数不完整 |
 
-这些返回码来自门户静态脚本，不是通过真实登录失败试验获得的。未知错误码会保留数值供排障，错误消息中的账号、密码和终端控制字符仍会清理。
+## 客户端流程
 
-## 7. 尚未确认的事项
-
-以下内容需要在后续实现阶段通过安全、受控的真实请求补充：
-
-- 不同线路和离线时的完整状态响应（已记录一次脱敏在线响应）；
-- 登录成功与失败时的响应结构和状态码；
-- 是否需要 Cookie、会话或额外请求头；
-- 密码或账号的额外加密逻辑是否存在；
-- IP 变化、重复登录、错误密码和接口超时的处理方式。
-
-在以上内容得到验证前，实现应把接口视为当前网络环境下的已知协议，而不是完整的通用 ePortal 规范。
-
-## 8. 相关文档
-
-- 状态查询、认证判断及重试说明：[Dr.COM 校园网状态查询协议](./eportal-status.md)
-- 注销接口及参数说明：[ePortal 校园网注销协议](./eportal-logout.md)
+`Client::login()` 先查询 `chkstatus`：终端已在线时直接返回 `AlreadyOnline`，仅在确认离线时加载配置并提交认证。切换线路前需先调用[注销接口](./eportal-logout.md)，待 `chkstatus` 确认离线后再发起登录。

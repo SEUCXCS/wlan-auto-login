@@ -76,11 +76,11 @@ pub enum Message {
     )]
     LocationAuthorizationTimedOut,
     #[error(
-        "Wi-Fi authorization host could not become active; retry from the logged-in user's foreground session"
+        "Could not show the macOS Location permission dialog because the Wi-Fi helper could not come to the foreground"
     )]
     LocationActivationFailed,
     #[error(
-        "Wi-Fi authorization host did not become active before the deadline; no permission request was sent"
+        "Could not show the macOS Location permission dialog before the Wi-Fi helper's activation timed out"
     )]
     LocationActivationTimedOut,
     #[error(
@@ -117,8 +117,14 @@ pub enum Message {
     BundleMemberNotUtf8,
     #[error("Bundle executable is missing")]
     BundleExecutableMissing,
-    #[error("Service registration succeeded but the managed application did not become ready")]
-    ManagedAppNotReady,
+    #[error("The macOS background service did not become ready (launchd state: {state}{detail})")]
+    ManagedAppNotReady { state: String, detail: String },
+    #[error("Waiting for macOS to retry the background service with an updated launch constraint")]
+    WaitingForLaunchConstraintRepair,
+    #[error(
+        "Registering the background service again after macOS could not update the loaded job's launch constraint"
+    )]
+    ReregisteringAfterLaunchConstraintRepair,
     #[error("Timed out authorizing installed Keychain identity")]
     KeychainAuthorizationTimedOut,
     #[error("Installed application cannot read its saved credentials silently")]
@@ -271,6 +277,16 @@ pub enum Message {
     InvalidConnectionPreferences,
     #[error("Failed to read connection preferences")]
     FailedToReadConnectionPreferences,
+    #[error("Invalid application configuration")]
+    InvalidApplicationConfig,
+    #[error("Failed to read application configuration")]
+    FailedToReadApplicationConfig,
+    #[error("Unknown configuration key. Supported key: log.level")]
+    UnknownConfigKey,
+    #[error("log.level must be info or debug")]
+    InvalidLogLevel,
+    #[error("Log path must be a regular file")]
+    InvalidLogPath,
     #[error("File has no parent directory")]
     FileHasNoParentDirectory,
     #[error("Cleanup path has no parent directory")]
@@ -371,6 +387,8 @@ pub enum Message {
     LastTaskResultValue { value: String },
     #[error("Last exit code: {value}")]
     LastExitCodeValue { value: String },
+    #[error("Last exit reason: {value}")]
+    LastExitReasonValue { value: String },
     #[error("Last result: {value}")]
     LastResultValue { value: String },
     #[error("Refusing to remove an autostart link owned by another service: {value0}")]

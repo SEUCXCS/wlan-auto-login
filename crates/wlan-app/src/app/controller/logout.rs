@@ -100,11 +100,20 @@ async fn run_with(
             Message::LocalCredentialsClearedAndAutomaticLoginStopped
         );
     } else {
-        if let Err(error) = logout.await {
+        let result = logout.await;
+        // Once the portal acknowledges logout, a failed status check must not
+        // cause the daemon to authenticate again.
+        if let Err(error) = &result
+            && !matches!(
+                error.downcast_ref::<wlanlogin_lib::Error>(),
+                Some(wlanlogin_lib::Error::LogoutUnconfirmed { .. })
+            )
+        {
             previous.save(paths)?;
-            return Err(error);
+        } else {
+            control::wake(paths).await;
         }
-        control::wake(paths).await;
+        result?;
         tracing::info!("{}", Message::LoggedOut);
     }
     Ok(())
@@ -192,6 +201,24 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn acknowledged_logout_keeps_automatic_login_paused_if_status_is_unconfirmed()
+    -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::test(dir.path());
+        let result = run_with(
+            &paths,
+            false,
+            async { Err(wlanlogin_lib::Error::LogoutUnconfirmed { source: None }.into()) },
+            async { panic!("ordinary logout must not delete credentials") },
+            async { panic!("ordinary logout must not stop the daemon") },
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(control::State::load(&paths)?.paused);
+        Ok(())
+    }
+
     struct OfflineWifi;
     impl WifiConnection for OfflineWifi {
         async fn target_session(&self) -> Result<Option<String>> {
@@ -205,7 +232,8 @@ mod tests {
         let base = format!("http://{}", listener.local_addr()?);
         let client = Client::new(wlanlogin_lib::PortalConfig {
             status_url: format!("{base}/status"),
-            action_url: format!("{base}/action"),
+            page_config_url: format!("{base}/page/loadConfig"),
+            logout_url: format!("{base}/logout"),
             ..Default::default()
         })?;
         let dir = tempfile::tempdir()?;

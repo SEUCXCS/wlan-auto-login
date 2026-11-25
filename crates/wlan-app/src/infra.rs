@@ -39,14 +39,6 @@ pub(crate) mod filesystem;
 #[path = "system/windows/runtime/infra/filesystem.rs"]
 pub(crate) mod filesystem;
 pub(crate) mod identity;
-#[cfg(target_os = "linux")]
-#[path = "system/linux/runtime/infra/logging.rs"]
-pub(crate) mod logging;
-#[cfg(target_os = "macos")]
-#[path = "system/macos/runtime/infra/logging.rs"]
-pub(crate) mod logging;
-#[cfg(target_os = "windows")]
-#[path = "system/windows/runtime/infra/logging.rs"]
 pub(crate) mod logging;
 #[cfg(target_os = "linux")]
 #[path = "system/linux/runtime/infra/paths.rs"]
@@ -130,6 +122,7 @@ mod tests {
         use crate::infra::{
             error::{Message, Result},
             logging::Format,
+            scope::Scope,
         };
         use std::{
             io::Write,
@@ -158,7 +151,9 @@ mod tests {
             let subscriber = tracing_subscriber::fmt()
                 .with_ansi(false)
                 .with_writer(move || writer.clone())
-                .event_format(Format)
+                .event_format(Format {
+                    scope: Some(Scope::User),
+                })
                 .finish();
             let error = crate::infra::error::Error::from(wlanlogin_lib::Error::Rejected {
                 message: "password=never-log-this\nforged log entry".into(),
@@ -177,6 +172,7 @@ mod tests {
             assert_eq!(&output[10..11], "T");
             assert_eq!(&output[19..20], "Z");
             assert!(output.contains("WARN  wlan::daemon:"));
+            assert!(output.contains("scope=\"user\""));
             assert!(output.contains("retry_after_secs=30"));
             assert!(output.contains("Credentials rejected"));
             assert!(!output.contains("never-log-this"));

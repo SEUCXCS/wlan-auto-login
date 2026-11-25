@@ -1,187 +1,188 @@
 # 贡献指南
 
-感谢参与 WLAN Auto Login 的维护。提交问题时请说明操作系统、程序版本、安装范围、复现步骤和预期行为；日志和协议样本请先去除账号、密码、令牌及其他个人信息。
+感谢参与 WLAN Auto Login 的开发与维护。提交 Issue 时请提供操作系统、程序版本、安装作用域、复现步骤与预期行为，并对日志及抓包样本中的账号、密码、Cookie 与令牌脱敏。
 
-## 开发环境
+## 1. 开发环境与仓库结构
 
-项目使用 Cargo workspace、Rust 2024 edition 和 resolver 3：
+项目使用 Rust 2024 edition Cargo workspace（resolver 3），并提交应用依赖的 `Cargo.lock`。仓库未固定 `rust-toolchain.toml` 或 MSRV；验证与构建统一使用 `--locked`。
 
 | 目录 | Cargo 包名 | 职责 |
 | --- | --- | --- |
-| `crates/wlan-api` | `wlanlogin-lib` | 门户请求、JSONP 解析、认证状态和协议错误 |
-| `crates/wlan-app` | `wlanlogin-cli` | CLI / TUI、业务操作、daemon 与操作系统集成 |
-| `xtask` | `xtask` | macOS 应用和 Windows 安装器打包 |
-| `packaging/windows` | `wlanlogin-installer` | 独立构建的 Windows 向导和 MSI 动作 |
-| `docs` | — | 登录、注销、状态查询的协议依据 |
+| `crates/wlan-api` | `wlanlogin-lib` | 校园网门户协议、JSONP 解析、认证状态与 HTTP 诊断 |
+| `crates/wlan-app` | `wlanlogin-cli` | CLI / TUI、业务控制、后台守护与操作系统集成 |
+| `xtask` | `xtask` | macOS / Windows 打包与平台源码边界检查 |
+| `packaging/windows` | `wlanlogin-installer` | 独立 workspace 的 Windows 安装向导与 MSI 自定义动作 |
+| `docs` | — | 门户协议说明与研究记录 |
 
-安装 Rust、Cargo、rustfmt 和 Clippy，并提交应用依赖的 `Cargo.lock`。仓库没有 `rust-toolchain.toml`，也没有声明 MSRV；此前架构重构使用 Rust/Cargo `1.100.0-nightly` 验证，这不是强制 nightly 的声明。若要建立稳定工具链或最低版本要求，需要单独验证整个依赖树并更新文档。
+原生构建依赖：
 
-Linux 需要 C 工具链、`pkg-config`、D-Bus 开发库，测试还需要 `dbus-daemon` 及常见 POSIX 工具。Debian / Ubuntu 可安装 `build-essential pkg-config libdbus-1-dev dbus-daemon`。macOS 使用 Xcode Command Line Tools；Windows 使用与 Rust target 对应的 MSVC 或 GNU 构建工具。
+- **通用**：Rust、Cargo、`rustfmt`、`clippy`、Git。
+- **Linux**：C 工具链、`pkg-config`、D-Bus 开发库、`dbus-daemon` 及标准 POSIX 工具（Debian/Ubuntu：`build-essential pkg-config libdbus-1-dev dbus-daemon`）。
+- **macOS**：Xcode Command Line Tools。
+- **Windows**：与目标架构对应的 MSVC 或 GNU 构建工具；打包安装向导另需 .NET 8 SDK 与 WiX 6.0.2（含 `WixToolset.UI.wixext/6.0.2`）。
 
-## 模块职责
+## 2. 架构与模块职责
 
-`xtask/` 按命令、平台和平台步骤组织，当前提供 `cargo xtask bundle macos`。`main.rs` 只解析参数并调用命令入口，`cli.rs` 声明顶层命令及可复用的构建参数，`cli/bundle.rs` 声明平台子命令；`--profile`、`--target`、`--target-dir` 放在平台子命令之后，`--codesign-identity` 只属于 macOS。普通编译使用 Cargo。
+### 2.1 应用标识与路径约定
 
-| 路径（相对 `xtask/src`） | 维护范围 |
+- `APP_NAME` 为 `wlanlogin`（命令名、二进制名、目录名与日志 target 前缀）；`DISPLAY_NAME` 为 `CXCS WLAN Login`（macOS bundle 显示名、Windows 服务/任务描述、Linux systemd 描述）；环境变量前缀为 `WLANLOGIN_`。
+- 应用 ID 固定为 `dev.cxcs.tools.wlanlogin`，数据目录采用 `SEUCXCS/wlanlogin` 两级结构。名称常量集中于 `infra/identity.rs`，路径构造集中于 `infra/paths.rs`。
+- 用户目录使用 `ProjectDirs::from_path`（不使用 `ProjectDirs::from`，避免 Linux 忽略组织名或 macOS 拼接点分目录）。
+- 清理逻辑只能删除应用自身文件与已清空的 `wlanlogin` 目录，必须保留共享父目录 `SEUCXCS` 及同级工具，并校验组织与应用目录的符号链接 / reparse point 边界。
+- 图标源文件为 `assets/icon/icon.svg`，预生成图标分别存放于 `packaging/macos/icon/icon.icns` 与 `packaging/windows/icon/icon.ico`（包含 32 / 64 / 128 / 256 像素）。
+
+### 2.2 `crates/wlan-app` 分层
+
+依赖方向严格为 `app → system → infra`（允许 `app → infra` 直接调用）：
+
+- `system` 与 `infra` 不得反向依赖 `app`；`infra` 不得依赖 `system`。
+- Clap 与终端输入输出属于应用前端，不得进入 `system` 契约。
+- `wlan-api` 不依赖应用层；重构应用架构时不要附带修改协议库。
+- `main.rs` 只调用 `app::run()`；`app::run()` 解析参数后进入编译期选中的平台 `boot()`，共享初始化与命令分发由 `app/bootstrap.rs` 的 `entry()` 负责。
+
+| 路径（相对 `crates/wlan-app/src`） | 职责 |
 | --- | --- |
-| `commands.rs` | 顶层命令分发 |
-| `commands/bundle.rs` | 打包平台分发 |
-| `commands/bundle/macos.rs` | 校验宿主和参数，编排构建、暂存、组装、签名、验证与发布 |
-| `commands/bundle/macos/assemble.rs` | 包目录、图标、应用及服务 plist 组装 |
-| `commands/bundle/macos/sign.rs` | plist 检查、代码签名和签名验证 |
-| `commands/bundle/macos/publish.rs` | 已验证应用包的发布、旧包备份和失败回滚 |
-| `commands/bundle/macos/build_number.rs` | macOS 构建号的加锁与原子分配 |
-| `support/cargo.rs` | 按明确的 package、binary 和构建配置调用 Cargo，解析实际产物路径 |
-| `support/process.rs`、`support/workspace.rs` | 外部命令执行与工作区资源定位 |
-
-新增命令时，在 `cli.rs` 注册参数，在 `commands.rs` 注册分发，并实现 `commands/<command>.rs`；新增打包平台时，在 `cli/bundle.rs` 和 `commands/bundle.rs` 注册，并实现 `commands/bundle/<platform>.rs`。流程复杂后再增加同名目录存放步骤。`support` 不依赖命令或 CLI；平台规则留在对应平台模块中，共享实现根据实际复用需要提取。
-
-应用名称由 `support.rs` 复用 `infra/identity.rs`，展示版本来自 workspace；打包资源存放在 `packaging/<platform>/`。
-
-图标源文件为 `assets/icon/icon.svg`。
-
-Windows 安装器由 `cargo xtask bundle windows` 构建，使用固定版本 WiX 6.0.2 和 `WixToolset.UI.wixext/6.0.2`。`commands/bundle/windows.rs` 构建原 CLI、安装动作和事务初始化 DLL，生成两个作用域固定的 MSI，并嵌入单个 `wlanlogin-windows-setup-<arch>.exe`。每个 MSI 的 cabinet 会在构建期间解包，逐字节检查 CLI、README 和 LICENSE，同时检查 PATH 与回滚动作的作用域。这个检查通过 MSI 数据库 API 和 cabinet 解压完成。
-
-整机路径仅解析 Program Files 和 ProgramData Known Folders，支持无交互用户配置的 LocalSystem。`service.lock` 位于 `state`，`daemon.lock` 和 `operation.lock` 位于 `run`；就绪检查、快照及回滚使用同一组路径，用户范围的运行目录与配置目录相同。安装动作使用 GUI 子系统，CLI 及其子进程置于独立 Job Object，安装命令超过 180 秒时终止该进程树并进入回滚。`diagnostics.rs` 在安装器初始化的私有目录记录阶段，`cli.log` 保存 CLI 输出；引导器失败时保留 MSI 日志并显示路径。日志子目录继承引导器私有目录的 ACL，让发起安装的用户在提升权限结束后仍可读取诊断。升级通过 `WIX_UPGRADE_DETECTED` 跳过账号页，维护卸载调用 `service uninstall --purge`，旧产品被升级替换时跳过清理凭据的动作。
-
-`packaging/windows` 使用独立 Cargo workspace 和 lockfile。`installer.wxs` 维护官方 WixUI 页面、文件组件、PATH、升级和动作顺序；`initialize.rs` 在执行阶段准备唯一事务 ID 和一次性 DPAPI 凭据文件；`src/transaction.rs` 调用现有 CLI，`state.rs`、`credentials.rs` 和 `services.rs` 维护所选范围的备份和恢复。后台二进制继续由现有 `service install` 管理。恢复凭据时保持凭据代次递增。`icon/icon.ico` 包含现有 macOS 图标的 32、64、128、256 像素表示，转换后的图标随源码提交。
-
-安装器检查使用 `cargo fmt --manifest-path packaging/windows/Cargo.toml -- --check`、`cargo clippy --manifest-path packaging/windows/Cargo.toml --all-targets --locked -- -D warnings`、`cargo test --manifest-path packaging/windows/Cargo.toml --locked` 和 `rustfmt --edition 2024 --check packaging/windows/initialize.rs`。故障测试使用临时目录、测试凭据和模拟状态。ACL 测试解析实际 ACE 的数字 SID、权限及继承标志，不依赖 SDDL 的账号别名表示。真实服务的安装、更新、取消和卸载验证应在独立测试虚拟机中完成。Release 同时发布原 Windows ZIP 和安装 EXE，并将两者纳入校验和。
-
-`APP_NAME` 是命令、二进制和目录名 `wlanlogin`；`DISPLAY_NAME` 是显示名称 `CXCS WLAN Login`。macOS 的 `CFBundleName` / `CFBundleDisplayName`、Windows 服务显示名及任务描述、Linux 的 systemd 描述使用后者。
-
-`main.rs` 只调用 `app::run()`。不要向入口增加认证、服务管理或平台分支。
-
-`app::run()` 只解析参数并调用编译期选中的平台 `boot()`。平台启动编排归 `app/bootstrap/`，包括 Windows SCM 应用回调和 macOS AppKit 主线程循环的选择；共享的作用域、日志、应用依赖装配和命令分发由 `app/bootstrap.rs` 的 `entry()` 负责。
-
-| 路径（相对 `crates/wlan-app/src`） | 维护范围 |
-| --- | --- |
-| `app.rs` | 应用模块声明、Clap 入口、编译期选择平台 bootstrap |
-| `app/bootstrap.rs` | 平台模块声明、普通 Tokio runtime 的创建、错误记录与限时关闭；共享 `entry()` 初始化日志、作用域与应用依赖并分发命令 |
-| `app/bootstrap/{linux,macos,windows}.rs` | 平台启动编排；Linux 普通入口、macOS AppKit 选择、Windows SCM 应用回调 |
-| `app/context.rs` | 门户客户端、所选路径及 Wi-Fi / 凭据适配器的构建 |
-| `app/bootstrap/<platform>/cli.rs` | 参数声明、解析与命令分发；把 CLI 参数转换为 controller 请求 |
-| `app/cli/login.rs` | stdin、交互选择、TUI 重试与安装时的凭据输入 |
-| `app/cli/output.rs` | controller 结果的终端展示与状态格式化 |
-| `app/tui.rs` | 终端生命周期、绘制、键盘事件和登录表单 |
-| `app/controller/{login,logout}.rs` | 业务校验、操作顺序与可复用接口，不读取终端输入 |
-| `app/controller/daemon.rs` | 当前进程的自动登录循环、托管服务启动准备 |
-| `app/controller/service.rs`、`app/controller/service/` | `install`、`uninstall`、`start`、`stop`、`restart`、`status`、`logs` 服务操作接口 |
-| `app/controller/permission.rs`、`app/cli/permission.rs` | 通用权限查询／请求，以及 macOS CLI 输出 |
-| `app/daemon.rs` | daemon 生命周期、单实例、停机信号和本地控制初始化 |
-| `app/daemon/runtime.rs` | 调度与 Wi-Fi / IPC 事件循环 |
-| `app/daemon/check.rs` | 单次状态检查与认证，保护暂停状态和 Wi-Fi 会话 |
-| `app/daemon/policy.rs` | 退避、轮询期限、认证拒绝与会话重置规则 |
-| `app/daemon/credentials.rs` | 有超时限制、至多一个在途任务的后台凭据读取和内存会话提示 |
-| `infra/error.rs`、`infra/error/` | `thiserror` 错误、英文消息模板、门户错误转换 |
-| `infra/logging.rs`、`infra/file_log.rs` | 日志格式与输出、文件日志历史和跟随读取 |
-| `infra/config.rs`、`infra/paths.rs`、`infra/scope.rs` | 线路偏好、目录定位、user / system 范围和访问检查 |
-| `infra/control.rs`、`infra/control/` | IPC 协议与传输、控制状态、单实例锁和操作锁 |
-| `infra/command.rs`、`infra/shutdown.rs` | 可替换的外部命令执行、超时和进程停止信号 |
-| `infra/filesystem.rs`、`infra/cleanup.rs` | 私有目录、文件写入及有边界的清理机制 |
-| `infra/identity.rs` | 应用 ID、组织目录名、命令名和原生服务／凭据名称 |
+| `app.rs` | 模块声明、Clap 顶层定义、编译期平台 `boot()` 分发 |
+| `app/bootstrap.rs` | Tokio runtime 生命周期、共享 `entry()`（作用域、日志、依赖装配与命令分发） |
+| `app/bootstrap/{linux,macos,windows}.rs` | 平台启动编排（Linux 普通入口、macOS AppKit 入口、Windows SCM 回调） |
+| `app/bootstrap/<platform>/cli.rs` | 平台 CLI 参数声明、解析与 controller 请求转换 |
+| `app/context.rs` | 门户客户端、路径与 Wi-Fi / 凭据适配器装配 |
+| `app/cli/`、`app/tui.rs` | 终端交互、stdin 凭据读取、结果展示与 TUI 表单 |
+| `app/controller/` | 可复用业务操作（`login`、`logout`、`daemon`、`service`、`config`、`permission`），不直接读取终端 |
+| `app/daemon.rs`、`app/daemon/` | daemon 生命周期、调度循环（`runtime.rs`）、单次检查（`check.rs`）、重试策略（`policy.rs`）与后台凭据读取（`credentials.rs`） |
+| `infra/error/` | `thiserror` 错误类型、英文诊断模板与门户错误转换 |
+| `infra/logging.rs`、`infra/file_log.rs` | 结构化日志格式、文件日志历史与跟随读取 |
+| `infra/config.rs`、`infra/paths.rs`、`infra/scope.rs` | 配置持久化、线路偏好、目录定位与作用域校验 |
+| `infra/control/` | 本地 IPC 协议与传输、控制状态、单实例锁与操作锁 |
+| `infra/command.rs`、`infra/shutdown.rs` | 可替换外部命令执行、超时与停机信号 |
+| `infra/filesystem.rs`、`infra/cleanup.rs` | 私有目录、原子写入与有边界清理 |
+| `infra/identity.rs` | 应用 ID、目录名、命令名与原生服务/凭据标识 |
 | `system.rs` | 编译期选择原生平台，暴露系统能力入口 |
-| `system/define/` | credentials、services、wifi、permission 的公共契约与数据模型，包括安装报告、文件状态和日志后端接口 |
-| `system/shared/credentials/`、`system/shared/wifi/` | 凭据作用域与编码、共用 keyring 访问、Wi-Fi 查询超时和工作线程 |
-| `system/shared/services/` | 归属检查实现、共用文件日志适配、服务步骤、卸载扩展点和回滚停止屏障 |
-| `system/{linux,macos,windows}/services/` | 原生服务定义、管理器状态解析、日志来源、签名包和就绪检查 |
-| `system/{linux,macos,windows}/credentials/` | 用户与系统凭据后端 |
-| `system/{linux,macos,windows}/wifi/` | 平台 SSID 查询、连接标识、网络事件订阅 |
-| `system/{linux,macos,windows}/permission/` | 平台权限声明、按需授权与状态诊断 |
+| `system/define/` | `credentials`、`services`、`wifi`、`permission` 的公共契约、数据模型与报告类型 |
+| `system/shared/` | 跨平台共用适配器、凭据编码与诊断分类、通用服务事务与默认 `flow` |
+| `system/{linux,macos,windows}/flow/` | 各平台 `install`、`uninstall`、`start`、`stop`、`restart`、`status`、`logs`、`run` 及领域操作统一入口 |
+| `system/{linux,macos,windows}/services/` | 原生服务模板（`definition.rs`）、管理器命令与状态解析（`manager.rs`）、产物与就绪检查 |
+| `system/{linux,macos,windows}/credentials/` | 平台用户与系统凭据后端 |
+| `system/{linux,macos,windows}/wifi/` | 平台 SSID 查询、会话标识与网络变更事件 |
+| `system/{linux,macos,windows}/permission/` | 平台权限声明、状态诊断与交互授权 |
+| `system/{linux,macos,windows}/runtime/` | Windows SCM、macOS AppKit/Wi-Fi 宿主、Linux 会话与凭据事件、平台原生 `infra` 源码 |
 
-| `system/{linux,macos,windows}/flow/` | 各平台 install、uninstall、start、stop、restart、status、logs、run 与 credentials、wifi、permission 操作的统一入口 |
-| `system/shared/flow/` | 公共流程；平台没有额外步骤时显式复用，操作不能无条件返回成功 |
-| `system/{linux,macos,windows}/runtime/` | Windows SCM、macOS AppKit／认证宿主、Linux 会话就绪／凭据事件 |
+### 2.3 平台源码边界（`check-boundaries`）
 
-依赖方向是 `app → system → infra`，`app` 也可直接使用 `infra`。`system` 和 `infra` 不得反向依赖 `app`；`infra` 不依赖 `system`。Clap、终端输入和展示属于应用前端，不能进入系统契约。原生 SDK 调用放在平台适配器内；通用的文件权限、进程身份和信号机制可在 `infra` 使用必要的条件编译。
+- 平台相关实现全部位于 `system/linux`、`system/macos` 或 `system/windows`。
+- 其余目录中，目标平台相关的 `cfg`、`cfg_attr`、`cfg!` 仅允许出现在受 `cargo xtask check-boundaries` 检查的门面文件中用于模块选择和重导出。测试代码遵守相同约束（普通 `#[cfg(test)]` 允许）。禁止用运行时操作系统名判断替代编译期分支。
+- `system/<platform>/runtime/infra` 下的原生基础设施代码仅通过 `infra.rs` 门面编译一次，属于源级平台选择，不构成 `infra → system` 反向依赖；共享状态与协议文件保留在 `infra/control`。
+- 共享流程（`system/shared`）不包含原生 API、XML 编码、ACL 或任务注册分支；平台没有额外差异时显式复用 `system/shared/flow`，不得以空实现返回成功。
 
-`system/shared` 用于多个平台真正共用的流程，平台细节仍归对应目录。`wlan-api` 不依赖应用层；仅重构应用架构时不要顺带修改协议库。
+### 2.4 `xtask` 与 `packaging/windows`
 
-## 增加或维护功能
+`xtask` 负责应用打包与边界检查（普通编译直接使用 Cargo）：
 
-### CLI 与业务操作
+| 路径（相对 `xtask/src`） | 职责 |
+| --- | --- |
+| `main.rs`、`cli.rs`、`cli/bundle.rs` | 参数解析与顶层/平台子命令定义（`--profile`、`--target`、`--target-dir` 位于平台子命令之后；`--codesign-identity` 仅属 macOS） |
+| `commands.rs`、`commands/check_boundaries.rs` | 命令分发与平台源码边界检查 |
+| `commands/bundle.rs` | 打包平台分发 |
+| `commands/bundle/macos.rs` 及子模块 | macOS 应用构建、组装（`assemble.rs`）、构建号原子分配（`build_number.rs`）、签名验证（`sign.rs`）与原子发布回滚（`publish.rs`） |
+| `commands/bundle/windows.rs` | Windows CLI / 安装动作 / 初始化 DLL 构建、MSI 与安装向导打包及 cabinet 逐字节校验 |
+| `support/` | Cargo JSON 产物构建（`cargo.rs`）、外部进程（`process.rs`）、工作区资源（`workspace.rs`）与平台工具检查（`platform/`）；不依赖 `cli` 或 `commands`，复用 `infra/identity.rs` |
 
-在 `app/bootstrap/<platform>/cli.rs` 声明参数，再将普通请求类型传给 `app/controller`。公开服务管理统一使用 `service install/uninstall/start/stop/restart/status/logs`；`daemon` 只运行当前进程的循环。各平台生成的服务定义使用隐藏 `service run`；Windows 系统范围由 bootstrap 接入 SCM，用户计划任务直接运行，macOS 用户范围保留 AppKit 事件循环。macOS bootstrap 处理 `service native` 和 Wi-Fi 宿主内部入口，共享 bootstrap 在构造门户客户端前处理跨平台权限入口。服务 controller 的生产操作统一调用 `system::flow`，不直接引用 shared 或某个原生平台；平台 flow 组合公共流程与原生适配器，前端负责交互及展示；返回结构化数据，或显式注入输出 writer、取消 future 等接口。服务状态查询不能靠日志文本判断成功与否。TUI 不直接调用门户或服务管理器。
+新增顶层命令需在 `cli.rs` 与 `commands.rs` 注册并实现 `commands/<command>.rs`；新增打包平台需在 `cli/bundle.rs`、`commands/bundle.rs` 注册并实现 `commands/bundle/<platform>.rs`，打包资源存放于 `packaging/<platform>/`。
 
-新增 daemon 行为先明确 `policy.rs` 中的状态转换，再接入单次检查或调度循环。保留持久化停止监听器、请求超时和单个后台凭据任务；Linux D-Bus 事件流必须持续排空。`AuthState::Unknown` 不得触发自动登录，手动登录只恢复相同作用域的 daemon。
+`packaging/windows` 使用独立 Cargo workspace 与 `Cargo.lock`：
+- `installer.wxs` 定义 WixUI 向导页、文件组件、PATH、升级与动作顺序；`initialize.rs` 准备唯一事务 ID 与一次性 DPAPI 凭据文件。
+- `src/transaction.rs` 调用 CLI 完成服务事务，`state.rs`、`credentials.rs`、`services.rs` 负责备份与恢复，`diagnostics.rs` 记录阶段与 CLI 输出，`verify.rs` 负责 MSI / cabinet 校验。
 
-### 平台适配
+## 3. 子系统设计规范
 
-先在 `system/define/` 定义必要契约，再在平台目录实现。服务模板、管理器命令及状态解析分别归 `definition.rs`、`manager.rs`；共享安装器负责备份、回滚和停止后的清理顺序。构造服务计划与命令应能在不调用真实服务管理器的情况下测试。
+### 3.1 CLI、业务流与后台守护
 
-新增平台后更新 `system.rs`、目标依赖、构建检查和 README。将运行验证与交叉编译结果分开记录。
+- 公开服务命令统一为 `service install/uninstall/start/stop/restart/status/logs`，`daemon` 仅运行当前进程循环；原生服务定义调用隐藏 `service run`。
+- 服务 controller 统一调用 `system::flow`，不直接引用 `shared` 或具体原生平台；controller 返回结构化数据或接收显式 writer / 取消信号，不读取终端；TUI 不直接调用门户或服务管理器；服务状态判定不依赖日志文本解析。
+- 调整 daemon 行为时，先在 `app/daemon/policy.rs` 定义状态转换，再接入 `check.rs` 或 `runtime.rs`。
+- 关键守护边界：
+  - `AuthState::Unknown` 不得触发自动登录。
+  - 每次 `await` 后提交认证前必须复检 Wi-Fi 会话。
+  - 手动登录只恢复相同作用域的 daemon；保持停机监听器存活并持续排空 Linux D-Bus 事件流。
+  - 限制原生调用与凭据读取超时，至多保留一个在途后台凭据读取任务。
 
-应用 ID 固定为 `dev.cxcs.tools.wlanlogin`，目录采用 `SEUCXCS/wlanlogin` 两级结构；名称常量集中在 `infra/identity.rs`，路径通过 `infra/paths.rs` 构造。不要使用 `ProjectDirs::from` 推导这个布局：Linux 会忽略组织参数，macOS 会拼成点分名称；用户目录使用 `ProjectDirs::from_path`。macOS 的 Keychain 授权和服务安装必须共用包内程序路径。完整包安装入口位于 `system/macos/flow/install.rs`，签名负载事务位于 `system/macos/services/payload.rs`；严格限制可清理的包成员，新增打包资源时同步更新成员列表。用户与系统服务通过 `SMAppService` 注册，启动定义位于包内 `Contents/Library/LaunchAgents` / `LaunchDaemons`，使用 `BundleProgram`。定义在 xtask 签名前生成，安装期间不得改写签名包。原生 API 由安装副本中的隐藏 `service native status/register/unregister` 调用，检查主 bundle 身份，返回带版本、作用域和应用 ID 的状态；不依赖外部 CLI 的位置。停止先 bootout，再通过带令牌的托管模式 IPC 等待进程退出；停止保留原生注册，卸载及替换签名包前需等待原生注销完成。等待用户后台批准不能报告为运行中，也不能阻塞卸载。替换应用包失败时保留安装回滚。手动前台 daemon 不接受托管停止指令；托管启动持锁后再次检查实际 launchd 注册。Windows 服务的创建、查询、启停和 SCM 回调注册使用同一个 ID，用户计划任务追加 SID。
+### 3.2 门户协议
 
-清理只能删除应用自己的文件和清空后的 `wlanlogin` 目录，必须保留 `SEUCXCS` 父目录和同级工具；验证组织目录与应用目录的符号链接／reparse point 边界。Cargo 包为 `wlanlogin-cli` / `wlanlogin-lib`，可执行文件通过 `[[bin]]` 命名为 `wlanlogin`，日志 target 前缀也为 `wlanlogin`。
+- 协议实现集中于 `crates/wlan-api`，`PortalConfig` 分别配置状态、页面配置、登录与注销端点；页面与方案索引在登录和注销前实时拉取。
+- 修改协议时同步更新脱敏 loopback fixtures 与 `docs/eportal-*.md`，测试需分别覆盖无凭据配置请求与凭据提交路径。
 
-### 权限接口
+### 3.3 权限框架
 
-`PermissionId` 使用开放的字符串命名空间；`PermissionDescriptor` 支持名称、可选描述和任意键值元数据。`PermissionProvider::permissions()` 返回动态列表，允许为空，不要固定为两个权限或在公共契约中枚举平台权限种类。
+- `PermissionId` 为开放字符串命名空间，`PermissionDescriptor` 支持名称、可选描述与键值元数据；`PermissionProvider::permissions()` 返回动态列表（可为空，不得在公共契约中硬编码平台枚举）。
+- `permission list/check/get` 在所有平台编译暴露，由运行时 provider 决定能力：Linux / Windows 返回空列表，显式传入未知 ID 必须报错。
+- `check` 禁用 UI 且不申请授权；`get` 仅在 stdin 与 stderr 均为终端时请求权限；后台与非交互命令不得弹窗。
+- 诊断区分 `Missing`、`NeedsInteraction`、`Denied`、`Unavailable`，逐项保留结果，读取失败不得删除已有凭据，也不得将不可用能力报告为已授权。
+- JSON 输出使用带版本、作用域与权限 ID 的 `PermissionReport`，安装流程严格校验其全部协议字段。
 
-Linux / Windows 返回空列表。macOS 的 `macos.location` 对接签名 Wi-Fi 宿主中的 Core Location；`macos.keychain` 查询本范围的自有条目；查询禁用 UI，申请仅在前台允许 UI。用户与系统 Keychain 共用串行访问器，避免进程级交互开关竞态。诊断区分 Missing / NeedsInteraction / Denied / Unavailable；失败不得删除原条目。未知标识返回错误，保留“不支持 / 未实现”和“已授权”的区别。`permission list/check/get` 在所有平台编译并显示，由运行时 provider 决定支持的权限；空实现的列表和全部查询返回空集合，显式 ID 仍需校验。查询不申请授权，`get` 仅在 stdin 和 stderr 均为终端时请求指定权限。逐项保留诊断，某一权限失败不能丢失其他结果。状态 JSON 使用带版本、范围和权限 ID 的 `PermissionReport`，安装端严格检查版本、范围、ID、条目数及错误字段。后台不触发授权弹窗。
+### 3.4 凭据存储与后台读取时序
 
-包内外 CLI 共用参数解析，无参数不得隐式启动 Wi-Fi 宿主。macOS 宿主使用隐藏的 `daemon --internal-wifi-host`，仅运行 Wi-Fi／定位宿主，不进入自动登录循环；隐藏的 `--system-helper` 仅能与该模式组合，选择服务于系统客户端的桌面用户宿主。内部字段上方保留用途注释。macOS bootstrap 在构造门户依赖之前处理此模式并保持 AppKit 主线程循环。Keychain 保存、删除及 ACL 授权仅查找条目引用，不取密码数据；已有条目直接更新，仅明确不存在时创建，查询或更新失败不得尝试创建替代条目。新条目通过 `SecKeychainItemCreateFromContent` 在创建时传入初始访问控制，包含当前程序及已存在的目标程序。安装已明确要求刷新凭据时，直接进入登录准备，避免预检查重复读取钥匙串。
+- `define/credentials.rs` 只定义契约与状态（`Available` / `Missing` / `Waiting` / `Failed`），不执行 I/O；`shared/credentials/codec.rs` 负责格式编码，`flow/credentials` 为统一入口。
+- **延迟读取**：daemon 启动时禁止预读凭据，仅在通过目标 Wi-Fi、暂停状态、策略期限与门户明确 `Offline` 校验后才发起后台读取。
+- **凭据新鲜度（`CredentialPermit`）**：读取结果封装于不可打印的 `CredentialPermit`，绑定作用域、配置根目录与持久化于 `control.json` 的独立字段 `credential_generation`（不复用暂停/调度 revision；文件缺失时初始化为 `0`）。
+  - 常规保存（`save.rs`）与删除（`delete.rs`）在持有 operation lock 下先原子递增并持久化 `credential_generation`，再调用原生后端；持久化失败必须中止变更，原生变更失败不得回退旧代次。
+  - 任何完成结果（含超时后保留的任务）在消费时及最终 Wi-Fi `await` 后均须复检许可；超时、注销或失效不得另起第二个原生读任务。
+  - `service uninstall --purge` 在确认服务注销、后台停止并持有 daemon / operation lock 后直接删除作用域凭据，不要求解析待删除的 `control.json`。
+- **诊断分类与 IPC**：类型化错误定义于 `infra/error/credentials.rs`，由 `shared/credentials/diagnostics.rs` 分类。锁定、前台交互、拒绝访问与缺少 provider 归为 `Waiting`；超时（含 D-Bus `NoReply`）、格式/版本错误、重复条目、解密、校验与任务失败归为 `Failed`；未知错误保持中性类别，禁止误判为权限等待。
+- `Waiting` 与 `Failed` 均保持 daemon 存活并保留凭据，不触发门户网络退避，也不解除门户凭据拒绝。状态 IPC 仅接受版本 3 有界 JSON 帧，校验作用域与令牌，不得激活 Keyring 或暴露凭据与原始自由文本。
 
-macOS Wi-Fi 宿主使用有长度限制的 IPC 帧、协议版本和请求 ID；客户端通过 socket 内核审计令牌验证对端签名与 UID，系统范围还检查活动控制台用户。宿主只提供网络状态，不接收校园网凭据。系统宿主在控制台用户改变后退出；启动、请求、空闲存活时间都有界限。交互申请启动不使用 `open -g`；GUI 宿主和用户后台 daemon 保持 AppKit 主线程事件循环，使前台状态能够刷新。Core Location 对象和 delegate 始终位于同一 RunLoop 工作线程；在该线程确认 `NSRunningApplication.isActive` 后才调用授权请求，激活和权限决定分别有超时。已有决定、后台查询及非交互操作均不得申请权限。
+### 3.5 平台专项规范
 
-安装前后及应用包回滚的凭据检查均由实际目标程序执行 `permission check macos.keychain --json`；检查报告必须包含正确的版本、范围和权限 ID。先静默检查；已授权不得改 ACL；锁定时先解锁并重新检查；缺失、不可用、未知或子进程检查失败不得尝试重写。只有确需授权时才复制现有 `SecAccess`，扩展一条仅含 decrypt 的 ACL；无此条目则新增仅含 decrypt 的 ACL，不修改混合权限 ACL、所有者、partition ACL 或其他条目。再次静默检查成功才能继续安装或恢复原服务；未完成回滚保留恢复目录。launchd 定义必须包含 `AssociatedBundleIdentifiers` 与固定应用 ID，关联后台活动归属，服务生命周期由原生 SMAppService 托管。每次重新启动产生新的 Wi-Fi 会话标识，原生查询有超时。
+#### Linux
 
-### Linux 后台凭据时序
+- 用户后台读取前依次检查活动 logind 会话、显示 socket 与用户 systemd 环境，同步 D-Bus 激活环境后，再使用官方 `dbus-secret-service`（DH 加密、零 prompt 超时）连接标准 `org.freedesktop.secrets` 并允许标准 D-Bus 激活（包括 provider 已运行的情况）。不 vendor 依赖、不固定 owner、不按桌面/钱包类型分支，`default.target` 保持不变。
+- 用户 `CredentialPermit` 额外绑定 logind 会话 ID、`TimestampMonotonic` 与本地会话代次，实时查询前后均做校验；`session-ready` / `session-end` 提示仅存内存并绑定实际会话。
+- 通过独立持续排空的 D-Bus 流监听 provider / 解锁事件，断连后自动重建并辅以定时重试。系统作用域完全独立于图形会话。
 
-`define/credentials.rs` 定义存储契约和 Available / Missing / Waiting / Failed 状态；`shared/credentials/codec.rs` 实现持久化格式，`shared/credentials/mod.rs` 选择作用域后端。`flow/credentials` 是操作入口。查询流程属于 shared/flow，define 不应读取文件、查询网络或启动服务。
+#### macOS
 
-daemon 不得在启动时预读。单次检查先验证目标 Wi-Fi、暂停、策略期限及门户 Offline，再读取凭据，提交前再次验证 Wi-Fi 会话。成功读取返回 `BackgroundCredentials`，包含不可输出的 `CredentialPermit`；所有完成结果（包括超时后缓存的结果）在消费时复检，Wi-Fi await 后再次复检，任一检查失败都不得调用门户登录。校验有独立超时，正常等待和校验失败不进入网络失败退避；提供者／解锁事件只唤醒等待，不解除门户凭据拒绝。保留单个在途原生读任务，超时、注销或许可失效不得另开第二个任务。
+- **应用包与构建号**：`CFBundleShortVersionString` 对应 Cargo 版本；`CFBundleVersion` 由 `build_number.rs` 在签名前通过 `.bundle-build/build-number` 加锁原子递增，跨 profile/target 共享，不因失败复用也不静默重置。`service install` 安装完整签名包（`flow/install.rs` + `services/payload.rs`），严格校验 xtask 维护的包成员清单，拒绝未知文件与符号链接。
+- **原生服务（`SMAppService`）**：启动定义（含 `BundleProgram` 与 `AssociatedBundleIdentifiers`）在 xtask 签名前生成于 `Contents/Library/LaunchAgents` / `LaunchDaemons`，安装期间严禁改写签名包。原生操作由安装副本的隐藏 `service native status/register/unregister` 执行。
+- **生命周期与回滚**：停止先 `bootout` 再通过带令牌的托管模式 IPC 等待退出（禁止向未校验 PID 发信号），且保留原生注册；卸载与替换前等待原生注销完成；后台批准状态独立于存活状态且不得阻塞卸载；托管启动持锁后复查实际 launchd 加载状态；安装确认就绪前保留回滚副本，回滚未完成时保留恢复目录。若 `launchd` 报代码签名启动失败且需更新 LWCR，允许完成一次受 `ThrottleInterval` 限制的系统重试；若仍报 `EX_CONFIG` 且需更新 LWCR，使用同一安装副本重新注册一次（调整 `ThrottleInterval` 时同步核对等待时长）。
+- **Wi-Fi 宿主与定位**：裸 CLI 不得隐式启动宿主；宿主通过隐藏 `daemon --internal-wifi-host` 运行（系统客户端组合 `--system-helper`），跳过自动登录，源码需保留用途注释。宿主 IPC 校验协议版本、请求 ID、帧长、内核审计令牌签名与 UID（系统模式额外校验活动控制台用户），严禁传输校园网凭据。Core Location 对象与 delegate 固定在同一 RunLoop 线程，每轮清空独立 `autoreleasepool`；交互授权不使用 `open -g`，需在工作线程确认 `NSRunningApplication.isActive` 后再申请。因定位受限时 SSID 与 BSSID 可能同时被隐藏，须通过接口模式识别“已连接但 SSID 不可读”并返回错误。
+- **Keychain**：用户与系统访问共用串行访问器保护进程级交互开关；保存、删除与 ACL 授权仅查找条目引用不读取密码；已有条目直接更新，仅明确不存在时用 `SecKeychainItemCreateFromContent` 创建并写入初始 ACL。安装前后与回滚均由实际目标二进制执行 `permission check macos.keychain --json`：已授权不改 ACL，仅确需授权时复制 `SecAccess` 并新增/扩展仅含 decrypt 的 ACL，不改动混合权限、所有者或 partition ACL。
 
-`CredentialPermit` 绑定 scope、配置目录及 `control.json` 中独立的 `credential_generation`。`flow/credentials/save.rs` 和 `delete.rs` 在调用原生后端之前递增并原子保存代数，调用方继续持有现有 operation lock；写入失效记录失败必须阻止存储操作，原生操作失败也不得恢复旧代数。凭据代数不复用暂停／调度的 revision。`credential_generation` 是持久化状态中的必填字段；状态文件不存在时初始化为零。完整卸载的凭据删除由卸载 flow 选择存储后端，在确认服务注销、后台停止并持有 daemon / operation lock 后执行；不调用常规的代数失效流程，也不解析待清理的控制状态。
+#### Windows
 
-Linux 用户许可另外保存 logind 会话 ID、`TimestampMonotonic` 及内存中的会话提示／代数。每个消费检查点在实时查询前后验证会话代数及完整身份，避免注销、重新登录和提示恢复原值时使用旧结果。Linux 系统范围及 macOS／Windows 不增加图形会话门槛，继续按原生后台访问规则读取，只应用共同的存储新鲜度检查。
+- **路径与服务**：系统路径仅解析 Program Files 与 ProgramData Known Folders（兼容无交互用户配置的 LocalSystem）；`service.lock` 位于 `state`，`daemon.lock` 与 `operation.lock` 位于 `run`。SCM 接入留在 bootstrap（Tokio 启动前）；服务创建、查询、启停与回调共用同一服务 ID；用户计划任务名追加 `{SID}`。
+- **任务 XML 与安装验证**：计划任务定义使用匹配的 UTF-16 声明、UTF-16LE 字节与 BOM（读取兼容旧版 UTF-8）。停止旧任务前先以 `TASK_VALIDATE_ONLY` 校验暂存文件；独立快照实际注册 XML；恢复任务仅在原状态为运行或排队时重启；删除失败前通过数值 COM 查询确认任务不存在；回滚未完成时同时保留原生 XML 与文件备份；安装成功要求任务已注册、启用且处于运行或排队状态。
+- **编码、资源与安装器**：`schtasks` / `sc` 输出在原生进程边界按系统 OEM 代码页解码，PowerShell 查询显式输出 UTF-8，不修改全局控制台或系统区域设置；`SHGetKnownFolderPath` 返回内存必须通过作用域守卫在所有路径调用 `CoTaskMemFree`。安装器使用 GUI 子系统与 180 秒 Job Object 超时终止进程树并回滚；日志目录继承引导器私有目录 ACL；通过 `WIX_UPGRADE_DETECTED` 跳过升级账号页并避免清理旧凭据；构建时解包 MSI cabinet 逐字节校验 CLI、`README.md` 与 `LICENSE`。
 
-Linux 用户后台先检查 logind 活动会话、显示 socket 和用户 systemd 环境，再同步真正的 D-Bus 激活环境，最后使用官方 `dbus-secret-service` 的 DH、零 prompt 超时连接标准 `org.freedesktop.secrets`。禁止启动时预读；已经运行的 provider 也经过同样门槛。就绪后允许标准 D-Bus 激活，不修改依赖源码、不固定唯一 owner、不猜测桌面或钱包实现。`default.target` 保持不变。session-ready/end 是自定义桌面的通用可选入口，提示只保存在内存并绑定实际会话；跨越注销／重新登录的读取结果不得用于提交。系统存储不依赖图形会话。
+### 3.6 错误处理与日志
 
-凭据事件通过独立持续排空的 D-Bus 流合并，断开后重建，定时查询作为后备。控制 IPC 只接受版本 3 的有界 JSON 帧，验证范围与令牌并确认通知；状态包含安全的诊断类别、阶段、数值原生码和已知 D-Bus 错误码，不能包含凭据、原始错误自由文本或触发 Keyring。状态查询失败明确显示未知，不伪装成未读取。
+- 业务代码使用 `infra::error::{Error, Result, Context, Message}`，在 `infra/error/message.rs` 与 `credentials.rs` 用 `#[derive(thiserror::Error)]` 定义英文诊断模板；`anyhow` 仅用于边界封装外部错误。
+- 门户错误在 `infra/error/portal.rs` 转换为安全英文摘要并保留原始错误供重试分类。
+- `crates/wlan-api/src/diagnostics.rs` 在 JSONP 解析前捕获 HTTP 请求行、响应状态行、头信息与脱敏正文（凭据、Cookie、会话与设备标识统一脱敏，换行转义）；成功记录为 `debug`，失败记录为 `warn`。
+- `infra/logging.rs` 统一负责 UTC RFC 3339 时间与格式；`infra/config.rs` 从作用域 `config.json` 读取 `log.level`（默认 `info`，`RUST_LOG` 覆盖）。daemon `runtime.rs` 在首次检查、结果变化、错误恢复与重试启动时用 `info` 输出 `outcome` 与 `next_check_secs`。中文 CLI / TUI 文案仅保留在前端。
 
-类型化凭据错误定义于 `infra/error/credentials.rs`，保留错误链并使用安全的 Display/Debug；`shared/credentials/diagnostics.rs` 负责分类。正常锁定／前台交互／拒绝访问／缺少 provider 使用 Waiting，超时、格式、版本、重复条目、解密、存储校验及任务失败使用 Failed；未知错误保持中性类别。D-Bus NoReply 属于超时，会话查询失败保留 Session 阶段。仅在诊断变化或恢复时输出日志；凭据等待和失败都保持正常轮询，不进入门户网络失败退避或解除真实的凭据拒绝。
+## 4. 测试与验证
 
-私有 D-Bus 回归用隔离子进程为官方库设置环境，禁止并行测试修改当前进程的环境。`provider_child` / `read_child` 是 ignored 辅助用例，由父测试显式调用并验证地址属于临时总线；不得直接运行整个套件的 ignored 用例。
+### 4.1 CI 与组织规则
 
-macOS Core Location 的长期 RunLoop 每轮必须清空独立的 `autoreleasepool`，及时释放状态查询及回调产生的临时对象；manager 和 delegate 由循环外的 `Retained` 保持存活。Windows `SHGetKnownFolderPath` 的输出通过作用域内的释放守卫管理，成功与失败路径都必须调用 `CoTaskMemFree`。
+- `.github/workflows/test.yml` 在推送或 PR 至 `main` / `develop` 以及手动触发时运行。原生测试矩阵覆盖 **Linux x86_64**、**Windows x86_64 MSVC** 与 **macOS Apple Silicon**（均使用 stable Rust 与 `Cargo.lock`），格式与平台边界检查单独运行。
+- `crates/wlan-app` 的单元测试统一放在所属源码文件末尾的 `#[cfg(test)] mod tests`，不拆分为 `tests.rs`、独立测试目录或 `#[path]` 引入。共用假实现可放在基础模块测试中（如 `infra::command::tests`）。`crates/wlan-api` 保持现有集成测试与 fixtures 结构。
+- 跨平台行为只维护一份表驱动测试套件，平台目录仅保留原生特例：
 
-### 错误与日志
-
-应用代码使用 `infra::error::{Error, Result, Context, Message}`。通用稳定诊断文本在 `infra/error/message.rs`、凭据诊断模板在 `infra/error/credentials.rs` 用 `#[derive(thiserror::Error)]` 与 `#[error("...")]` 定义；用有意义的字段携带上下文。`anyhow` 仅在错误边界封装外部错误，不作为各模块的公共错误类型。
-
-通过 `context` / `with_context` 保留错误来源；门户错误由 `infra/error/portal.rs` 转换为英文、安全的摘要，同时保留供重试分类使用的原始错误类型。当前协议库只在本地化错误文本中提供返回码，应用边界仅识别已知的标准说明与返回码组合，并用静态英文模板输出；无法识别时退回通用摘要。维护映射时用真实 API 加 loopback 响应验证，不要依赖任意门户文本。不要把门户原始响应、URL 查询参数或凭据写入日志。
-
-日志使用 `tracing`，事件文本采用英文句式；使用 `error`、`scope`、`retry_after_secs` 等结构化字段。成功事件用 `info`，可恢复故障用 `warn`，终止或需人工处理的故障用 `error`，重复的跳过检查等诊断用 `debug`。daemon 的 `check.rs` 返回检查结果，由 `runtime.rs` 在首次检查、结果变化或错误恢复时用 `info` 输出 `outcome` 和 `next_check_secs`，并记录重试开始，避免静默跳过被误判为定时器失效。macOS 不能用同样受定位权限限制的 BSSID 判断 SSID 不可读时是否断网；已连接但名称不可读必须返回错误，保留重试及凭据保护。时间和格式由 `infra/logging.rs` 统一处理，业务模块不自行拼时间戳。中文 CLI / TUI 文案留在前端。
-
-## 测试与验证
-
-`.github/workflows/test.yml` 的 `Tests` 工作流覆盖推送至 `main` / `develop`、以它们为目标的 PR，以及手动触发。矩阵与发布平台一致：Linux x86_64、Windows x86_64 MSVC、macOS Intel 和 Apple Silicon。每项都在原生 runner 上运行相同的 Clippy、完整 workspace 测试、构建和安全 CLI smoke 检查；格式与平台边界检查独立运行一次。矩阵不会因另一个平台失败而提前取消，同一分支或 PR 的新提交会取消旧运行。
-
-CI 使用 stable Rust 和 `Cargo.lock`，缓存按工具链与平台隔离。Linux 安装 D-Bus 构建及私有总线测试依赖。不要通过过滤公共测试、运行整个 ignored 套件或使用真实系统服务来让某个平台通过。Windows 本地 Temp ACL 不满足存储校验时，使用仅当前用户和 SYSTEM 可写的隔离临时目录，不修改产品校验规则。
-
-`wlan-app` 的测试一律放在所属文件末尾的 `#[cfg(test)] mod tests` 中；即使测试很长，也不要拆成 `tests.rs`、独立测试目录或 `#[path]` 引入的测试文件。共用假实现可放在相应基础模块的测试模块里，例如 `infra::command::tests`。协议库已有的集成测试和 fixtures 保持其现有组织。
-
-跨平台行为只维护一份测试，通过编译期选中的平台实现运行。CLI 公共契约放在 `app.rs`，基础设施公共契约放在 `infra.rs`，凭据公共契约放在 `system/define/credentials.rs`，默认卸载事务放在 `system/shared/flow/mod.rs`。同类型输入使用表驱动，断言应能定位失败的输入；平台目录只保留原生特例，不复制公共套件。测试代码也必须通过平台边界检查。
-
-| 测试内容 | Linux / macOS / Windows 的共同要求 | 平台特例 |
+| 公共契约位置 | 覆盖范围 | 平台特例 |
 | --- | --- | --- |
-| CLI | 服务命令、范围、清理选项、帮助、权限命令、交互冲突 | macOS 内部宿主与原生服务入口 |
-| 门户及 daemon | 协议、状态门槛、会话复检、重试、取消、单个在途凭据读取 | Linux 桌面会话、D-Bus 激活与身份竞态 |
-| 凭据契约 | 错误分类与脱敏、范围及目录绑定、代数失效、保存前失效、写入失败不得调用后端 | Linux 用户会话门槛；macOS Keychain；Windows DPAPI |
-| 基础设施 | 日志脱敏、范围选择、锁竞争、IPC 认证、保护共享目录、拒绝目录重定向 | Unix 信号及权限；Windows named pipe、ACL 与原生命令编码 |
-| 服务事务 | 启停失败、回滚、先停后删、普通卸载保留数据、purge 幂等与失败保留数据 | Linux systemd 链接；macOS 签名包；Windows 任务 XML 与注册快照 |
+| `app.rs` | 服务命令、作用域、清理选项、帮助、权限命令、交互冲突 | macOS 内部宿主与原生服务入口 |
+| `infra.rs` | 日志脱敏、作用域、锁竞争、IPC 认证、目录保护与重定向拒绝 | Unix 信号/权限；Windows named pipe、ACL、OEM 编码 |
+| `system/define/credentials.rs` | 错误分类与脱敏、范围/目录绑定、代次失效与写入失败拦截 | Linux 会话门槛；macOS Keychain；Windows DPAPI |
+| `system/shared/flow/mod.rs` | 启停失败、回滚、先停后删、普通卸载与 purge 幂等性 | Linux systemd 链接；macOS 签名包；Windows 任务 XML 与快照 |
 
-目录重定向的公共测试通过平台文件中的测试辅助函数创建临时符号链接或 Windows junction。新增平台特例时说明对应的原生机制；某个平台已有的公共回归应加入公共套件，让其他平台执行同一个场景。
+目录重定向测试使用平台测试辅助函数（Unix 符号链接或 Windows junction），不得因权限原因在 Windows 上跳过公共保护测试。
 
-优先覆盖业务约束：未知状态不登录、切换 SSID 后不提交凭据、回滚保留原安装、purge 只处理所选范围、取消能退出日志跟随或 daemon。不要只测试实现的逐行复刻。
+### 4.2 隔离要求与检查命令
 
-后台结果有效性测试必须覆盖：读取超时后完成再注销、保持单任务、会话 ID 复用／提示 ABA、保存删除的预先失效和失败路径、Wi-Fi await 后的最后校验。Linux 的就绪及身份查询通过私有 `dbus-daemon` 上的 systemd/logind 假服务验证，不访问宿主总线。编译检查不等于 Windows/macOS 原生测试；私有 D-Bus 测试也不能替代真实桌面登录竞争测试。
+- 严禁在开发测试中访问真实校园网门户、切换 Wi-Fi、读取真实密钥环或操作真实系统服务；一律使用 loopback mock、临时目录、假凭据、模拟命令、私有 `dbus-daemon` 与隔离子进程。
+- `signal_child`、`provider_child`、`read_child` 为父测试显式调用的 `#[ignore]` 辅助用例，禁止对整个套件使用 `--include-ignored`。
+- Windows 本地 Temp 目录若被外部工具写入非信任 ACL，请指定仅当前用户与 SYSTEM 可写的隔离临时目录运行测试，不得放宽产品存储校验。
 
-开发验证不得访问真实校园门户、切换 Wi-Fi、读取真实密钥管理器或启停、安装、卸载实际服务。使用 loopback HTTP mock、临时目录、假凭据、模拟命令、私有 D-Bus 和隔离子进程。`cargo test` 需要本地 IPC 和子进程权限；沙箱拒绝这些权限时应在允许隔离测试的环境重跑，不能把环境拒绝当作通过，也不要改为调用真实系统服务。
-
-从仓库根目录运行：
+仓库根目录完整检查：
 
 ```sh
 cargo fmt --all -- --check
@@ -189,10 +190,20 @@ cargo check --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo build --release --locked --workspace
+cargo xtask check-boundaries
 git diff --check
 ```
 
-在已安装对应 target 的环境中进行跨平台静态检查：
+修改 `packaging/windows` 时额外运行：
+
+```sh
+cargo fmt --manifest-path packaging/windows/Cargo.toml -- --check
+cargo clippy --manifest-path packaging/windows/Cargo.toml --all-targets --locked -- -D warnings
+cargo test --manifest-path packaging/windows/Cargo.toml --locked
+rustfmt --edition 2024 --check packaging/windows/initialize.rs
+```
+
+跨平台静态检查（仅验证编译，不代表链接或运行验证）：
 
 ```sh
 rustup target add x86_64-pc-windows-gnu aarch64-apple-darwin
@@ -202,26 +213,11 @@ cargo check -p wlanlogin-cli --tests --locked --target x86_64-pc-windows-gnu
 cargo check -p wlanlogin-cli --tests --locked --target aarch64-apple-darwin
 ```
 
-这些命令检查编译，不链接或运行对应平台程序。验证 CLI 帮助可执行 `cargo run -p wlanlogin-cli -- --help`，不要将真实登录、注销或服务命令作为 smoke test。信号测试中的 `signal_child` 标记为 ignored，由父测试显式启动，不要用 `--include-ignored` 直接运行整个套件。
+安全 CLI smoke 检查仅使用 `--help` 与 `--version`。
 
-## 提交与审查
+## 5. 提交与 PR 规范
 
-每完成一个可验证的功能就创建一个提交。使用 Conventional Commits，例如 `refactor(app): separate login controller from terminal input`、`fix(system): preserve service definition on rollback`、`docs: document contributor toolchain`。
-
-提交前检查 staged diff，只包含本次功能；保留其他维护者未提交的修改。PR 描述说明具体行为变化、影响范围和已执行的验证。平台只有编译检查时明确写出，不把它描述为运行测试。命令、目录职责或运行行为变化时同步维护 README、本指南及英文 [AGENT.md](AGENT.md)。
-
-## Platform source boundaries
-
-Target-dependent implementation belongs in system/linux, system/macos, or system/windows. Elsewhere, target cfg, cfg_attr, and cfg! are permitted only for module selection and re-exports at the facades checked by cargo xtask check-boundaries. Test code follows the same rule; ordinary #[cfg(test)] remains allowed. Do not replace compile-time branches with runtime OS-name checks.
-
-Native infrastructure source under system/<platform>/runtime/infra is compiled exactly once through the infra.rs facade, preserving existing module identities and app -> system -> infra dependencies. These are source-selected modules, not reverse calls from infra into system. Shared state and protocol files remain under infra/control. Platform CLI assembly stays under app/bootstrap/<platform>/cli.rs, keeping Clap out of system contracts.
-
-Installation orchestration lives in each platform flow. Windows and Linux reuse byte-preserving backups from shared/services/payload.rs; macOS retains its signed bundle transaction. Native artifact readers and service dispatch live under each platform services directory. Do not put native API, XML encoding, ACL, or task-registration branches in shared workflows.
-
-Run targeted tests during each feature, then the complete workspace suite once at final integration. On Windows, if an external tool has added untrusted write access to the user Temp ACL, use an isolated temporary directory with the current user and SYSTEM as the only writers; never weaken product storage validation to accommodate a test environment. Cross-target checks verify compilation, not native runtime behavior.
-
-### Windows installation verification
-
-Task definitions use matching UTF-16 declarations, UTF-16LE bytes and a BOM. Native read paths also accept legacy UTF-8 files. Validate the staged file with TASK_VALIDATE_ONLY before stopping a task. Snapshot actual registration XML independently of on-disk leftovers; only restart a restored task if it was previously running or queued. Absence must be confirmed through the numeric COM query before treating failed deletion as complete. Retain both native XML and file backups after incomplete rollback. Installation success requires a registered, enabled, running or queued task.
-
-Windows schtasks/sc diagnostics are decoded at the native process boundary using the system OEM code page. PowerShell queries explicitly emit UTF-8 and keep that separate protocol. Do not change global console or system locale settings. Native XML validation and missing-task diagnostics tests are read-only; install/rollback tests use FakeRunner and isolated files.
+- 每个独立可验证的功能单独提交，提交信息遵循 Conventional Commits（如 `fix(portal): accept padded JSONP callbacks`、`refactor(app): separate login controller from terminal input`）。
+- 提交前核对 staged diff，仅包含本次改动，保留他人未提交工作。
+- PR 描述需列明行为变化、影响范围及实际执行的验证项（将编译检查与运行测试分开说明）。
+- 命令、行为、目录职责或维护规则变更时，同步更新 [README.md](README.md)、本指南与 [AGENT.md](AGENT.md)。

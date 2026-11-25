@@ -64,9 +64,6 @@ jobs:
             target: x86_64-pc-windows-msvc
             asset: wlanlogin-windows-x86_64.zip
             arch: x86_64
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            asset: wlanlogin-macos-x86_64.tar.gz
           - os: macos-15
             target: aarch64-apple-darwin
             asset: wlanlogin-macos-aarch64.tar.gz

@@ -89,7 +89,12 @@ pub(crate) mod tests {
         }
         fs::write(&plan.definition, &plan.content)?;
         fs::write(&plan.executable, "installed copy, never executed")?;
-        for name in ["preferences.json", "control.json", "daemon.log"] {
+        for name in [
+            "preferences.json",
+            "control.json",
+            "daemon.log",
+            crate::infra::config::CONFIG_FILE,
+        ] {
             fs::write(paths.config.join(name), "test data")?;
         }
         for name in ["daemon-endpoint.json", "daemon.sock"] {
@@ -193,7 +198,12 @@ pub(crate) mod tests {
         .await?;
         assert!(!plan.definition.exists() && !plan.executable.exists());
         assert!(paths.secrets.join("login.cred").exists());
-        for name in ["preferences.json", "control.json", "daemon.log"] {
+        for name in [
+            "preferences.json",
+            "control.json",
+            "daemon.log",
+            crate::infra::config::CONFIG_FILE,
+        ] {
             assert!(paths.config.join(name).exists());
         }
         Ok(())
