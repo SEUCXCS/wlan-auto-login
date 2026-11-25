@@ -3,7 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::time::Duration;
 use std::{
     io::{self, Write},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Once},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -293,6 +293,16 @@ impl LogBuffer {
         &self,
         level: tracing::Level,
     ) -> impl tracing::Subscriber + Send + Sync + 'static {
+        static INITIALIZE: Once = Once::new();
+        INITIALIZE.call_once(|| {
+            // With only one scoped subscriber, tracing can register a callsite
+            // on another test thread against that thread's disabled dispatcher.
+            // Keep a global subscriber registered so all callsites account for
+            // both the global dispatcher and the active captures.
+            let result =
+                tracing::subscriber::set_global_default(tracing::subscriber::NoSubscriber::new());
+            assert!(result.is_ok(), "protocol tests own the global subscriber");
+        });
         let writer = self.clone();
         tracing_subscriber::fmt()
             .without_time()
@@ -327,6 +337,13 @@ async fn portal_exchange_logging_filters_successes_and_redacts_secrets() -> Test
         ])
         .await?;
         let logs = LogBuffer::default();
+        let dispatch = tracing::Dispatch::new(logs.subscriber(level));
+        if level == tracing::Level::DEBUG {
+            // Exercise a request outside the capture before the captured one.
+            let (other_client, other_task) = server(vec![OFFLINE]).await?;
+            assert_eq!(other_client.status().await?.auth, AuthState::Offline);
+            tokio::time::timeout(Duration::from_secs(3), other_task).await??;
+        }
         let credentials = Credentials {
             username: "student".into(),
             password: "1234".into(),
@@ -334,7 +351,7 @@ async fn portal_exchange_logging_filters_successes_and_redacts_secrets() -> Test
         assert!(
             client
                 .login(&credentials, Line::Free2)
-                .with_subscriber(logs.subscriber(level))
+                .with_subscriber(dispatch)
                 .await
                 .is_err()
         );
