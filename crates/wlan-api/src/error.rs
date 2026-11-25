@@ -1,6 +1,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RequestOperation {
     Status,
+    PageConfig,
     Login,
     Logout,
 }
@@ -9,10 +10,37 @@ impl std::fmt::Display for RequestOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Status => "校园网状态查询",
+            Self::PageConfig => "校园网页面配置请求",
             Self::Login => "校园网登录请求",
             Self::Logout => "校园网注销请求",
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+pub enum ProtocolError {
+    #[error("Response body exceeds the size limit")]
+    BodyTooLarge,
+    #[error("Response body is not UTF-8")]
+    InvalidUtf8,
+    #[error("Received an HTML page instead of a portal response")]
+    UnexpectedHtml,
+    #[error("JSONP callback does not match the request")]
+    CallbackMismatch,
+    #[error("Invalid JSONP wrapper")]
+    InvalidJsonp,
+    #[error("Invalid JSON response")]
+    InvalidJson,
+    #[error("Expected a JSON object")]
+    ExpectedObject,
+    #[error("Missing result field")]
+    MissingResult,
+    #[error("Portal rejected the page configuration request")]
+    PageConfigRejected,
+    #[error("Missing program_index in page configuration")]
+    MissingProgramIndex,
+    #[error("Missing page_index in page configuration")]
+    MissingPageIndex,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -26,7 +54,7 @@ pub enum Error {
     #[error("网络请求失败: {0}")]
     Transport(#[source] reqwest::Error),
     #[error("门户响应格式不受支持: {0}")]
-    Protocol(&'static str),
+    Protocol(ProtocolError),
     #[error("门户响应中没有有效的设备 IPv4 地址")]
     MissingIp,
     #[error("门户已接受注销，但无法确认设备离线")]

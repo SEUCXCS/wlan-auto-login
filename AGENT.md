@@ -93,7 +93,7 @@ Waiting and failed reads both keep the daemon alive and preserve credentials. Ty
 
 Use `infra::error::{Error, Result, Context, Message}`. Define application error and event templates with `thiserror` in `infra/error/`; keep their text in English. Preserve source errors and portal error classifications. `anyhow` is confined to the error boundary for external errors.
 
-Use `tracing` with structured fields such as `error`, `scope`, and `retry_after_secs`. The shared formatter writes UTC RFC 3339 timestamps, severity, target, and fields. The default filter is `info`; `RUST_LOG` overrides it. CLI help and TUI labels may remain Chinese. Never log secrets, authentication query strings, or raw portal payloads.
+Use `tracing` with structured fields such as `error`, `scope`, and `retry_after_secs`. The shared formatter writes UTC RFC 3339 timestamps, severity, target, and fields. Load `log.level` from the selected scope's `config.json` alongside `daemon.log`. The default is `info` and `RUST_LOG` overrides the configured filter. Portal exchanges use endpoint-specific targets, with successful exchanges at `debug` and failed exchanges at `warn`. CLI help and TUI labels may remain Chinese. Never log secrets, authentication query strings, or raw portal payloads.
 
 Daemon checks return outcomes to the runtime, which logs the first result, changes and recovery after failures at `info`, with `outcome` and `next_check_secs`. Log when a retry starts without repeating unchanged waiting states on every poll. On macOS, SSID and BSSID can both be redacted by Location access controls; use interface mode to detect a connected interface with an unreadable name and return an error so retries remain visible and credentials stay protected.
 

@@ -1,4 +1,5 @@
 //! Shared application operations for command-line and terminal interfaces.
+pub(crate) mod config;
 pub(crate) mod daemon;
 pub(crate) mod login;
 pub(crate) mod logout;

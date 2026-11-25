@@ -131,7 +131,12 @@ async fn uninstall_with(
     hooks.remove_payload(plan)?;
 
     if purge {
-        for name in ["preferences.json", "control.json", "daemon.log"] {
+        for name in [
+            "preferences.json",
+            "control.json",
+            "daemon.log",
+            crate::infra::config::CONFIG_FILE,
+        ] {
             cleanup::remove_file(&paths.config.join(name))?;
         }
         for name in ["daemon-endpoint.json", "daemon.sock"] {

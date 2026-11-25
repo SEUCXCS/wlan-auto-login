@@ -2,9 +2,10 @@
 //!
 //! No credential persistence, network monitoring or automatic retries happen here.
 mod client;
+mod diagnostics;
 mod error;
 mod types;
 
 pub use client::{Client, PortalConfig};
-pub use error::{Error, RequestOperation};
+pub use error::{Error, ProtocolError, RequestOperation};
 pub use types::{AuthState, Credentials, Line, LoginOutcome, Status};

@@ -1,4 +1,7 @@
-use crate::{AuthState, Credentials, Error, Line, LoginOutcome, RequestOperation, Status};
+use crate::{
+    AuthState, Credentials, Error, Line, LoginOutcome, ProtocolError, RequestOperation, Status,
+    diagnostics::Exchange,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value;
 use std::{
@@ -62,14 +65,19 @@ impl Client {
     }
 
     pub async fn status(&self) -> Result<Status, Error> {
-        let response = self
-            .request(
-                RequestOperation::Status,
-                &self.config.status_url,
-                &[("callback", CALLBACK.to_owned()), ("v", nonce())],
-            )
-            .await?;
-        parse_status(&response).map_err(|error| error.during(RequestOperation::Status))
+        self.status_for(RequestOperation::Status).await
+    }
+
+    async fn status_for(&self, operation: RequestOperation) -> Result<Status, Error> {
+        self.request(
+            RequestOperation::Status,
+            operation,
+            &self.config.status_url,
+            &[("callback", CALLBACK.to_owned()), ("v", nonce())],
+            &[],
+            parse_status,
+        )
+        .await
     }
 
     pub async fn login(
@@ -81,14 +89,13 @@ impl Client {
         if username.is_empty() || credentials.password.is_empty() {
             return Err(Error::EmptyCredentials);
         }
-        let status = self.status().await?;
+        let status = self.status_for(RequestOperation::Login).await?;
         if status.auth == AuthState::Online {
             return Ok(LoginOutcome::AlreadyOnline);
         }
         let page = self
-            .load_page(&status, &status.vlan, &status.ipv6)
-            .await
-            .map_err(|error| error.during(RequestOperation::Login))?;
+            .load_page(RequestOperation::Login, &status, &status.vlan, &status.ipv6)
+            .await?;
         let prefix = if page.account_prefix { ",0," } else { "" };
         let account = Zeroizing::new(format!("{prefix}{username}{}", line.suffix()));
         let encoded_account = Zeroizing::new(BASE64.encode(account.as_bytes()));
@@ -129,9 +136,6 @@ impl Client {
             ("v", &nonce()),
             ("lang", "zh"),
         ];
-        let result = self
-            .request(RequestOperation::Login, &self.config.login_url, &query)
-            .await?;
         let secrets = [
             encoded_account.as_str(),
             encoded_password.as_str(),
@@ -139,13 +143,21 @@ impl Client {
             credentials.password.as_str(),
             username,
         ];
-        check_action(&result, &secrets)
-            .map(|()| LoginOutcome::Authenticated)
-            .map_err(|error| error.during(RequestOperation::Login))
+        self.request(
+            RequestOperation::Login,
+            RequestOperation::Login,
+            &self.config.login_url,
+            &query,
+            &secrets,
+            |value| check_action(value, &secrets),
+        )
+        .await
+        .map(|()| LoginOutcome::Authenticated)
     }
 
     async fn load_page(
         &self,
+        operation: RequestOperation,
         status: &Status,
         vlan: &str,
         ipv6: &str,
@@ -169,35 +181,19 @@ impl Client {
             ("v", nonce()),
             ("lang", "zh".into()),
         ];
-        let response = self
-            .send_request(&self.config.page_config_url, &query)
-            .await?;
-        if numeric_field(&response, "code") == Some(0) {
-            return Err(Error::Protocol("门户页面配置加载失败"));
-        }
-        let data = &response["data"];
-        Ok(PortalPage {
-            program_index: text_field(data, &["program_index"])
-                .ok_or(Error::Protocol("门户页面配置缺少 program_index"))?,
-            page_index: text_field(data, &["page_index"])
-                .ok_or(Error::Protocol("门户页面配置缺少 page_index"))?,
-            // The captured campus requests use the account prefix.
-            account_prefix: numeric_field(data, "account_prefix") != Some(0),
-            enable_r3: numeric_field(data, "enable_r3")
-                .unwrap_or_default()
-                .to_string(),
-            rcn: text_field(data, &["rcn"]).unwrap_or_default(),
-            ac_logout: numeric_field(data, "ac_logout")
-                .unwrap_or_default()
-                .to_string(),
-            register_mode: numeric_field(data, "register_mode")
-                .unwrap_or_default()
-                .to_string(),
-        })
+        self.request(
+            RequestOperation::PageConfig,
+            operation,
+            &self.config.page_config_url,
+            &query,
+            &[],
+            parse_page,
+        )
+        .await
     }
 
     pub async fn logout(&self) -> Result<(), Error> {
-        let status = self.status().await?;
+        let status = self.status_for(RequestOperation::Logout).await?;
         if status.auth == AuthState::Offline {
             return Ok(());
         }
@@ -215,9 +211,8 @@ impl Client {
             &status.ipv6
         };
         let page = self
-            .load_page(&status, vlan, ipv6)
-            .await
-            .map_err(|error| error.during(RequestOperation::Logout))?;
+            .load_page(RequestOperation::Logout, &status, vlan, ipv6)
+            .await?;
         let ip = status.ip.to_string();
         let mac = portal_mac(&status.mac);
         let query = [
@@ -242,12 +237,17 @@ impl Client {
             ("v", &nonce()),
             ("lang", "zh"),
         ];
-        let response = self
-            .request(RequestOperation::Logout, &self.config.logout_url, &query)
-            .await?;
-        check_action(&response, &[]).map_err(|error| error.during(RequestOperation::Logout))?;
+        self.request(
+            RequestOperation::Logout,
+            RequestOperation::Logout,
+            &self.config.logout_url,
+            &query,
+            &[],
+            |value| check_action(value, &[]),
+        )
+        .await?;
 
-        match self.status().await {
+        match self.status_for(RequestOperation::Logout).await {
             Ok(after) if after.ip == status.ip && after.auth == AuthState::Offline => Ok(()),
             Ok(_) => Err(Error::LogoutUnconfirmed { source: None }),
             Err(error) => Err(Error::LogoutUnconfirmed {
@@ -256,34 +256,85 @@ impl Client {
         }
     }
 
-    async fn request(
+    async fn request<T>(
         &self,
+        endpoint: RequestOperation,
         operation: RequestOperation,
         url: &str,
         query: &impl serde::Serialize,
-    ) -> Result<Value, Error> {
-        self.send_request(url, query)
+        secrets: &[&str],
+        interpret: impl FnOnce(&Value) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let mut exchange = Exchange::new(endpoint, operation, secrets);
+        let result = self
+            .send_request(url, query, &mut exchange)
             .await
-            .map_err(|error| error.during(operation))
+            .and_then(|value| interpret(&value));
+        exchange.finish(result.as_ref().err());
+        result.map_err(|error| error.during(endpoint))
     }
 
-    async fn send_request(&self, url: &str, query: &impl serde::Serialize) -> Result<Value, Error> {
-        let mut response = self
-            .http
-            .get(url)
-            .query(query)
-            .send()
-            .await?
-            .error_for_status()?;
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
-            if body.len() + chunk.len() > MAX_RESPONSE {
-                return Err(Error::Protocol("响应过大"));
-            }
-            body.extend_from_slice(&chunk);
+    async fn send_request(
+        &self,
+        url: &str,
+        query: &impl serde::Serialize,
+        exchange: &mut Exchange<'_>,
+    ) -> Result<Value, Error> {
+        let request = self.http.get(url).query(query).build()?;
+        exchange.request(&request);
+        let mut response = self.http.execute(request).await?;
+        exchange.response(&response);
+        let http_error = response.error_for_status_ref().err().map(Error::from);
+        let parsed = read_payload(&mut response, exchange).await;
+        if let Some(error) = http_error {
+            return Err(error);
         }
-        parse_jsonp(std::str::from_utf8(&body).map_err(|_| Error::Protocol("响应不是 UTF-8"))?)
+        parsed
     }
+}
+
+async fn read_payload(
+    response: &mut reqwest::Response,
+    exchange: &mut Exchange<'_>,
+) -> Result<Value, Error> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        exchange.received_bytes(chunk.len());
+        if body.len() + chunk.len() > MAX_RESPONSE {
+            return Err(Error::Protocol(ProtocolError::BodyTooLarge));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let text =
+        std::str::from_utf8(&body).map_err(|_| Error::Protocol(ProtocolError::InvalidUtf8))?;
+    let value = parse_jsonp(text)?;
+    exchange.payload(&value);
+    Ok(value)
+}
+
+fn parse_page(response: &Value) -> Result<PortalPage, Error> {
+    if numeric_field(response, "code") == Some(0) {
+        return Err(Error::Protocol(ProtocolError::PageConfigRejected));
+    }
+    let data = &response["data"];
+    Ok(PortalPage {
+        program_index: text_field(data, &["program_index"])
+            .ok_or(Error::Protocol(ProtocolError::MissingProgramIndex))?,
+        page_index: text_field(data, &["page_index"])
+            .ok_or(Error::Protocol(ProtocolError::MissingPageIndex))?,
+        // The captured campus requests use the account prefix.
+        account_prefix: numeric_field(data, "account_prefix") != Some(0),
+        enable_r3: numeric_field(data, "enable_r3")
+            .unwrap_or_default()
+            .to_string(),
+        rcn: text_field(data, &["rcn"]).unwrap_or_default(),
+        ac_logout: numeric_field(data, "ac_logout")
+            .unwrap_or_default()
+            .to_string(),
+        register_mode: numeric_field(data, "register_mode")
+            .unwrap_or_default()
+            .to_string(),
+    })
 }
 
 fn portal_mac(mac: &str) -> String {
@@ -301,22 +352,26 @@ fn nonce() -> String {
 
 fn parse_jsonp(body: &str) -> Result<Value, Error> {
     let body = body.trim().trim_start_matches('\u{feff}');
+    if body.starts_with('<') {
+        return Err(Error::Protocol(ProtocolError::UnexpectedHtml));
+    }
     let json = if body.starts_with('{') {
         body
     } else {
         let wrapped = body
             .strip_prefix(CALLBACK)
-            .ok_or(Error::Protocol("JSONP 回调不匹配"))?
+            .ok_or(Error::Protocol(ProtocolError::CallbackMismatch))?
             .trim_start();
         wrapped
             .strip_prefix('(')
             .and_then(|v| v.trim_end_matches(';').trim_end().strip_suffix(')'))
-            .ok_or(Error::Protocol("JSONP 包装无效"))?
+            .ok_or(Error::Protocol(ProtocolError::InvalidJsonp))?
             .trim()
     };
-    let value: Value = serde_json::from_str(json).map_err(|_| Error::Protocol("JSON 无效"))?;
+    let value: Value =
+        serde_json::from_str(json).map_err(|_| Error::Protocol(ProtocolError::InvalidJson))?;
     if !value.is_object() {
-        return Err(Error::Protocol("响应必须为对象"));
+        return Err(Error::Protocol(ProtocolError::ExpectedObject));
     }
     Ok(value)
 }
@@ -373,7 +428,7 @@ fn check_action(value: &Value, secrets: &[&str]) -> Result<(), Error> {
         return Ok(());
     }
     if value.get("result").is_none() {
-        return Err(Error::Protocol("缺少 result 字段"));
+        return Err(Error::Protocol(ProtocolError::MissingResult));
     }
     // Codes come from a42.js portal_login_err, not from the status endpoint.
     let ret_code = numeric_field(value, "ret_code");
@@ -487,7 +542,7 @@ mod tests {
         ] {
             let error = check_action(&serde_json::json!({"result":0,"ret_code":code}), &[])
                 .err()
-                .ok_or(Error::Protocol("expected rejection"))?
+                .ok_or(Error::Protocol(ProtocolError::MissingResult))?
                 .during(RequestOperation::Login);
             assert_eq!(error.is_credential_rejected(), rejected);
             let chain = format!("{error:?}");
