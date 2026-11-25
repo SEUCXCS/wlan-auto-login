@@ -11,7 +11,6 @@ use std::{
 use zeroize::Zeroizing;
 
 const CALLBACK: &str = "dr1";
-const PADDED_PORTAL_CALLBACK: &str = "dr0001";
 const MAX_RESPONSE: usize = 64 * 1024;
 const PAGE_JS_VERSION: &str = "4.X";
 const ACTION_JS_VERSION: &str = "4.5.1";
@@ -268,7 +267,7 @@ impl Client {
     ) -> Result<T, Error> {
         let mut exchange = Exchange::new(endpoint, operation, secrets);
         let result = self
-            .send_request(endpoint, url, query, &mut exchange)
+            .send_request(url, query, &mut exchange)
             .await
             .and_then(|value| interpret(&value));
         exchange.finish(result.as_ref().err());
@@ -277,7 +276,6 @@ impl Client {
 
     async fn send_request(
         &self,
-        endpoint: RequestOperation,
         url: &str,
         query: &impl serde::Serialize,
         exchange: &mut Exchange<'_>,
@@ -287,7 +285,7 @@ impl Client {
         let mut response = self.http.execute(request).await?;
         exchange.response(&response);
         let http_error = response.error_for_status_ref().err().map(Error::from);
-        let parsed = read_payload(&mut response, exchange, endpoint).await;
+        let parsed = read_payload(&mut response, exchange).await;
         if let Some(error) = http_error {
             return Err(error);
         }
@@ -298,7 +296,6 @@ impl Client {
 async fn read_payload(
     response: &mut reqwest::Response,
     exchange: &mut Exchange<'_>,
-    endpoint: RequestOperation,
 ) -> Result<Value, Error> {
     let mut body = Vec::new();
     loop {
@@ -321,7 +318,7 @@ async fn read_payload(
     exchange.body(&body, true);
     let text =
         std::str::from_utf8(&body).map_err(|_| Error::Protocol(ProtocolError::InvalidUtf8))?;
-    parse_jsonp(text, endpoint)
+    parse_jsonp(text)
 }
 
 fn parse_page(response: &Value) -> Result<PortalPage, Error> {
@@ -362,7 +359,7 @@ fn nonce() -> String {
         .to_string()
 }
 
-fn parse_jsonp(body: &str, endpoint: RequestOperation) -> Result<Value, Error> {
+fn parse_jsonp(body: &str) -> Result<Value, Error> {
     let body = body.trim().trim_start_matches('\u{feff}');
     if body.starts_with('<') {
         return Err(Error::Protocol(ProtocolError::UnexpectedHtml));
@@ -370,21 +367,13 @@ fn parse_jsonp(body: &str, endpoint: RequestOperation) -> Result<Value, Error> {
     let json = if body.starts_with('{') {
         body
     } else {
-        let (callback, wrapped) = body
-            .split_once('(')
-            .ok_or(Error::Protocol(ProtocolError::CallbackMismatch))?;
-        let callback = callback.trim_end();
-        // The new portal pads the numeric suffix of dr1 to four digits.
-        // The status endpoint echoes the original callback without padding.
-        if callback != CALLBACK
-            && !(endpoint != RequestOperation::Status && callback == PADDED_PORTAL_CALLBACK)
-        {
-            return Err(Error::Protocol(ProtocolError::CallbackMismatch));
-        }
+        let wrapped = body
+            .strip_prefix(CALLBACK)
+            .ok_or(Error::Protocol(ProtocolError::CallbackMismatch))?
+            .trim_start();
         wrapped
-            .trim_end_matches(';')
-            .trim_end()
-            .strip_suffix(')')
+            .strip_prefix('(')
+            .and_then(|v| v.trim_end_matches(';').trim_end().strip_suffix(')'))
             .ok_or(Error::Protocol(ProtocolError::InvalidJsonp))?
             .trim()
     };
@@ -504,17 +493,10 @@ mod tests {
 
     #[test]
     fn jsonp_is_parsed_without_executing_code() -> Result<(), Error> {
-        let status = RequestOperation::Status;
-        let config = RequestOperation::PageConfig;
-        assert_eq!(parse_jsonp("dr1({\"result\":1});", status)?["result"], 1);
-        assert_eq!(parse_jsonp("dr1({\"code\":1});", config)?["code"], 1);
-        assert_eq!(parse_jsonp("dr0001({\"code\":1});", config)?["code"], 1);
-        assert!(parse_jsonp("dr0001({\"result\":1});", status).is_err());
-        assert!(parse_jsonp("dr1001({\"code\":1});", config).is_err());
-        assert!(parse_jsonp("dr0002({\"code\":1});", config).is_err());
-        assert!(parse_jsonp("dr1({});alert(1)", status).is_err());
-        assert!(parse_jsonp("dr0001({});alert(1)", config).is_err());
-        assert!(parse_jsonp("dr1([])", status).is_err());
+        assert_eq!(parse_jsonp("dr1({\"result\":1});")?["result"], 1);
+        assert!(parse_jsonp("dr2({\"result\":1});").is_err());
+        assert!(parse_jsonp("dr1({});alert(1)").is_err());
+        assert!(parse_jsonp("dr1([])").is_err());
         Ok(())
     }
 
