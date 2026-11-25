@@ -1,19 +1,24 @@
 use crate::{AuthState, Credentials, Error, Line, LoginOutcome, RequestOperation, Status};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value;
 use std::{
     net::Ipv4Addr,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use zeroize::Zeroizing;
 
 const CALLBACK: &str = "dr1";
 const MAX_RESPONSE: usize = 64 * 1024;
+const PAGE_JS_VERSION: &str = "4.X";
+const ACTION_JS_VERSION: &str = "4.5.1";
+const ZERO_MAC: &str = "000000000000";
 
 #[derive(Clone, Debug)]
 pub struct PortalConfig {
     pub status_url: String,
-    pub action_url: String,
-    pub ac_ip: String,
-    pub ac_name: String,
+    pub page_config_url: String,
+    pub login_url: String,
+    pub logout_url: String,
     pub timeout: Duration,
 }
 
@@ -21,9 +26,9 @@ impl Default for PortalConfig {
     fn default() -> Self {
         Self {
             status_url: "http://172.18.254.6/drcom/chkstatus".into(),
-            action_url: "http://172.18.254.6:801/eportal/".into(),
-            ac_ip: "172.18.255.6".into(),
-            ac_name: "NAS".into(),
+            page_config_url: "http://172.18.254.6:803/eportal/portal/page/loadConfig".into(),
+            login_url: "http://172.18.254.6:803/eportal/portal/login".into(),
+            logout_url: "http://172.18.254.6:803/eportal/portal/logout".into(),
             timeout: Duration::from_secs(8),
         }
     }
@@ -33,6 +38,16 @@ impl Default for PortalConfig {
 pub struct Client {
     http: reqwest::Client,
     config: PortalConfig,
+}
+
+struct PortalPage {
+    program_index: String,
+    page_index: String,
+    account_prefix: bool,
+    enable_r3: String,
+    rcn: String,
+    ac_logout: String,
+    register_mode: String,
 }
 
 impl Client {
@@ -62,95 +77,197 @@ impl Client {
         credentials: &Credentials,
         line: Line,
     ) -> Result<LoginOutcome, Error> {
-        if credentials.username.trim().is_empty() || credentials.password.is_empty() {
+        let username = credentials.username.trim();
+        if username.is_empty() || credentials.password.is_empty() {
             return Err(Error::EmptyCredentials);
         }
         let status = self.status().await?;
         if status.auth == AuthState::Online {
             return Ok(LoginOutcome::AlreadyOnline);
         }
-        let mut query = self.common_query("login", &status);
-        query.extend([
+        let page = self
+            .load_page(&status, &status.vlan, &status.ipv6)
+            .await
+            .map_err(|error| error.during(RequestOperation::Login))?;
+        let prefix = if page.account_prefix { ",0," } else { "" };
+        let account = Zeroizing::new(format!("{prefix}{username}{}", line.suffix()));
+        let encoded_account = Zeroizing::new(BASE64.encode(account.as_bytes()));
+        let encoded_password = Zeroizing::new(BASE64.encode(credentials.password.as_bytes()));
+        let ip = status.ip.to_string();
+        let mac = portal_mac(&status.mac);
+        let query = [
+            ("callback", CALLBACK),
+            ("login_method", "1"),
+            ("is_base64encode", "1"),
+            ("user_account", encoded_account.as_str()),
+            ("user_password", encoded_password.as_str()),
+            ("wlan_user_ip", ip.as_str()),
+            ("wlan_user_ipv6", status.ipv6.as_str()),
+            ("wlan_user_mac", mac.as_str()),
+            ("wlan_vlan_id", status.vlan.as_str()),
+            ("wlan_ac_ip", status.ac_ip.as_deref().unwrap_or_default()),
             (
-                "user_account",
-                format!("{}{}", credentials.username.trim(), line.suffix()),
+                "wlan_ac_name",
+                status.ac_name.as_deref().unwrap_or_default(),
             ),
-            ("user_password", credentials.password.clone()),
-        ]);
+            ("authex_enable", ""),
+            ("jsVersion", ACTION_JS_VERSION),
+            ("uuid", ""),
+            ("terminal_type", "1"),
+            ("lang", "zh-cn"),
+            (
+                "user_agent",
+                concat!("wlanlogin/", env!("CARGO_PKG_VERSION")),
+            ),
+            ("enable_r3", page.enable_r3.as_str()),
+            ("mac_type", "0"),
+            ("rcn", page.rcn.as_str()),
+            ("operate", "portal_login"),
+            ("business_type", "1"),
+            ("program_index", page.program_index.as_str()),
+            ("page_index", page.page_index.as_str()),
+            ("v", &nonce()),
+            ("lang", "zh"),
+        ];
         let result = self
-            .request(RequestOperation::Login, &self.config.action_url, &query)
-            .await;
-        // Scrub the password from our owned query buffer once the request finishes.
-        use zeroize::Zeroize;
-        for (key, value) in &mut query {
-            if *key == "user_password" {
-                value.zeroize();
-            }
-        }
-        check_action(&result?, Some(credentials))
+            .request(RequestOperation::Login, &self.config.login_url, &query)
+            .await?;
+        let secrets = [
+            encoded_account.as_str(),
+            encoded_password.as_str(),
+            account.as_str(),
+            credentials.password.as_str(),
+            username,
+        ];
+        check_action(&result, &secrets)
             .map(|()| LoginOutcome::Authenticated)
             .map_err(|error| error.during(RequestOperation::Login))
     }
 
-    pub async fn logout(&self) -> Result<(), Error> {
-        let status = self.status().await?;
-        let mut query = self.common_query("logout", &status);
-        query.extend([
-            ("user_account", "drcom".into()),
-            ("user_password", "123".into()),
-            ("ac_logout", "0".into()),
-            ("register_mode", "1".into()),
-            ("wlan_vlan_id", status.vlan.clone()),
-        ]);
-        check_action(
-            &self
-                .request(RequestOperation::Logout, &self.config.action_url, &query)
-                .await?,
-            None,
-        )
-        .map_err(|error| error.during(RequestOperation::Logout))
-    }
-
-    fn common_query(&self, action: &str, status: &Status) -> Vec<(&'static str, String)> {
-        vec![
-            ("c", "Portal".into()),
-            ("a", action.into()),
+    async fn load_page(
+        &self,
+        status: &Status,
+        vlan: &str,
+        ipv6: &str,
+    ) -> Result<PortalPage, Error> {
+        let query = [
             ("callback", CALLBACK.into()),
-            ("login_method", "1".into()),
-            ("wlan_user_ip", status.ip.to_string()),
-            ("wlan_user_ipv6", status.ipv6.clone()),
-            ("wlan_user_mac", status.mac.clone()),
+            ("program_index", String::new()),
+            ("page_index", String::new()),
+            ("wlan_vlan_id", vlan.into()),
+            ("wlan_user_ip", BASE64.encode(status.ip.to_string())),
+            ("wlan_user_ipv6", BASE64.encode(ipv6)),
+            ("wlan_user_ssid", String::new()),
+            ("wlan_user_areaid", String::new()),
             (
                 "wlan_ac_ip",
-                status
-                    .ac_ip
-                    .clone()
-                    .unwrap_or_else(|| self.config.ac_ip.clone()),
+                BASE64.encode(status.ac_ip.as_deref().unwrap_or_default()),
             ),
+            ("wlan_ap_mac", ZERO_MAC.into()),
+            ("gw_id", ZERO_MAC.into()),
+            ("jsVersion", PAGE_JS_VERSION.into()),
+            ("v", nonce()),
+            ("lang", "zh".into()),
+        ];
+        let response = self
+            .send_request(&self.config.page_config_url, &query)
+            .await?;
+        if numeric_field(&response, "code") == Some(0) {
+            return Err(Error::Protocol("门户页面配置加载失败"));
+        }
+        let data = &response["data"];
+        Ok(PortalPage {
+            program_index: text_field(data, &["program_index"])
+                .ok_or(Error::Protocol("门户页面配置缺少 program_index"))?,
+            page_index: text_field(data, &["page_index"])
+                .ok_or(Error::Protocol("门户页面配置缺少 page_index"))?,
+            // The captured campus requests use the account prefix.
+            account_prefix: numeric_field(data, "account_prefix") != Some(0),
+            enable_r3: numeric_field(data, "enable_r3")
+                .unwrap_or_default()
+                .to_string(),
+            rcn: text_field(data, &["rcn"]).unwrap_or_default(),
+            ac_logout: numeric_field(data, "ac_logout")
+                .unwrap_or_default()
+                .to_string(),
+            register_mode: numeric_field(data, "register_mode")
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+
+    pub async fn logout(&self) -> Result<(), Error> {
+        let status = self.status().await?;
+        if status.auth == AuthState::Offline {
+            return Ok(());
+        }
+
+        // The campus portal's online page uses VLAN 1 and :: for the
+        // zero-VLAN IPv4 session. Preserve explicit device context otherwise.
+        let vlan = if status.vlan == "0" {
+            "1"
+        } else {
+            &status.vlan
+        };
+        let ipv6 = if status.ipv6.is_empty() {
+            "::"
+        } else {
+            &status.ipv6
+        };
+        let page = self
+            .load_page(&status, vlan, ipv6)
+            .await
+            .map_err(|error| error.during(RequestOperation::Logout))?;
+        let ip = status.ip.to_string();
+        let mac = portal_mac(&status.mac);
+        let query = [
+            ("callback", CALLBACK),
+            ("login_method", "1"),
+            ("user_account", "drcom"),
+            ("user_password", "123"),
+            ("ac_logout", page.ac_logout.as_str()),
+            ("register_mode", page.register_mode.as_str()),
+            ("wlan_user_ip", ip.as_str()),
+            ("wlan_user_ipv6", ipv6),
+            ("wlan_vlan_id", vlan),
+            ("wlan_user_mac", mac.as_str()),
+            ("wlan_ac_ip", status.ac_ip.as_deref().unwrap_or_default()),
             (
                 "wlan_ac_name",
-                status
-                    .ac_name
-                    .clone()
-                    .unwrap_or_else(|| self.config.ac_name.clone()),
+                status.ac_name.as_deref().unwrap_or_default(),
             ),
-            ("jsVersion", "3.3.3".into()),
-            ("v", nonce()),
-        ]
+            ("jsVersion", ACTION_JS_VERSION),
+            ("program_index", page.program_index.as_str()),
+            ("page_index", page.page_index.as_str()),
+            ("v", &nonce()),
+            ("lang", "zh"),
+        ];
+        let response = self
+            .request(RequestOperation::Logout, &self.config.logout_url, &query)
+            .await?;
+        check_action(&response, &[]).map_err(|error| error.during(RequestOperation::Logout))?;
+
+        match self.status().await {
+            Ok(after) if after.ip == status.ip && after.auth == AuthState::Offline => Ok(()),
+            Ok(_) => Err(Error::LogoutUnconfirmed { source: None }),
+            Err(error) => Err(Error::LogoutUnconfirmed {
+                source: Some(Box::new(error)),
+            }),
+        }
     }
 
     async fn request(
         &self,
         operation: RequestOperation,
         url: &str,
-        query: &[(&str, String)],
+        query: &impl serde::Serialize,
     ) -> Result<Value, Error> {
         self.send_request(url, query)
             .await
             .map_err(|error| error.during(operation))
     }
 
-    async fn send_request(&self, url: &str, query: &[(&str, String)]) -> Result<Value, Error> {
+    async fn send_request(&self, url: &str, query: &impl serde::Serialize) -> Result<Value, Error> {
         let mut response = self
             .http
             .get(url)
@@ -167,6 +284,11 @@ impl Client {
         }
         parse_jsonp(std::str::from_utf8(&body).map_err(|_| Error::Protocol("响应不是 UTF-8"))?)
     }
+}
+
+fn portal_mac(mac: &str) -> String {
+    let mac = mac.replace(['-', ':'], "");
+    if mac.is_empty() { ZERO_MAC.into() } else { mac }
 }
 
 fn nonce() -> String {
@@ -233,8 +355,8 @@ fn parse_status(value: &Value) -> Result<Status, Error> {
         auth,
         ip,
         ipv6: text_field(value, &["wlan_user_ipv6", "myv6ip"]).unwrap_or_default(),
-        mac: text_field(value, &["wlan_user_mac", "mac"]).unwrap_or_default(),
-        vlan: text_field(value, &["wlan_vlan_id", "vlan"]).unwrap_or_else(|| "1".into()),
+        mac: text_field(value, &["wlan_user_mac", "mac", "ss4"]).unwrap_or_default(),
+        vlan: text_field(value, &["wlan_vlan_id", "vlan", "vid"]).unwrap_or_else(|| "1".into()),
         ac_ip: text_field(value, &["wlan_ac_ip", "ac_ip"]),
         ac_name: text_field(value, &["wlan_ac_name", "acname"]),
     })
@@ -246,7 +368,7 @@ fn numeric_field(value: &Value, name: &str) -> Option<i64> {
         .or_else(|| value[name].as_str()?.parse().ok())
 }
 
-fn check_action(value: &Value, credentials: Option<&Credentials>) -> Result<(), Error> {
+fn check_action(value: &Value, secrets: &[&str]) -> Result<(), Error> {
     if value["result"] == 1 || value["result"] == "1" || value["result"] == "ok" {
         return Ok(());
     }
@@ -287,11 +409,9 @@ fn check_action(value: &Value, credentials: Option<&Credentials>) -> Result<(), 
         || ["password", "密码", "账号不存在", "account not exist"]
             .iter()
             .any(|word| lowered.contains(word));
-    if let Some(credentials) = credentials {
-        for secret in [&credentials.password, &credentials.username] {
-            if !secret.is_empty() {
-                message = message.replace(secret.as_str(), "<redacted>");
-            }
+    for secret in secrets {
+        if !secret.is_empty() {
+            message = message.replace(secret, "<redacted>");
         }
     }
     // Do not pass terminal control sequences from the portal into CLI output.
@@ -365,7 +485,7 @@ mod tests {
             (998, "参数不完整", false),
             (9999, "服务器未提供错误说明", false),
         ] {
-            let error = check_action(&serde_json::json!({"result":0,"ret_code":code}), None)
+            let error = check_action(&serde_json::json!({"result":0,"ret_code":code}), &[])
                 .err()
                 .ok_or(Error::Protocol("expected rejection"))?
                 .during(RequestOperation::Login);
@@ -386,7 +506,7 @@ mod tests {
         };
         let result = check_action(
             &serde_json::json!({"result":0,"msg":"password p@ssword for student invalid"}),
-            Some(&c),
+            &[&c.password, &c.username],
         );
         assert!(matches!(
             &result,

@@ -26,6 +26,8 @@ enum Summary {
     Protocol,
     #[error("Portal response has no valid device IPv4 address")]
     MissingIp,
+    #[error("Portal accepted logout, but the device's offline status could not be confirmed")]
+    LogoutUnconfirmed,
     #[error("Username and password must not be empty")]
     EmptyCredentials,
     #[error("Credentials rejected")]
@@ -108,6 +110,7 @@ impl Summary {
             Error::Transport(_) => Self::Transport,
             Error::Protocol(_) => Self::Protocol,
             Error::MissingIp => Self::MissingIp,
+            Error::LogoutUnconfirmed { .. } => Self::LogoutUnconfirmed,
             Error::EmptyCredentials => Self::EmptyCredentials,
             Error::Rejected {
                 message,
@@ -173,13 +176,19 @@ mod tests {
             let base = format!("http://{}", listener.local_addr()?);
             let client = Client::new(PortalConfig {
                 status_url: format!("{base}/status"),
-                action_url: format!("{base}/action"),
+                page_config_url: format!("{base}/page/loadConfig"),
+                logout_url: format!("{base}/logout"),
                 timeout: Duration::from_secs(1),
                 ..PortalConfig::default()
             })?;
             let server = async {
                 for body in [
                     r#"dr1({"result":1,"v46ip":"10.0.0.12"});"#.into(),
+                    include_str!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../wlan-api/tests/fixtures/login-page-config.jsonp"
+                    ))
+                    .into(),
                     format!(
                         r#"dr1({{"result":0,"ret_code":{code},"msg":"never-log-this\nforged"}});"#
                     ),

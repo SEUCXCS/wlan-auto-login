@@ -393,6 +393,8 @@ wlanlogin login --interactive --remember-me
 
 程序只在识别到 `Student_CX` 时提交认证。其他网络或无法读取 Wi-Fi 名称（SSID）时，程序仍可离线保存凭据。
 
+提交认证前，程序会从校内门户读取页面配置，再使用新版 ePortal 登录接口。详见[登录协议](docs/eportal-login.md)。
+
 已认证在线时，`login` 提示已在线，不重复提交凭据。本次填写的账号和线路不会因此视为已通过认证。`--remember-me` 仍可保存新凭据供后续使用。
 
 如果要切换账号或线路，先注销，再登录：

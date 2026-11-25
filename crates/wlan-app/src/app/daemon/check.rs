@@ -218,6 +218,10 @@ mod tests {
         ));
         const OFFLINE: &str = r#"dr1({"result":0,"v46ip":"10.0.0.12"});"#;
         const UNKNOWN: &str = r#"dr1({"result":99,"v46ip":"10.0.0.12"});"#;
+        const PAGE_CONFIG: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../wlan-api/tests/fixtures/login-page-config.jsonp"
+        ));
         for (responses, reads_secret, seconds, blocked, outcome) in [
             (vec![ONLINE], false, 240, false, Outcome::Online),
             (vec![UNKNOWN], false, 30, false, Outcome::UnknownPortalState),
@@ -241,14 +245,19 @@ mod tests {
             ),
             (vec![OFFLINE, ONLINE], true, 240, false, Outcome::Online),
             (
-                vec![OFFLINE, OFFLINE, r#"dr1({"result":1});"#],
+                vec![OFFLINE, OFFLINE, PAGE_CONFIG, r#"dr1({"result":1});"#],
                 true,
                 30,
                 false,
                 Outcome::Authenticated,
             ),
             (
-                vec![OFFLINE, OFFLINE, r#"dr1({"result":0,"ret_code":1});"#],
+                vec![
+                    OFFLINE,
+                    OFFLINE,
+                    PAGE_CONFIG,
+                    r#"dr1({"result":0,"ret_code":1});"#,
+                ],
                 true,
                 30,
                 true,
@@ -259,7 +268,8 @@ mod tests {
             let base = format!("http://{}", listener.local_addr()?);
             let client = Client::new(wlanlogin_lib::PortalConfig {
                 status_url: format!("{base}/status"),
-                action_url: format!("{base}/action"),
+                page_config_url: format!("{base}/page/loadConfig"),
+                login_url: format!("{base}/login"),
                 timeout: Duration::from_secs(2),
                 ..Default::default()
             })?;
@@ -370,7 +380,8 @@ mod tests {
         let base = format!("http://{}", listener.local_addr()?);
         let client = Client::new(wlanlogin_lib::PortalConfig {
             status_url: format!("{base}/status"),
-            action_url: format!("{base}/action"),
+            page_config_url: format!("{base}/page/loadConfig"),
+            login_url: format!("{base}/login"),
             ..Default::default()
         })?;
         let dir = tempfile::tempdir()?;
@@ -475,7 +486,8 @@ mod tests {
             let base = format!("http://{}", listener.local_addr()?);
             let client = Client::new(wlanlogin_lib::PortalConfig {
                 status_url: format!("{base}/status"),
-                action_url: format!("{base}/action"),
+                page_config_url: format!("{base}/page/loadConfig"),
+                login_url: format!("{base}/login"),
                 timeout: Duration::from_secs(2),
                 ..Default::default()
             })?;
