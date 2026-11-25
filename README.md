@@ -686,13 +686,22 @@ wlanlogin service logs -n 0 -f
 
 日志来自所选范围配置目录中的 `daemon.log`。服务停止后仍可查看已有日志，未安装时命令报错。系统范围日志可能要求 sudo 或管理员权限。
 
-日志使用英文事件文本、UTC RFC 3339 时间和结构化字段。默认级别为 `info`。前台诊断可使用：
+日志使用英文事件文本、UTC RFC 3339 时间和结构化字段。`config` 在所选范围的 `daemon.log` 同目录保存 `config.json`。默认级别为 `info`。
 
 ```sh
-RUST_LOG=wlanlogin=debug wlanlogin --user daemon
+wlanlogin --user config get log.level
+wlanlogin --user config set log.level debug
+wlanlogin --user config list
+wlanlogin --user service restart
+wlanlogin --user service logs -f
+wlanlogin --user config remove log.level
 ```
 
-`RUST_LOG` 只影响本次启动的进程。已安装服务从服务环境读取日志级别。后台启动时，如果 `daemon.log` 超过 2 MiB，程序清空日志文件。程序不持续轮转日志，也不保留历史归档。
+`info` 记录失败的门户 HTTP 交互，`debug` 也记录成功的交互。交互日志通过请求 ID 关联脱敏后的请求与响应，包含端点、耗时和错误阶段。`scope` 指示用户或系统范围，`target` 区分状态查询、页面配置、登录和注销。响应无法解析时，保留响应头、已读取的字节数和解析原因。
+
+每个进程启动时读取配置。重启已运行的服务后应用新等级。将 `--user` 换成 `--system` 可选择系统范围，写入系统配置需要管理员权限。有效的 `RUST_LOG` 覆盖当前进程的配置，例如 `RUST_LOG=wlanlogin::portal::page_config=debug wlanlogin --user daemon`。`config remove log.level` 恢复 `info`。
+
+后台启动时，如果 `daemon.log` 超过 2 MiB，程序清空日志文件。普通卸载保留配置，`service uninstall --purge` 清理所选范围的配置和日志。
 
 `retry_after_secs` 表示下次检查前的等待时间，不保证下次检查会提交登录。`Network check completed` 的 `outcome` 表示检查结果：
 

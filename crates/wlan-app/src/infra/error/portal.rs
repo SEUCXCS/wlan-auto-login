@@ -1,5 +1,5 @@
 //! English summaries without rendering portal response text or request URLs.
-use wlanlogin_lib::{Error, RequestOperation};
+use wlanlogin_lib::{Error, ProtocolError, RequestOperation};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{summary}")]
@@ -22,8 +22,8 @@ enum Summary {
     Connection,
     #[error("Network request failed")]
     Transport,
-    #[error("Unsupported portal response")]
-    Protocol,
+    #[error("{0}")]
+    Protocol(ProtocolError),
     #[error("Portal response has no valid device IPv4 address")]
     MissingIp,
     #[error("Portal accepted logout, but the device's offline status could not be confirmed")]
@@ -100,6 +100,7 @@ impl Summary {
             Error::Request { operation, source } => Self::Request {
                 operation: match operation {
                     RequestOperation::Status => "Portal status request",
+                    RequestOperation::PageConfig => "Portal page configuration request",
                     RequestOperation::Login => "Portal login request",
                     RequestOperation::Logout => "Portal logout request",
                 },
@@ -108,7 +109,7 @@ impl Summary {
             Error::Transport(error) if error.is_timeout() => Self::Timeout,
             Error::Transport(error) if error.is_connect() => Self::Connection,
             Error::Transport(_) => Self::Transport,
-            Error::Protocol(_) => Self::Protocol,
+            Error::Protocol(error) => Self::Protocol(*error),
             Error::MissingIp => Self::MissingIp,
             Error::LogoutUnconfirmed { .. } => Self::LogoutUnconfirmed,
             Error::EmptyCredentials => Self::EmptyCredentials,
@@ -138,6 +139,26 @@ impl PortalError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_configuration_and_login_errors_have_distinct_summaries() {
+        let page_error = PortalError::new(Error::Request {
+            operation: RequestOperation::PageConfig,
+            source: Box::new(Error::Protocol(ProtocolError::MissingPageIndex)),
+        });
+        let login_error = PortalError::new(Error::Request {
+            operation: RequestOperation::Login,
+            source: Box::new(Error::Protocol(ProtocolError::CallbackMismatch)),
+        });
+        assert_eq!(
+            page_error.to_string(),
+            "Portal page configuration request failed: Missing page_index in page configuration"
+        );
+        assert_eq!(
+            login_error.to_string(),
+            "Portal login request failed: JSONP callback does not match the request"
+        );
+    }
 
     #[test]
     fn summaries_preserve_classification_without_rendering_untrusted_details() {

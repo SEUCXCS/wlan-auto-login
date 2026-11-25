@@ -1,11 +1,16 @@
 //! These tests exclusively contact a disposable loopback HTTP server.
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::time::Duration;
+use std::{
+    io::{self, Write},
+    sync::{Arc, Mutex, Once},
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
     task::JoinHandle,
 };
+use tracing::instrument::WithSubscriber;
 use wlanlogin_lib::{
     AuthState, Client, Credentials, Error, Line, LoginOutcome, PortalConfig, RequestOperation,
 };
@@ -98,6 +103,20 @@ async fn server(
 async fn server_with_disconnects(
     responses: Vec<Option<&'static str>>,
 ) -> Result<(Client, JoinHandle<Vec<String>>), Box<dyn std::error::Error + Send + Sync>> {
+    server_with_http_responses(
+        responses
+            .into_iter()
+            .map(|response| response.map(|body| (200, "", body)))
+            .collect(),
+    )
+    .await
+}
+
+type HttpResponse = (u16, &'static str, &'static str);
+
+async fn server_with_http_responses(
+    responses: Vec<Option<HttpResponse>>,
+) -> Result<(Client, JoinHandle<Vec<String>>), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let url = format!("http://{}", listener.local_addr()?);
     let task = tokio::spawn(async move {
@@ -120,9 +139,11 @@ async fn server_with_disconnects(
                 assert!(request.len() < 16_384);
             }
             requests.push(String::from_utf8_lossy(&request).into_owned());
-            let Some(response) = response else { continue };
+            let Some((status, headers, response)) = response else {
+                continue;
+            };
             let http = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                "HTTP/1.1 {status} Response\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{response}",
                 response.len()
             );
             stream
@@ -209,11 +230,11 @@ async fn failed_page_config_never_submits_credentials() -> TestResult {
     for (config, detail) in [
         (
             r#"dr1({"code":"0","msg":"raw response"});"#,
-            "门户页面配置加载失败",
+            "Portal rejected the page configuration request",
         ),
         (
             r#"dr1({"code":1,"data":{"program_index":"p"}});"#,
-            "缺少 page_index",
+            "Missing page_index in page configuration",
         ),
     ] {
         let (client, task) = server(vec![OFFLINE, config]).await?;
@@ -231,11 +252,14 @@ async fn failed_page_config_never_submits_credentials() -> TestResult {
         assert!(matches!(
             error,
             Error::Request {
-                operation: RequestOperation::Login,
+                operation: RequestOperation::PageConfig,
                 ..
             }
         ));
-        assert!(format!("{error:?}").contains(detail));
+        assert!(
+            std::error::Error::source(&error)
+                .is_some_and(|error| error.to_string().contains(detail))
+        );
         let requests = tokio::time::timeout(Duration::from_secs(3), task).await??;
         assert_eq!(requests.len(), 2);
         assert!(
@@ -243,6 +267,187 @@ async fn failed_page_config_never_submits_credentials() -> TestResult {
                 .iter()
                 .all(|request| !request.contains("user_password"))
         );
+    }
+    Ok(())
+}
+
+#[derive(Clone, Default)]
+struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl Write for LogBuffer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .map_err(|_| io::Error::other("log lock poisoned"))?
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl LogBuffer {
+    fn subscriber(
+        &self,
+        level: tracing::Level,
+    ) -> impl tracing::Subscriber + Send + Sync + 'static {
+        static INITIALIZE: Once = Once::new();
+        INITIALIZE.call_once(|| {
+            // With only one scoped subscriber, tracing can register a callsite
+            // on another test thread against that thread's disabled dispatcher.
+            // Keep a global subscriber registered so all callsites account for
+            // both the global dispatcher and the active captures.
+            let result =
+                tracing::subscriber::set_global_default(tracing::subscriber::NoSubscriber::new());
+            assert!(result.is_ok(), "protocol tests own the global subscriber");
+        });
+        let writer = self.clone();
+        tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(level)
+            .with_writer(move || writer.clone())
+            .finish()
+    }
+
+    fn text(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(String::from_utf8(
+            self.0
+                .lock()
+                .map_err(|_| io::Error::other("log lock poisoned"))?
+                .clone(),
+        )?)
+    }
+}
+
+#[tokio::test]
+async fn portal_exchange_logging_filters_successes_and_redacts_secrets() -> TestResult {
+    const REJECTED: &str = r#"dr1({"result":0,"ret_code":8,"msg":"student with 1234 and MTIzNA==","total":1234,"data":{"uid":"student","future-token":"body-secret"}});"#;
+    for (level, expected) in [(tracing::Level::INFO, 1), (tracing::Level::DEBUG, 3)] {
+        let (client, task) = server_with_http_responses(vec![
+            Some((200, "", OFFLINE)),
+            Some((200, "", PAGE_CONFIG)),
+            Some((
+                200,
+                "Content-Type: text/html; charset=UTF-8\r\nSet-Cookie: PHPSESSID=mock-cookie\r\n",
+                REJECTED,
+            )),
+        ])
+        .await?;
+        let logs = LogBuffer::default();
+        let dispatch = tracing::Dispatch::new(logs.subscriber(level));
+        if level == tracing::Level::DEBUG {
+            // Exercise a request outside the capture before the captured one.
+            let (other_client, other_task) = server(vec![OFFLINE]).await?;
+            assert_eq!(other_client.status().await?.auth, AuthState::Offline);
+            tokio::time::timeout(Duration::from_secs(3), other_task).await??;
+        }
+        let credentials = Credentials {
+            username: "student".into(),
+            password: "1234".into(),
+        };
+        assert!(
+            client
+                .login(&credentials, Line::Free2)
+                .with_subscriber(dispatch)
+                .await
+                .is_err()
+        );
+        tokio::time::timeout(Duration::from_secs(3), task).await??;
+        let output = logs.text()?;
+        assert_eq!(output.matches("Portal HTTP exchange").count(), expected);
+        assert!(output.contains("wlanlogin::portal::login"));
+        assert!(output.contains("stage=\"portal\"") && output.contains("\"ret_code\":8"));
+        assert!(output.contains("request_id=") && output.contains("elapsed_ms="));
+        assert!(
+            output.contains("\"status\":200")
+                && output.contains("text/html")
+                && output.contains("[redacted]")
+        );
+        assert_eq!(
+            output.contains("wlanlogin::portal::status"),
+            level == tracing::Level::DEBUG
+        );
+        assert_eq!(
+            output.contains("wlanlogin::portal::page_config"),
+            level == tracing::Level::DEBUG
+        );
+        for secret in [
+            "student",
+            "\"total\":1234",
+            "MTIzNA==",
+            "mock-cookie",
+            "body-secret",
+            "10.0.0.12",
+        ] {
+            assert!(!output.contains(secret), "Secret present in portal logs");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_reads_are_logged_at_their_endpoint_and_stage() -> TestResult {
+    for (response, endpoint, stage, reason) in [
+        (
+            Some((
+                200,
+                "Content-Type: text/html\r\n",
+                "<html>untrusted-raw-body</html>",
+            )),
+            "page_config",
+            "decode",
+            "unexpected_html",
+        ),
+        (
+            Some((200, "", r#"dr1({"code":0});"#)),
+            "page_config",
+            "portal",
+            "page_config_rejected",
+        ),
+        (
+            Some((500, "", r#"dr1({"code":0});"#)),
+            "page_config",
+            "http",
+            "http_error",
+        ),
+        (None, "page_config", "transport", "request_failed"),
+    ] {
+        let (client, task) =
+            server_with_http_responses(vec![Some((200, "", OFFLINE)), response]).await?;
+        let logs = LogBuffer::default();
+        assert!(
+            client
+                .login(
+                    &Credentials {
+                        username: "student".into(),
+                        password: "test-secret".into()
+                    },
+                    Line::Free1
+                )
+                .with_subscriber(logs.subscriber(tracing::Level::INFO))
+                .await
+                .is_err()
+        );
+        tokio::time::timeout(Duration::from_secs(3), task).await??;
+        let output = logs.text()?;
+        assert_eq!(output.matches("Portal HTTP exchange").count(), 1);
+        assert!(
+            output.contains(&format!("wlanlogin::portal::{endpoint}")),
+            "{output}"
+        );
+        assert!(
+            output.contains(&format!("stage=\"{stage}\""))
+                && output.contains(&format!("reason=\"{reason}\"")),
+            "{output}"
+        );
+        assert!(output.contains("operation=\"login\""));
+        assert!(!output.contains("untrusted-raw-body"));
+        if response.is_none() {
+            assert!(output.contains("response=null"));
+        }
     }
     Ok(())
 }

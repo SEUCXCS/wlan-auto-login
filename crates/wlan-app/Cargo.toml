@@ -27,6 +27,7 @@ tempfile.workspace = true
 fs2.workspace = true
 futures-util.workspace = true
 tracing.workspace = true
+time.workspace = true
 tracing-subscriber.workspace = true
 getrandom.workspace = true
 

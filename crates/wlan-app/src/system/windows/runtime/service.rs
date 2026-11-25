@@ -44,7 +44,7 @@ pub fn dispatch(entry: Entry) -> std::process::ExitCode {
     ];
     // SAFETY: table/name live throughout the blocking dispatcher call.
     if unsafe { StartServiceCtrlDispatcherW(table.as_ptr()) } == 0 {
-        let _ = crate::infra::logging::init(None);
+        let _ = crate::infra::logging::init(None, None, Default::default());
         tracing::error!(
             "{}",
             Message::FailedToConnectToWindowsServiceControl {

@@ -277,6 +277,16 @@ pub enum Message {
     InvalidConnectionPreferences,
     #[error("Failed to read connection preferences")]
     FailedToReadConnectionPreferences,
+    #[error("Invalid application configuration")]
+    InvalidApplicationConfig,
+    #[error("Failed to read application configuration")]
+    FailedToReadApplicationConfig,
+    #[error("Unknown configuration key. Supported key: log.level")]
+    UnknownConfigKey,
+    #[error("log.level must be info or debug")]
+    InvalidLogLevel,
+    #[error("Log path must be a regular file")]
+    InvalidLogPath,
     #[error("File has no parent directory")]
     FileHasNoParentDirectory,
     #[error("Cleanup path has no parent directory")]

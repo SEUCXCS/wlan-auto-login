@@ -67,6 +67,7 @@ Windows 安装器由 `cargo xtask bundle windows` 构建，使用固定版本 Wi
 | `app/controller/{login,logout}.rs` | 业务校验、操作顺序与可复用接口，不读取终端输入 |
 | `app/controller/daemon.rs` | 当前进程的自动登录循环、托管服务启动准备 |
 | `app/controller/service.rs`、`app/controller/service/` | `install`、`uninstall`、`start`、`stop`、`restart`、`status`、`logs` 服务操作接口 |
+| `app/cli/config.rs`、`app/controller/config/` | 共享配置命令、参数和所选范围内的配置操作 |
 | `app/controller/permission.rs`、`app/cli/permission.rs` | 通用权限查询／请求，以及 macOS CLI 输出 |
 | `app/daemon.rs` | daemon 生命周期、单实例、停机信号和本地控制初始化 |
 | `app/daemon/runtime.rs` | 调度与 Wi-Fi / IPC 事件循环 |
@@ -75,7 +76,7 @@ Windows 安装器由 `cargo xtask bundle windows` 构建，使用固定版本 Wi
 | `app/daemon/credentials.rs` | 有超时限制、至多一个在途任务的后台凭据读取和内存会话提示 |
 | `infra/error.rs`、`infra/error/` | `thiserror` 错误、英文消息模板、门户错误转换 |
 | `infra/logging.rs`、`infra/file_log.rs` | 日志格式与输出、文件日志历史和跟随读取 |
-| `infra/config.rs`、`infra/paths.rs`、`infra/scope.rs` | 线路偏好、目录定位、user / system 范围和访问检查 |
+| `infra/config.rs`、`infra/paths.rs`、`infra/scope.rs` | 持久化配置、线路偏好、目录定位、user / system 范围和访问检查 |
 | `infra/control.rs`、`infra/control/` | IPC 协议与传输、控制状态、单实例锁和操作锁 |
 | `infra/command.rs`、`infra/shutdown.rs` | 可替换的外部命令执行、超时和进程停止信号 |
 | `infra/filesystem.rs`、`infra/cleanup.rs` | 私有目录、文件写入及有边界的清理机制 |
@@ -155,7 +156,11 @@ macOS Core Location 的长期 RunLoop 每轮必须清空独立的 `autoreleasepo
 
 应用代码使用 `infra::error::{Error, Result, Context, Message}`。通用稳定诊断文本在 `infra/error/message.rs`、凭据诊断模板在 `infra/error/credentials.rs` 用 `#[derive(thiserror::Error)]` 与 `#[error("...")]` 定义；用有意义的字段携带上下文。`anyhow` 仅在错误边界封装外部错误，不作为各模块的公共错误类型。
 
-通过 `context` / `with_context` 保留错误来源；门户错误由 `infra/error/portal.rs` 转换为英文、安全的摘要，同时保留供重试分类使用的原始错误类型。当前协议库只在本地化错误文本中提供返回码，应用边界仅识别已知的标准说明与返回码组合，并用静态英文模板输出；无法识别时退回通用摘要。维护映射时用真实 API 加 loopback 响应验证，不要依赖任意门户文本。不要把门户原始响应、URL 查询参数或凭据写入日志。
+通过 `context` 或 `with_context` 保留错误来源。`infra/error/portal.rs` 将请求阶段及类型化协议错误转换为安全的英文摘要，保留原始错误供重试分类。门户拒绝信息使用识别出的返回码和固定模板。维护映射时用协议客户端连接 loopback 模拟门户验证。
+
+`crates/wlan-api/src/diagnostics.rs` 在业务结果判定后发布门户交互事件。成功交互使用 `debug`，失败交互使用 `warn`。`target` 指示实际端点，`operation` 指示触发该请求的操作，`stage` 和 `reason` 指示故障来源。请求和响应使用结构化脱敏值，凭据、Cookie、会话标识、未知字段值和原始响应正文禁止进入日志。`info` 能看见失败的交互，`debug` 还包含成功的交互。
+
+共享 `infra/logging.rs` 负责 UTC 时间、范围和输出。共享 `infra/config.rs` 从所选范围的 `config.json` 读取 `log.level`。配置命令与门户客户端分发相互独立，写入复用操作锁和私有文件原子写入。
 
 日志使用 `tracing`，事件文本采用英文句式；使用 `error`、`scope`、`retry_after_secs` 等结构化字段。成功事件用 `info`，可恢复故障用 `warn`，终止或需人工处理的故障用 `error`，重复的跳过检查等诊断用 `debug`。daemon 的 `check.rs` 返回检查结果，由 `runtime.rs` 在首次检查、结果变化或错误恢复时用 `info` 输出 `outcome` 和 `next_check_secs`，并记录重试开始，避免静默跳过被误判为定时器失效。macOS 不能用同样受定位权限限制的 BSSID 判断 SSID 不可读时是否断网；已连接但名称不可读必须返回错误，保留重试及凭据保护。时间和格式由 `infra/logging.rs` 统一处理，业务模块不自行拼时间戳。中文 CLI / TUI 文案留在前端。
 

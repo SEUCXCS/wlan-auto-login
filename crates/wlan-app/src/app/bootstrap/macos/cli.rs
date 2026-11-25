@@ -1,3 +1,5 @@
+#[path = "../../cli/config.rs"]
+pub(super) mod config;
 #[path = "../../cli/login.rs"]
 mod login;
 #[path = "../../cli/output.rs"]
@@ -60,6 +62,9 @@ pub enum Command {
     /// 查询或获取当前平台的权限
     #[command(subcommand)]
     Permission(PermissionCommand),
+    /// 查询和修改所选范围的持久化配置
+    #[command(subcommand)]
+    Config(config::ConfigCommand),
 }
 
 #[derive(Subcommand)]
@@ -222,8 +227,8 @@ pub(super) async fn dispatch(
                 unreachable!("native service entry is handled by bootstrap")
             }
         },
-        Command::Permission(_) => {
-            unreachable!("permission entry is handled by bootstrap")
+        Command::Permission(_) | Command::Config(_) => {
+            unreachable!("shared command is handled by bootstrap")
         }
     }
 }
