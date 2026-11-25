@@ -697,7 +697,7 @@ wlanlogin --user service logs -f
 wlanlogin --user config remove log.level
 ```
 
-`info` 记录失败的门户 HTTP 交互，`debug` 也记录成功的交互。交互日志通过请求 ID 关联脱敏后的请求与响应，包含端点、耗时和错误阶段。`scope` 指示用户或系统范围，`target` 区分状态查询、页面配置、登录和注销。响应无法解析时，保留响应头、已读取的字节数和解析原因。
+`info` 记录失败的门户 HTTP 交互，`debug` 也记录成功的交互。请求 ID 关联请求行、查询串、请求头、响应状态行和响应头。`response.body` 保留脱敏后的 UTF-8 响应原文，包括 JSONP 回调和格式错误的正文。日志使用转义换行保持单行，保留已读取的字节数。`scope` 指示用户或系统范围，`target` 区分状态查询、页面配置、登录和注销。响应捕获沿用 64 KiB 上限，未读完的尾部和非 UTF-8 正文使用标记表示。
 
 每个进程启动时读取配置。重启已运行的服务后应用新等级。将 `--user` 换成 `--system` 可选择系统范围，写入系统配置需要管理员权限。有效的 `RUST_LOG` 覆盖当前进程的配置，例如 `RUST_LOG=wlanlogin::portal::page_config=debug wlanlogin --user daemon`。`config remove log.level` 恢复 `info`。
 

@@ -158,7 +158,7 @@ macOS Core Location 的长期 RunLoop 每轮必须清空独立的 `autoreleasepo
 
 通过 `context` 或 `with_context` 保留错误来源。`infra/error/portal.rs` 将请求阶段及类型化协议错误转换为安全的英文摘要，保留原始错误供重试分类。门户拒绝信息使用识别出的返回码和固定模板。维护映射时用协议客户端连接 loopback 模拟门户验证。
 
-`crates/wlan-api/src/diagnostics.rs` 在业务结果判定后发布门户交互事件。成功交互使用 `debug`，失败交互使用 `warn`。`target` 指示实际端点，`operation` 指示触发该请求的操作，`stage` 和 `reason` 指示故障来源。请求和响应使用结构化脱敏值，凭据、Cookie、会话标识、未知字段值和原始响应正文禁止进入日志。`info` 能看见失败的交互，`debug` 还包含成功的交互。
+`crates/wlan-api/src/diagnostics.rs` 渲染请求行和响应状态行，并保留 HTTP 头和脱敏后的响应文本。正文在 JSONP 解析前捕获。交互事件在业务结果判定后发布，成功使用 `debug`，失败使用 `warn`。`target` 指示实际端点，`operation` 指示触发该请求的操作，`stage` 和 `reason` 指示故障来源。凭据、Cookie、会话标识和设备标识通过统一脱敏后再写入日志，正文中的换行由结构化日志转义。`info` 能看见失败的交互，`debug` 还包含成功的交互。
 
 共享 `infra/logging.rs` 负责 UTC 时间、范围和输出。共享 `infra/config.rs` 从所选范围的 `config.json` 读取 `log.level`。配置命令与门户客户端分发相互独立，写入复用操作锁和私有文件原子写入。
 

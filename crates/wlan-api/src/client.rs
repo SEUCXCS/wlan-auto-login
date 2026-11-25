@@ -298,18 +298,27 @@ async fn read_payload(
     exchange: &mut Exchange<'_>,
 ) -> Result<Value, Error> {
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
+    loop {
+        let chunk = match response.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(error) => {
+                exchange.body(&body, false);
+                return Err(error.into());
+            }
+        };
         exchange.received_bytes(chunk.len());
-        if body.len() + chunk.len() > MAX_RESPONSE {
+        let remaining = MAX_RESPONSE - body.len();
+        body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        if chunk.len() > remaining {
+            exchange.body(&body, false);
             return Err(Error::Protocol(ProtocolError::BodyTooLarge));
         }
-        body.extend_from_slice(&chunk);
     }
+    exchange.body(&body, true);
     let text =
         std::str::from_utf8(&body).map_err(|_| Error::Protocol(ProtocolError::InvalidUtf8))?;
-    let value = parse_jsonp(text)?;
-    exchange.payload(&value);
-    Ok(value)
+    parse_jsonp(text)
 }
 
 fn parse_page(response: &Value) -> Result<PortalPage, Error> {

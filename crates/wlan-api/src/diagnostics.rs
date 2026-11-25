@@ -1,13 +1,17 @@
-//! Record portal exchanges without logging raw URLs, credentials, or payloads.
+//! Render redacted HTTP messages independently of the portal response parser.
+mod redact;
 use crate::{Error, ProtocolError, RequestOperation};
-use reqwest::{Request, Response, header::HeaderMap};
-use serde_json::{Map, Value, json};
+use reqwest::{
+    Request, Response,
+    header::{ACCEPT, HOST, HeaderMap, SET_COOKIE},
+};
+use serde_json::{Value, json};
 use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::Instant,
 };
+use zeroize::Zeroizing;
 
-const REDACTED: &str = "[redacted]";
 static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
 
 pub(super) struct Exchange<'a> {
@@ -16,11 +20,13 @@ pub(super) struct Exchange<'a> {
     request_id: u64,
     started: Instant,
     secrets: &'a [&'a str],
+    redaction_values: Vec<Zeroizing<String>>,
     request: Value,
     status: Option<u16>,
-    response_headers: Value,
-    response_body: Value,
+    response_head: String,
+    response_body: String,
     bytes: usize,
+    body_complete: bool,
 }
 
 impl<'a> Exchange<'a> {
@@ -35,57 +41,92 @@ impl<'a> Exchange<'a> {
             request_id: NEXT_REQUEST.fetch_add(1, Ordering::Relaxed),
             started: Instant::now(),
             secrets,
+            redaction_values: Vec::new(),
             request: Value::Null,
             status: None,
-            response_headers: Value::Null,
-            response_body: Value::Null,
+            response_head: String::new(),
+            response_body: String::new(),
             bytes: 0,
+            body_complete: false,
         }
     }
 
     pub(super) fn request(&mut self, request: &Request) {
-        let query = request
-            .url()
-            .query_pairs()
-            .map(|(name, value)| match name.as_ref() {
-                key if request_field(key) && is_secret(&value, self.secrets) => {
-                    json!([name, REDACTED])
-                }
-                "callback" if value == "dr1" => json!([name, value]),
-                "jsVersion" if matches!(value.as_ref(), "4.X" | "4.5.1") => json!([name, value]),
-                "lang" if matches!(value.as_ref(), "zh" | "zh-cn") => json!([name, value]),
-                "operate" if value == "portal_login" => json!([name, value]),
-                "ac_logout" | "business_type" | "enable_r3" | "is_base64encode"
-                | "login_method" | "mac_type" | "register_mode" | "terminal_type"
-                | "wlan_vlan_id"
-                    if small_number(&value) =>
-                {
-                    json!([name, value])
-                }
-                key if request_field(key) => json!([name, hidden(&value)]),
-                _ => json!([REDACTED, REDACTED]),
-            })
-            .collect::<Vec<_>>();
-        self.request = json!({
-            "method": request.method().as_str(),
-            "origin": request.url().origin().ascii_serialization(),
-            "path": endpoint_path(self.endpoint),
-            "query": query,
-            "headers": headers(request.headers()),
-        });
+        let url = request.url();
+        self.redaction_values.extend(
+            url.query_pairs()
+                .filter(|(name, value)| redact::sensitive(name) && !value.is_empty())
+                .map(|(_, value)| Zeroizing::new(value.into_owned())),
+        );
+        let secrets = self.redaction_values();
+        let origin = url.origin().ascii_serialization();
+        let target = redact::target(url, &secrets);
+        let mut head = format!("{} {target} {:?}\r\n", request.method(), request.version());
+        if !request.headers().contains_key(HOST)
+            && let Some((_, authority)) = origin.split_once("://")
+        {
+            head.push_str(&format!("host: {authority}\r\n"));
+        }
+        if !request.headers().contains_key(ACCEPT) {
+            head.push_str("accept: */*\r\n");
+        }
+        append_headers(&mut head, request.headers(), &secrets);
+        self.request = json!({ "origin": origin, "head": head });
     }
 
     pub(super) fn response(&mut self, response: &Response) {
-        self.status = Some(response.status().as_u16());
-        self.response_headers = headers(response.headers());
+        self.redaction_values.extend(
+            response
+                .headers()
+                .get_all(SET_COOKIE)
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .filter_map(|value| value.split(';').next()?.split_once('='))
+                .map(|(_, value)| value.trim().trim_matches('"'))
+                .filter(|value| !value.is_empty())
+                .map(|value| Zeroizing::new(value.to_owned())),
+        );
+        let status = response.status();
+        self.status = Some(status.as_u16());
+        let mut head = format!(
+            "{:?} {} {}\r\n",
+            response.version(),
+            status.as_u16(),
+            status.canonical_reason().unwrap_or_default()
+        );
+        append_headers(&mut head, response.headers(), &self.redaction_values());
+        self.response_head = head;
     }
 
     pub(super) fn received_bytes(&mut self, bytes: usize) {
         self.bytes += bytes;
     }
 
-    pub(super) fn payload(&mut self, value: &Value) {
-        self.response_body = payload(value, self.secrets);
+    pub(super) fn body(&mut self, bytes: &[u8], complete: bool) {
+        self.body_complete = complete;
+        // Keep text verbatim before JSONP parsing. Binary data can contain
+        // opaque secrets that a text redactor cannot inspect.
+        self.response_body = match std::str::from_utf8(bytes) {
+            Ok(text) if complete => redact::text(text, &self.redaction_values()),
+            Ok(text) => {
+                let prefix = text.rsplit_once('\n').map_or("", |(prefix, _)| prefix);
+                let mut redacted = redact::text(prefix, &self.redaction_values());
+                if !redacted.is_empty() {
+                    redacted.push('\n');
+                }
+                redacted.push_str("[incomplete response tail]");
+                redacted
+            }
+            Err(_) => "[non-UTF-8 response body]".into(),
+        };
+    }
+
+    fn redaction_values(&self) -> Vec<&str> {
+        self.secrets
+            .iter()
+            .copied()
+            .chain(self.redaction_values.iter().map(|value| value.as_str()))
+            .collect()
     }
 
     pub(super) fn finish(self, error: Option<&Error>) {
@@ -93,8 +134,9 @@ impl<'a> Exchange<'a> {
         let response = self.status.map_or(Value::Null, |status| {
             json!({
                 "status": status,
-                "headers": self.response_headers,
+                "head": self.response_head,
                 "body_bytes": self.bytes,
+                "body_complete": self.body_complete,
                 "body": self.response_body,
             })
         });
@@ -183,188 +225,11 @@ fn failure(error: &Error) -> (&'static str, &'static str) {
     }
 }
 
-fn request_field(name: &str) -> bool {
-    matches!(
-        name,
-        "callback"
-            | "jsVersion"
-            | "lang"
-            | "operate"
-            | "v"
-            | "ac_logout"
-            | "business_type"
-            | "enable_r3"
-            | "is_base64encode"
-            | "login_method"
-            | "mac_type"
-            | "register_mode"
-            | "terminal_type"
-            | "wlan_vlan_id"
-            | "authex_enable"
-            | "gw_id"
-            | "page_index"
-            | "program_index"
-            | "rcn"
-            | "user_account"
-            | "user_agent"
-            | "user_password"
-            | "uuid"
-            | "wlan_ac_ip"
-            | "wlan_ac_name"
-            | "wlan_ap_mac"
-            | "wlan_user_areaid"
-            | "wlan_user_ip"
-            | "wlan_user_ipv6"
-            | "wlan_user_mac"
-            | "wlan_user_ssid"
-    )
-}
-
-fn small_number(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 4 && value.bytes().all(|byte| byte.is_ascii_digit())
-}
-
-fn hidden(value: &str) -> &str {
-    if value.is_empty() { "" } else { REDACTED }
-}
-
-fn is_secret(value: &str, secrets: &[&str]) -> bool {
-    !value.is_empty() && secrets.contains(&value)
-}
-
-fn headers(input: &HeaderMap) -> Value {
-    let mut result = Map::new();
-    let mut redacted = 0;
-    for (name, value) in input {
-        let name = name.as_str();
-        let value = value.to_str().unwrap_or_default();
-        let safe = match name {
-            "authorization"
-            | "proxy-authorization"
-            | "cookie"
-            | "set-cookie"
-            | "referer"
-            | "host"
-            | "location"
-            | "server"
-            | "date"
-            | "user-agent" => REDACTED,
-            "accept" => {
-                if value == "*/*" {
-                    value
-                } else {
-                    REDACTED
-                }
-            }
-            "content-type" => match value.split(';').next() {
-                Some(
-                    value @ ("text/html"
-                    | "text/plain"
-                    | "application/json"
-                    | "application/javascript"
-                    | "text/javascript"
-                    | "application/octet-stream"),
-                ) => value,
-                _ => REDACTED,
-            },
-            "content-encoding" | "transfer-encoding" => match value {
-                "identity" | "gzip" | "deflate" | "br" | "zstd" | "chunked" => value,
-                _ => REDACTED,
-            },
-            "content-length"
-                if value.len() <= 5 && value.bytes().all(|byte| byte.is_ascii_digit()) =>
-            {
-                value
-            }
-            _ => {
-                redacted += 1;
-                continue;
-            }
-        };
-        let field = result.entry(name.to_owned()).or_insert_with(|| json!([]));
-        if let Value::Array(values) = field {
-            values.push(json!(safe));
-        }
+fn append_headers(head: &mut String, headers: &HeaderMap, secrets: &[&str]) {
+    for (name, value) in headers {
+        let value = value.to_str().unwrap_or("[non-ASCII header]");
+        let value = redact::headers_value(name.as_str(), value, secrets);
+        head.push_str(&format!("{name}: {value}\r\n"));
     }
-    if redacted > 0 {
-        result.insert("redacted_headers".into(), json!(redacted));
-    }
-    Value::Object(result)
-}
-
-fn payload(value: &Value, secrets: &[&str]) -> Value {
-    let Some(fields) = value.as_object() else {
-        return json!(REDACTED);
-    };
-    let mut safe = Map::new();
-    let mut redacted = 0;
-    for (name, value) in fields {
-        let field = match name.as_str() {
-            "data" => payload(value, secrets),
-            "list" => value.as_array().map_or_else(
-                || json!(REDACTED),
-                |entries| {
-                    Value::Array(
-                        entries
-                            .iter()
-                            .map(|entry| payload(entry, secrets))
-                            .collect(),
-                    )
-                },
-            ),
-            "result" if value.as_str() == Some("ok") && !is_secret("ok", secrets) => value.clone(),
-            "result"
-            | "online"
-            | "is_login"
-            | "code"
-            | "ret_code"
-            | "total"
-            | "wlan_vlan_id"
-            | "vlan"
-            | "vid"
-            | "login_method"
-            | "account_prefix"
-            | "ac_logout"
-            | "register_mode"
-            | "enable_r3"
-            | "check_online_method" => {
-                let safe_string = value
-                    .as_str()
-                    .is_some_and(|value| small_number(value) && !is_secret(value, secrets));
-                let safe_integer = value.as_u64().is_some_and(|number| {
-                    number <= 9999 && !is_secret(&number.to_string(), secrets)
-                });
-                if value.is_boolean() || safe_string || safe_integer {
-                    value.clone()
-                } else {
-                    json!(REDACTED)
-                }
-            }
-            "msg" | "message" | "ret_msg" => match value.as_str() {
-                Some(
-                    message @ ("Portal协议认证成功！"
-                    | "Portal协议认证超时！"
-                    | "终端IP已在线！"
-                    | "Radius注销成功！"
-                    | "获取用户在线信息数据为空！"
-                    | "注销失败，可能不在线或者页面已过期，请刷新页面重试！"),
-                ) if !is_secret(message, secrets) => json!(message),
-                _ => json!(REDACTED),
-            },
-            "uid" | "v46ip" | "v4ip" | "myv6ip" | "ss4" | "ss5" | "password" | "token"
-            | "cookie" | "session" | "account_suffix" => {
-                json!(hidden(value.as_str().unwrap_or(REDACTED)))
-            }
-            key if request_field(key) => json!(hidden(value.as_str().unwrap_or(REDACTED))),
-            _ => {
-                redacted += 1;
-                continue;
-            }
-        };
-        safe.insert(name.clone(), field);
-    }
-    if redacted > 0 {
-        safe.insert("redacted_fields".into(), json!(redacted));
-    }
-    Value::Object(safe)
+    head.push_str("\r\n");
 }

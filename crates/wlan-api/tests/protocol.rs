@@ -324,7 +324,7 @@ impl LogBuffer {
 
 #[tokio::test]
 async fn portal_exchange_logging_filters_successes_and_redacts_secrets() -> TestResult {
-    const REJECTED: &str = r#"dr1({"result":0,"ret_code":8,"msg":"student with 1234 and MTIzNA==","total":1234,"data":{"uid":"student","future-token":"body-secret"}});"#;
+    const REJECTED: &str = r#"dr1({"result":0,"ret_code":8,"msg":"student with 1234 and MTIzNA==, cookie mock-cookie","total":1234,"data":{"uid":"student","future-token":"body-secret"}});"#;
     for (level, expected) in [(tracing::Level::INFO, 1), (tracing::Level::DEBUG, 3)] {
         let (client, task) = server_with_http_responses(vec![
             Some((200, "", OFFLINE)),
@@ -359,12 +359,16 @@ async fn portal_exchange_logging_filters_successes_and_redacts_secrets() -> Test
         let output = logs.text()?;
         assert_eq!(output.matches("Portal HTTP exchange").count(), expected);
         assert!(output.contains("wlanlogin::portal::login"));
-        assert!(output.contains("stage=\"portal\"") && output.contains("\"ret_code\":8"));
+        assert!(output.contains("stage=\"portal\"") && output.contains(r#"\"ret_code\":8"#));
         assert!(output.contains("request_id=") && output.contains("elapsed_ms="));
         assert!(
             output.contains("\"status\":200")
                 && output.contains("text/html")
                 && output.contains("[redacted]")
+        );
+        assert!(output.contains("GET /eportal/portal/login?callback=dr1&login_method=1"));
+        assert!(
+            output.contains("HTTP/1.1 200 OK") && output.contains(r#"\r\nset-cookie: [redacted]"#)
         );
         assert_eq!(
             output.contains("wlanlogin::portal::status"),
@@ -376,7 +380,7 @@ async fn portal_exchange_logging_filters_successes_and_redacts_secrets() -> Test
         );
         for secret in [
             "student",
-            "\"total\":1234",
+            r#"\"total\":1234"#,
             "MTIzNA==",
             "mock-cookie",
             "body-secret",
@@ -390,30 +394,40 @@ async fn portal_exchange_logging_filters_successes_and_redacts_secrets() -> Test
 
 #[tokio::test]
 async fn failed_reads_are_logged_at_their_endpoint_and_stage() -> TestResult {
-    for (response, endpoint, stage, reason) in [
+    for (response, stage, reason, body_marker) in [
         (
             Some((
                 200,
                 "Content-Type: text/html\r\n",
-                "<html>untrusted-raw-body</html>",
+                r#"<html>untrusted-raw-body<form><input value="form-secret" name="user_password"></form></html>"#,
             )),
-            "page_config",
             "decode",
             "unexpected_html",
+            r#"<html>untrusted-raw-body<form><input value=\"[redacted]\" name=\"user_password\"></form></html>"#,
+        ),
+        (
+            Some((
+                200,
+                "Content-Type: text/html\r\n",
+                "dr2001( {\n  \"data\": {\"program_index\":\"private-index\"}\n} );",
+            )),
+            "decode",
+            "invalid_jsonp_callback",
+            r#"dr2001( {\n  \"data\": {\"program_index\":\"[redacted]\"}\n} );"#,
         ),
         (
             Some((200, "", r#"dr1({"code":0});"#)),
-            "page_config",
             "portal",
             "page_config_rejected",
+            r#"dr1({\"code\":0});"#,
         ),
         (
             Some((500, "", r#"dr1({"code":0});"#)),
-            "page_config",
             "http",
             "http_error",
+            r#"dr1({\"code\":0});"#,
         ),
-        (None, "page_config", "transport", "request_failed"),
+        (None, "transport", "request_failed", "response=null"),
     ] {
         let (client, task) =
             server_with_http_responses(vec![Some((200, "", OFFLINE)), response]).await?;
@@ -435,7 +449,7 @@ async fn failed_reads_are_logged_at_their_endpoint_and_stage() -> TestResult {
         let output = logs.text()?;
         assert_eq!(output.matches("Portal HTTP exchange").count(), 1);
         assert!(
-            output.contains(&format!("wlanlogin::portal::{endpoint}")),
+            output.contains("wlanlogin::portal::page_config"),
             "{output}"
         );
         assert!(
@@ -444,10 +458,9 @@ async fn failed_reads_are_logged_at_their_endpoint_and_stage() -> TestResult {
             "{output}"
         );
         assert!(output.contains("operation=\"login\""));
-        assert!(!output.contains("untrusted-raw-body"));
-        if response.is_none() {
-            assert!(output.contains("response=null"));
-        }
+        assert!(output.contains(body_marker), "{output}");
+        assert!(!output.contains("private-index"));
+        assert!(!output.contains("form-secret"));
     }
     Ok(())
 }
