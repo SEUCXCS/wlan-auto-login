@@ -29,7 +29,7 @@ GET http://172.18.254.6:803/eportal/portal/logout
 GET http://172.18.254.6:803/eportal/portal/logout?callback=dr1002&login_method=1&user_account=drcom&user_password=123&ac_logout=1&register_mode=1&wlan_user_ip=10.0.0.100&wlan_user_ipv6=%3A%3A&wlan_vlan_id=1&wlan_user_mac=000000000000&wlan_ac_ip=&wlan_ac_name=&jsVersion=4.5.1&program_index=example-program&page_index=example-page&v=1234&lang=zh
 ```
 
-浏览器携带门户首页 Referer 和当前 `PHPSESSID` 会话 Cookie。这些请求头是否必需、服务端接受的最小查询参数集合均待确认。
+浏览器携带门户首页 Referer 和当前 `PHPSESSID` 会话 Cookie。这些请求头是否必需、服务端接受的最小查询参数集合均待确认。客户端发送 `callback=dr1`，接受 `dr1` 与新版门户补零后的 `dr0001` 响应。
 
 客户端使用同一组终端参数加载配置和提交注销。按本校在线页的取值，状态 VLAN 为 `0` 时，注销使用 `1`，缺失的 IPv6 使用 `::`。其他 VLAN 和 IPv6 值取自本机状态。配置中的 `ac_logout`、`register_mode` 缺失时使用页面脚本的默认值 `0`。
 
