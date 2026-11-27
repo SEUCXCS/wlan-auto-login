@@ -440,7 +440,7 @@ cd packaging/archlinux
 makepkg -s
 ```
 
-产物为 `packaging/archlinux/wlanlogin-<pkgver>-<pkgrel>-<arch>.pkg.tar.zst`，`pkgver` 形如 `0.2.0.r154.g8f5777a`（workspace 版本、提交数与短哈希）。
+产物为 `packaging/archlinux/wlanlogin-<pkgver>-<pkgrel>-<arch>.pkg.tar.zst`，`pkgver` 形如 `2.0.0.r117.g0c2984b`（workspace 版本、提交数与短哈希）。
 
 <a id="build-macos"></a>
 

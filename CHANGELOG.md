@@ -11,9 +11,9 @@
 - 中文与英文 man 手册 `wlanlogin(1)`，随 Linux 软件包安装。
 - 本变更日志。
 
-## [0.2.0] - 2026-11-25
+## [2.0.0] - 2026-11-25
 
-发布标签为 `v2.0.0`，程序版本为 0.2.0。
+发布标签为 `v2.0.0`；该版本发布的程序误将自身版本报告为 0.2.0。
 
 ### 新增
 
@@ -65,6 +65,6 @@
 - 发布流程构建 Linux、Windows 与 macOS 二进制。
 
 [Unreleased]: https://github.com/SEUCXCS/wlan-auto-login/compare/v2.0.0...HEAD
-[0.2.0]: https://github.com/SEUCXCS/wlan-auto-login/compare/v0.1.1...v2.0.0
+[2.0.0]: https://github.com/SEUCXCS/wlan-auto-login/compare/v0.1.1...v2.0.0
 [0.1.1]: https://github.com/SEUCXCS/wlan-auto-login/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/SEUCXCS/wlan-auto-login/releases/tag/v0.1.0
