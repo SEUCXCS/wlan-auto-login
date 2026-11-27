@@ -10,7 +10,7 @@
 - Fedora 软件包：`cargo xtask bundle rpm` 生成 `.rpm`，最低支持 Fedora 43。
 - Arch Linux 软件包：`packaging/archlinux/PKGBUILD` 打包当前检出的已提交版本。
 - 中文与英文 man 手册 `wlanlogin(1)`，随 Linux 软件包安装。
-- 发布流程同时上传 `.deb` 与 Arch Linux 软件包，CI 在推送与 PR 时检查两者的构建。
+- 发布流程同时上传 `.deb`、`.rpm` 与 Arch Linux 软件包，CI 在推送与 PR 时检查三者的构建。
 - 本变更日志。
 
 ## [2.0.0] - 2026-11-25

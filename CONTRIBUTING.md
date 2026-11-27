@@ -176,8 +176,8 @@ Linux 软件包只安装 CLI（`/usr/bin/wlanlogin`）、许可证、README、`C
 
 ### 4.1 CI 与组织规则
 
-- `.github/workflows/test.yml` 在推送或 PR 至 `main` / `develop` 以及手动触发时运行。原生测试矩阵覆盖 **Linux x86_64**、**Windows x86_64 MSVC** 与 **macOS Apple Silicon**（均使用 stable Rust 与 `Cargo.lock`），格式与平台边界检查单独运行。Linux 任务另以 dev profile 执行 `cargo xtask bundle deb`；`archlinux` 任务在 `archlinux:base-devel` 容器中以非 root 用户运行 `makepkg`，构建并检查 PKGBUILD。
-- `.github/workflows/release.yml` 在发布时于 Ubuntu 22.04（glibc 2.35，低于 Debian 12 下限）构建 Linux 压缩包与 `.deb`，在同样的 Arch Linux 容器中构建 `.pkg.tar.zst`，与其他平台产物一同上传并生成 `SHA256SUMS`。
+- `.github/workflows/test.yml` 在推送或 PR 至 `main` / `develop` 以及手动触发时运行。原生测试矩阵覆盖 **Linux x86_64**、**Windows x86_64 MSVC** 与 **macOS Apple Silicon**（均使用 stable Rust 与 `Cargo.lock`），格式与平台边界检查单独运行。Linux 任务另以 dev profile 执行 `cargo xtask bundle deb` 与 `cargo xtask bundle rpm`（runner 安装 Ubuntu 的 `rpm` 软件包）；`archlinux` 任务在 `archlinux:base-devel` 容器中以非 root 用户运行 `makepkg`，构建并检查 PKGBUILD。
+- `.github/workflows/release.yml` 在发布时于 Ubuntu 22.04（glibc 2.35，低于 Debian 12 与 Fedora 43 下限）由同一 release 二进制构建 Linux 压缩包、`.deb` 与 `.rpm`，在同样的 Arch Linux 容器中构建 `.pkg.tar.zst`，与其他平台产物一同上传并生成 `SHA256SUMS`。
 - `crates/wlan-app` 的单元测试统一放在所属源码文件末尾的 `#[cfg(test)] mod tests`，不拆分为 `tests.rs`、独立测试目录或 `#[path]` 引入。共用假实现可放在基础模块测试中（如 `infra::command::tests`）。`crates/wlan-api` 保持现有集成测试与 fixtures 结构。
 - 跨平台行为只维护一份表驱动测试套件，平台目录仅保留原生特例：
 

@@ -87,7 +87,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes build-essential pkg-config libdbus-1-dev dbus-daemon
+          sudo apt-get install --yes build-essential pkg-config libdbus-1-dev dbus-daemon rpm
 
       - name: Cache Rust build files
         uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
@@ -115,9 +115,11 @@ jobs:
             "$binary" "$command" --help
           done
 
-      - name: Check the Debian package
+      - name: Check the Debian and RPM packages
         if: runner.os == 'Linux'
-        run: cargo xtask bundle deb --profile dev --target "$BUILD_TARGET" --target-dir target
+        run: |
+          cargo xtask bundle deb --profile dev --target "$BUILD_TARGET" --target-dir target
+          cargo xtask bundle rpm --profile dev --target "$BUILD_TARGET" --target-dir target
 
       - name: Check Windows installer code and payload
         if: runner.os == 'Windows'

@@ -87,7 +87,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes build-essential pkg-config libdbus-1-dev
+          sudo apt-get install --yes build-essential pkg-config libdbus-1-dev rpm
 
       - name: Build Linux and Windows binaries
         if: runner.os != 'macOS'
@@ -134,11 +134,12 @@ jobs:
           Copy-Item "target/$env:BUILD_TARGET/release/wlanlogin.exe", README.md, LICENSE stage/
           Compress-Archive -Path stage/* -DestinationPath "dist/$env:ASSET_NAME"
 
-      - name: Build the Debian package
+      - name: Build the Debian and RPM packages
         if: runner.os == 'Linux'
         run: |
           cargo xtask bundle deb --profile release --target "$BUILD_TARGET" --target-dir target
-          cp "target/$BUILD_TARGET/release/bundle/"wlanlogin_*.deb dist/
+          cargo xtask bundle rpm --profile release --target "$BUILD_TARGET" --target-dir target
+          cp "target/$BUILD_TARGET/release/bundle/"wlanlogin_*.deb "target/$BUILD_TARGET/release/bundle/"wlanlogin-*.rpm dist/
 
       - name: Build the Windows setup executable
         if: runner.os == 'Windows'
@@ -216,7 +217,7 @@ jobs:
       - name: Generate SHA-256 checksums
         working-directory: dist
         run: |
-          sha256sum -- *.tar.gz *.zip *.exe *.deb *.pkg.tar.zst > SHA256SUMS
+          sha256sum -- *.tar.gz *.zip *.exe *.deb *.rpm *.pkg.tar.zst > SHA256SUMS
           sha256sum --check SHA256SUMS
 
       - name: Upload to the existing release
@@ -225,4 +226,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release upload --clobber -- "$RELEASE_TAG" ./*.tar.gz ./*.zip ./*.exe ./*.deb ./*.pkg.tar.zst SHA256SUMS
+          gh release upload --clobber -- "$RELEASE_TAG" ./*.tar.gz ./*.zip ./*.exe ./*.deb ./*.rpm ./*.pkg.tar.zst SHA256SUMS
