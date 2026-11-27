@@ -46,7 +46,7 @@ cargo check -p wlanlogin-cli --tests --locked --target aarch64-apple-darwin
 # Packaging
 cargo xtask bundle macos [--codesign-identity <id>]
 cargo xtask bundle windows --target x86_64-pc-windows-msvc
-cargo xtask bundle deb                      # Debian/Ubuntu host with dpkg-dev
+cargo xtask bundle deb [--revision <n>]    # Debian 12 host with dpkg-dev (oldest supported glibc)
 (cd packaging/archlinux && makepkg -s)      # Arch: packages the committed HEAD
 ```
 
@@ -65,7 +65,8 @@ Module roots in `crates/wlan-app/src`: `app.rs`, `infra.rs`, `system.rs`.
   - `system/<platform>/runtime/infra` compiles once via the `infra.rs` facade; shared state/protocol stays in `infra/control`.
   - Keep native API, XML encoding, ACL, and task-registration logic out of `system/shared`. Re-export `system/shared/flow` defaults when a platform has no override; never stub an unimplemented operation with success.
 - **`xtask` layout**: `main.rs` delegates to `commands::run`; `cli.rs` + `cli/bundle.rs` declare commands (build flags after platform subcommand; `--codesign-identity` macOS-only); `commands/<cmd>.rs` and `commands/bundle/<platform>.rs` implement tasks; `support/` must not depend on `cli` or `commands` and locates binaries via Cargo JSON output.
-- **Linux packages**: `.deb` (`packaging/debian/` templates) and Arch (`packaging/archlinux/PKGBUILD`) ship only `/usr/bin/wlanlogin`, license, and README. Never ship a systemd unit, enable services, or write runtime data from a package; `service install/uninstall` owns units and background copies. Keep runtime dependencies in sync between both package definitions.
+- **Linux packages**: `.deb` (`packaging/debian/` templates) and Arch (`packaging/archlinux/PKGBUILD`) ship only `/usr/bin/wlanlogin`, license, README, `CHANGELOG.md`, and the English and `zh_CN` man pages in `packaging/linux/man/`. Never ship a systemd unit, enable services, or write runtime data from a package; `service install/uninstall` owns units and background copies. Keep dependencies and installed files in sync between both package definitions, and update both man pages when commands, options, scopes, config keys, environment variables, or paths change.
+- **Debian floor**: `.deb` supports Debian 12 and Ubuntu 24.04; `bundle deb` fails when the `libc6` requirement exceeds 2.36, so build on Debian 12. Its `changelog.Debian.gz` is dated by the `## [<version>] - <YYYY-MM-DD>` entry in `CHANGELOG.md`, which must exist; move `[Unreleased]` items into a dated entry when releasing.
 - **Cleanup boundary**: Delete only app-owned files and empty `wlanlogin` directories. Preserve the shared `SEUCXCS` parent and sibling tools, and validate symlink / reparse-point boundaries.
 
 ## 3. Behavioral & Platform Invariants

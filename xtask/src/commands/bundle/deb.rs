@@ -12,6 +12,9 @@ use crate::{
     support::{cargo, identity, platform, process, workspace},
 };
 
+/// Debian 12 ships glibc 2.36, the oldest of the supported releases (Ubuntu 24.04 ships 2.39).
+const OLDEST_GLIBC: &str = "2.36";
+
 pub fn run(options: &DebArgs) -> Result<()> {
     platform::require_linux()?;
     let target = options
@@ -20,7 +23,7 @@ pub fn run(options: &DebArgs) -> Result<()> {
         .as_deref()
         .unwrap_or(std::env::consts::ARCH);
     let architecture = architecture(target)?;
-    // Fail before compiling when the host cannot produce a Debian package.
+    // Fail before compiling when the host or the sources cannot produce a package.
     for tool in ["dpkg-deb", "dpkg-shlibdeps"] {
         let available = Command::new(tool)
             .arg("--version")
@@ -33,8 +36,14 @@ pub fn run(options: &DebArgs) -> Result<()> {
             "{tool} is required; install dpkg-dev on a Debian or Ubuntu host"
         );
     }
-
     let root = workspace::root()?;
+    let upstream = env!("CARGO_PKG_VERSION");
+    let version = debian_version(upstream, options.revision);
+    let changelog = fs::read_to_string(root.join("CHANGELOG.md"))?;
+    let date = rfc5322_date(release_date(&changelog, upstream)?)?;
+    let control_template = fs::read_to_string(root.join("packaging/debian/control"))?;
+    let maintainer = control_field(&control_template, "Maintainer")?;
+
     let binary = cargo::build(
         root,
         "wlanlogin-cli",
@@ -52,26 +61,36 @@ pub fn run(options: &DebArgs) -> Result<()> {
     let package = staging.path().join("package");
 
     let executable = package.join("usr/bin").join(identity::APP_NAME);
-    create_parent(&executable)?;
-    fs::copy(&binary, &executable)?;
-    platform::set_mode(&executable, 0o755)?;
+    stage(&binary, &executable, 0o755)?;
 
     let documents = package.join("usr/share/doc").join(identity::APP_NAME);
-    fs::create_dir_all(&documents)?;
-    let copyright = documents.join("copyright");
-    fs::write(
-        &copyright,
-        fs::read_to_string(root.join("packaging/debian/copyright"))?.replace(
+    write_file(
+        &documents.join("copyright"),
+        &fs::read_to_string(root.join("packaging/debian/copyright"))?.replace(
             "@LICENSE@",
             fs::read_to_string(root.join("LICENSE"))?.trim_end(),
         ),
     )?;
-    platform::set_mode(&copyright, 0o644)?;
-    let readme = documents.join("README.md");
-    fs::copy(root.join("README.md"), &readme)?;
-    platform::set_mode(&readme, 0o644)?;
-    // Debian policy expects larger documentation to be compressed reproducibly.
-    process::run(Command::new("gzip").arg("-9n").arg(&readme))?;
+    stage_document(&root.join("README.md"), &documents.join("README.md"))?;
+    stage_document(&root.join("CHANGELOG.md"), &documents.join("changelog"))?;
+    let debian_changelog = documents.join("changelog.Debian");
+    write_file(
+        &debian_changelog,
+        &debian_changelog_entry(&version, upstream, maintainer, &date),
+    )?;
+    compress(&debian_changelog)?;
+
+    let page = format!("{}.1", identity::APP_NAME);
+    let manuals = root.join("packaging/linux/man");
+    let installed_manuals = package.join("usr/share/man");
+    stage_document(
+        &manuals.join(&page),
+        &installed_manuals.join("man1").join(&page),
+    )?;
+    stage_document(
+        &manuals.join("zh_CN").join(&page),
+        &installed_manuals.join("zh_CN/man1").join(&page),
+    )?;
 
     let installed_size = normalize(&package)?;
     // dpkg-shlibdeps locates the package root of the analysed binary by its DEBIAN directory.
@@ -79,18 +98,16 @@ pub fn run(options: &DebArgs) -> Result<()> {
     fs::create_dir(&metadata)?;
     platform::set_mode(&metadata, 0o755)?;
     let depends = shared_library_depends(staging.path(), &executable)?;
-    let version = debian_version(env!("CARGO_PKG_VERSION"));
-    let control = metadata.join("control");
-    fs::write(
-        &control,
-        fs::read_to_string(root.join("packaging/debian/control"))?
+    require_supported_glibc(&depends)?;
+    write_file(
+        &metadata.join("control"),
+        &control_template
             .replace("@APP_NAME@", identity::APP_NAME)
             .replace("@VERSION@", &version)
             .replace("@ARCHITECTURE@", architecture)
             .replace("@INSTALLED_SIZE@", &installed_size.to_string())
             .replace("@DEPENDS@", &depends),
     )?;
-    platform::set_mode(&control, 0o644)?;
 
     let name = format!("{}_{version}_{architecture}.deb", identity::APP_NAME);
     let built = staging.path().join(&name);
@@ -120,13 +137,74 @@ fn architecture(target: &str) -> Result<&'static str> {
 }
 
 /// A Cargo pre-release must sort before its release, which Debian expresses with `~`.
-fn debian_version(version: &str) -> String {
-    version.replacen('-', "~", 1)
+fn debian_version(upstream: &str, revision: u32) -> String {
+    format!("{}-{revision}", upstream.replacen('-', "~", 1))
+}
+
+/// The Debian changelog entry carries the date of the version's CHANGELOG.md entry.
+fn release_date<'a>(changelog: &'a str, version: &str) -> Result<&'a str> {
+    let heading = format!("## [{version}] - ");
+    changelog
+        .lines()
+        .find_map(|line| line.strip_prefix(heading.as_str()))
+        .map(str::trim)
+        .with_context(|| format!("CHANGELOG.md has no \"## [{version}] - YYYY-MM-DD\" entry"))
+}
+
+fn rfc5322_date(date: &str) -> Result<String> {
+    let output = Command::new("date")
+        .env("LC_ALL", "C")
+        .args(["--utc", "--rfc-email", "--date"])
+        .arg(date)
+        .output()
+        .context("Failed to run date")?;
+    ensure!(
+        output.status.success(),
+        "CHANGELOG.md has an invalid release date: {date}"
+    );
+    Ok(String::from_utf8(output.stdout)?.trim_end().to_owned())
+}
+
+fn control_field<'a>(control: &'a str, name: &str) -> Result<&'a str> {
+    control
+        .lines()
+        .find_map(|line| line.strip_prefix(name)?.strip_prefix(": "))
+        .with_context(|| format!("packaging/debian/control has no {name} field"))
+}
+
+fn debian_changelog_entry(version: &str, upstream: &str, maintainer: &str, date: &str) -> String {
+    format!(
+        "{} ({version}) unstable; urgency=medium\n\n  * Package upstream release {upstream}; see changelog.gz.\n\n -- {maintainer}  {date}\n",
+        identity::APP_NAME
+    )
 }
 
 fn create_parent(path: &Path) -> Result<()> {
     fs::create_dir_all(path.parent().context("Package path has no parent")?)?;
     Ok(())
+}
+
+fn stage(source: &Path, destination: &Path, mode: u32) -> Result<()> {
+    create_parent(destination)?;
+    fs::copy(source, destination)
+        .with_context(|| format!("Failed to stage {}", source.display()))?;
+    platform::set_mode(destination, mode)
+}
+
+fn write_file(destination: &Path, contents: &str) -> Result<()> {
+    create_parent(destination)?;
+    fs::write(destination, contents)?;
+    platform::set_mode(destination, 0o644)
+}
+
+fn stage_document(source: &Path, destination: &Path) -> Result<()> {
+    stage(source, destination, 0o644)?;
+    compress(destination)
+}
+
+/// Debian policy expects documentation and manual pages compressed reproducibly.
+fn compress(path: &Path) -> Result<()> {
+    process::run(Command::new("gzip").arg("-9n").arg(path))
 }
 
 /// Give every payload directory mode 0755 and return the installed size in KiB.
@@ -179,14 +257,36 @@ fn substvar(output: &str) -> Result<&str> {
         .context("dpkg-shlibdeps reported no shared library dependencies")
 }
 
+/// Refuse packages that would not install on the oldest supported release.
+fn require_supported_glibc(depends: &str) -> Result<()> {
+    let Some(required) = glibc_requirement(depends) else {
+        return Ok(());
+    };
+    let status = Command::new("dpkg")
+        .args(["--compare-versions", required, "le", OLDEST_GLIBC])
+        .status()
+        .context("Failed to run dpkg")?;
+    ensure!(
+        status.success(),
+        "The binary requires glibc {required}, but Debian 12 provides {OLDEST_GLIBC}; build the package on Debian 12"
+    );
+    Ok(())
+}
+
+fn glibc_requirement(depends: &str) -> Option<&str> {
+    depends
+        .split(", ")
+        .find_map(|dependency| dependency.strip_prefix("libc6 (>= ")?.strip_suffix(')'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn prerelease_versions_sort_before_their_release() {
-        assert_eq!(debian_version("0.2.0"), "0.2.0");
-        assert_eq!(debian_version("0.3.0-alpha.1"), "0.3.0~alpha.1");
+        assert_eq!(debian_version("0.2.0", 1), "0.2.0-1");
+        assert_eq!(debian_version("0.3.0-alpha.1", 2), "0.3.0~alpha.1-2");
     }
 
     #[test]
@@ -211,6 +311,25 @@ mod tests {
         );
         assert!(substvar("").is_err());
         assert!(substvar("shlibs:Depends=\n").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn glibc_requirement_ignores_other_libraries() {
+        assert_eq!(
+            glibc_requirement("libc6 (>= 2.39), libdbus-1-3 (>= 1.10), libgcc-s1 (>= 4.2)"),
+            Some("2.39")
+        );
+        assert_eq!(glibc_requirement("libdbus-1-3 (>= 1.10)"), None);
+    }
+
+    #[test]
+    fn release_date_matches_the_exact_version() -> Result<()> {
+        let changelog =
+            "## [Unreleased]\n\n## [0.2.0-alpha.1] - 2026-11-20\n\n## [0.2.0] - 2026-11-25\n";
+        assert_eq!(release_date(changelog, "0.2.0")?, "2026-11-25");
+        assert_eq!(release_date(changelog, "0.2.0-alpha.1")?, "2026-11-20");
+        assert!(release_date(changelog, "0.3.0").is_err());
         Ok(())
     }
 }

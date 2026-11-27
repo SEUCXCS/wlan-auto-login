@@ -54,5 +54,7 @@ package() {
   cd "$pkgname"
   install -Dm755 target/release/wlanlogin -t "$pkgdir/usr/bin"
   install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
-  install -Dm644 README.md -t "$pkgdir/usr/share/doc/$pkgname"
+  install -Dm644 README.md CHANGELOG.md -t "$pkgdir/usr/share/doc/$pkgname"
+  install -Dm644 packaging/linux/man/wlanlogin.1 -t "$pkgdir/usr/share/man/man1"
+  install -Dm644 packaging/linux/man/zh_CN/wlanlogin.1 -t "$pkgdir/usr/share/man/zh_CN/man1"
 }

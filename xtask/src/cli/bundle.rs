@@ -23,6 +23,9 @@ pub enum BundlePlatform {
 pub struct DebArgs {
     #[command(flatten)]
     pub build: BuildArgs,
+    /// Debian revision; increase it to republish the same upstream version.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+    pub revision: u32,
 }
 
 #[derive(Args)]

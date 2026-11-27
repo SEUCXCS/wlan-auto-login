@@ -1,0 +1,274 @@
+.TH WLANLOGIN 1 2026-11-26 wlanlogin "User Commands"
+.SH NAME
+wlanlogin \- automatic login for the Student_CX campus Wi\-Fi portal
+.SH SYNOPSIS
+.B wlanlogin
+.RB [ \-\-user | \-\-system ]
+.I command
+.RI [ options ]
+.br
+.B wlanlogin
+.BR \-\-help " | " \-\-version
+.SH DESCRIPTION
+.B wlanlogin
+signs in to the Student_CX captive portal and keeps the session online.
+Authentication is submitted only while the computer is connected to the
+Student_CX Wi\-Fi network; elsewhere, credentials can be saved in advance.
+.PP
+.B service install
+registers a systemd service that follows Wi\-Fi changes reported by
+NetworkManager, signs in automatically and checks the session periodically.
+Every command accepts
+.BR \-\-help .
+.SH SCOPES
+Installations, configuration and credentials are kept separately for two
+scopes.
+The scope options may appear before or after the command.
+Uninstall the service of one scope before switching to the other.
+.TP
+.B \-\-user
+The current user.
+The service starts when the user logs in, and credentials are stored in the
+Secret Service (GNOME Keyring, KWallet and similar).
+This is the default for ordinary users.
+.TP
+.B \-\-system
+The whole machine.
+The service starts at boot, credentials are encrypted with
+.BR systemd\-creds (1),
+and root privileges are required.
+This is the default when run as root, for example through
+.BR sudo (8).
+.SH COMMANDS
+.TP
+.BR login " [\fIcredential options\fR]"
+Sign in with the saved credentials.
+A terminal form opens when credentials are missing.
+When the computer is not connected to Student_CX, the credentials are only
+saved.
+A manual login resumes automatic login that was paused by
+.BR logout .
+.TP
+.BR logout " [" \-\-forget ]
+Sign out of the current session and pause automatic login for the current
+connection, also across service restarts.
+It resumes after a manual
+.B login
+in the same scope or after reconnecting to the Wi\-Fi network.
+.B \-\-forget
+also deletes the saved credentials of the scope, even when offline or when
+the portal request fails.
+.TP
+.BR "service install" " [\fIcredential options\fR]"
+Save credentials (required on first installation), install a private copy of
+the program as the background executable, then register and start the
+systemd unit.
+Run it again after upgrading
+.B wlanlogin
+to update the background copy.
+.TP
+.BR "service uninstall" " [" \-\-purge ]
+Stop and remove the service, keeping the saved credentials.
+.B \-\-purge
+also removes the logs, configuration, runtime files and credentials of the
+scope.
+.TP
+.BR "service start" ", " "service stop" ", " "service restart"
+Start, stop or restart the installed service.
+.B stop
+keeps the installation and the automatic start.
+.TP
+.B service status
+Show whether the service is installed, registered and running, and which
+version is installed.
+.TP
+.BR "service logs" " [" \-n " \fIlines\fR] [" \-f ]
+Show the service log.
+.B \-n
+sets the number of recent lines (default 100; 0 shows no history);
+.B \-f
+follows new entries until interrupted with Ctrl+C.
+.TP
+.BR "service session\-ready" ", " "service session\-end"
+User scope only.
+For desktops that do not reach the standard graphical session target,
+.B session\-ready
+synchronizes the D\-Bus activation environment once the graphical session is
+ready, and
+.B session\-end
+withdraws that notice before logging out.
+.TP
+.BR "config get " \fIname\fR ", " "config set " "\fIname value\fR"
+Read or save a configuration value of the scope.
+.TP
+.BR "config remove " \fIname\fR ", " "config list"
+Restore the default value, or list all values.
+The only key is
+.BR log.level :
+.B info
+(default) logs failed portal requests;
+.B debug
+logs every portal request and response with credentials, cookies and device
+identifiers redacted.
+Restart the service to apply the change.
+.TP
+.BR "permission list" ", " "permission check " "[\fIid\fR], " "permission get " \fIid\fR
+List, check or request platform permissions; each accepts
+.BR \-\-json .
+Linux defines no permissions, so the list is empty.
+.TP
+.B daemon
+Run the automatic login loop in the foreground of the current process.
+.SH CREDENTIAL OPTIONS
+Accepted by
+.B login
+and
+.BR "service install" .
+.TP
+.BR \-u ", " \-\-username " \fIusername\fR"
+Campus network account.
+.TP
+.BR \-p ", " \-\-password " \fIpassword\fR"
+Password.
+It is visible in the process list and shell history; prefer
+.BR \-\-password\-stdin .
+.TP
+.B \-\-password\-stdin
+Read one line from standard input as the password.
+Cannot be combined with
+.BR \-p .
+.TP
+.BR \-\-line " \fBfree1\fR|\fBfree2\fR|\fBcampus\fR"
+Portal line: free line 1, free line 2, or campus intranet.
+.TP
+.B \-\-remember\-me
+Save the account and password in the credential store of the scope after a
+successful login.
+.TP
+.B \-\-interactive
+Open the terminal form even when credentials are saved, to change the
+account, password or line.
+.TP
+.B \-\-non\-interactive
+Fail instead of opening the terminal form when information is missing.
+.TP
+.BR \-\-credential\-store " \fBnative\fR|\fBprotected\-file\fR"
+System scope credential store.
+.B native
+uses systemd\-creds;
+.B protected\-file
+stores the account and password in plain text in a file readable only by
+root, for older systems without systemd\-creds.
+.SH ENVIRONMENT
+.TP
+.B WLANLOGIN_USERNAME
+Default for
+.BR \-\-username .
+.TP
+.B WLANLOGIN_PASSWORD
+Default for
+.BR \-\-password .
+.TP
+.B WLANLOGIN_LINE
+Default for
+.BR \-\-line .
+.TP
+.B RUST_LOG
+Overrides the log filter of a foreground run, for example
+.BR RUST_LOG=wlanlogin::portal::page_config=debug .
+.SH FILES
+.TP
+.I ~/.config/SEUCXCS/wlanlogin/
+User scope configuration
+.RI ( config.json ),
+line preference
+.RI ( preferences.json ),
+service log
+.RI ( daemon.log )
+and runtime files.
+.TP
+.I ~/.local/share/SEUCXCS/wlanlogin/bin/wlanlogin\-daemon
+User scope background executable.
+.TP
+.I /var/lib/SEUCXCS/wlanlogin/
+System scope configuration, line preference and service log.
+.TP
+.I /run/SEUCXCS/wlanlogin/
+System scope runtime files.
+.TP
+.I /etc/SEUCXCS/wlanlogin/
+System scope credentials.
+.TP
+.I /usr/local/libexec/SEUCXCS/wlanlogin/wlanlogin\-daemon
+System scope background executable.
+.TP
+.I dev.cxcs.tools.wlanlogin.service
+Name of the systemd unit in both scopes.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+The command failed; the reason is printed on standard error.
+.TP
+.B 2
+Invalid command line.
+.SH EXAMPLES
+Install the user service and check it:
+.PP
+.RS
+.EX
+wlanlogin \-\-user service install
+wlanlogin \-\-user service status
+.EE
+.RE
+.PP
+Install the system service:
+.PP
+.RS
+.EX
+sudo wlanlogin \-\-system service install
+.EE
+.RE
+.PP
+Sign in from a script without exposing the password:
+.PP
+.RS
+.EX
+printf \(aq%s\en\(aq "$PASSWORD" | wlanlogin login \-u 2026000000 \e
+    \-\-password\-stdin \-\-line free1 \-\-non\-interactive
+.EE
+.RE
+.PP
+Switch account or line:
+.PP
+.RS
+.EX
+wlanlogin logout
+wlanlogin login \-\-interactive \-\-remember\-me
+.EE
+.RE
+.PP
+Collect portal diagnostics:
+.PP
+.RS
+.EX
+wlanlogin \-\-user config set log.level debug
+wlanlogin \-\-user service restart
+wlanlogin \-\-user service logs \-f
+.EE
+.RE
+.SH NOTES
+Software packages install only the command.
+After upgrading the package, run
+.B service install
+again in each scope that has a service; before removing the package, run
+.B service uninstall
+in that scope.
+.SH SEE ALSO
+.BR systemctl (1),
+.BR systemd\-creds (1),
+.BR NetworkManager (8)
+.PP
+https://github.com/SEUCXCS/wlan\-auto\-login
