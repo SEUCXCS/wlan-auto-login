@@ -107,13 +107,16 @@ sudo "$HOME/.local/bin/wlanlogin" --system service status
 ```
 
 <details>
-<summary>使用 Debian / Ubuntu 或 Arch Linux 软件包安装</summary>
+<summary>使用 Debian / Ubuntu、Fedora 或 Arch Linux 软件包安装</summary>
 
 从 [Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) 下载软件包（或按[软件包打包](#build-linux-packages)自行生成）后安装：
 
 ```sh
 # Debian 12+ / Ubuntu 24.04+
 sudo apt install ./wlanlogin_<version>-1_amd64.deb
+
+# Fedora 43+
+sudo dnf install ./wlanlogin-<version>-<release>.x86_64.rpm
 
 # Arch Linux
 sudo pacman -U ./wlanlogin-<pkgver>-<pkgrel>-x86_64.pkg.tar.zst
@@ -400,6 +403,9 @@ sudo wlanlogin --system permission get macos.keychain
 # Debian / Ubuntu
 sudo apt update && sudo apt install git build-essential pkg-config libdbus-1-dev
 
+# Fedora
+sudo dnf install git gcc pkgconf-pkg-config dbus-devel
+
 # Arch Linux
 sudo pacman -S --needed git base-devel rust pkgconf dbus
 ```
@@ -432,6 +438,14 @@ podman run --rm -v "$PWD":/work -w /work docker.io/library/rust:1-bookworm sh -c
 ```
 
 产物为 `<target-dir>/release/bundle/wlanlogin_<version>-<revision>_<arch>.deb`（默认 target 目录为 `target`），指定 `--target` 时路径增加 target 层级，以输出的 `Bundle:` 路径为准。同一版本重新打包时用 `--revision 2` 等递增 Debian 修订号。软件包附带 `CHANGELOG.md`、由其生成的 Debian 变更记录及中英文 man 手册；打包要求 `CHANGELOG.md` 已有当前版本的 `## [<version>] - <YYYY-MM-DD>` 条目。
+
+**Fedora**：`.rpm` 最低支持 Fedora 43。共享库依赖由 `rpmbuild` 按构建主机生成，若二进制要求的 glibc 高于 Fedora 43 的 2.42，打包会直接失败。在 Fedora 上额外安装 `rpm-build` 后执行：
+
+```sh
+cargo xtask bundle rpm
+```
+
+Debian / Ubuntu 主机安装 `rpm` 软件包后也可执行同一命令。产物为 `<target-dir>/release/bundle/wlanlogin-<version>-<release>.<arch>.rpm`，在 Fedora 上构建时 release 带 `.fc44` 等发行版后缀；同一版本重新打包时用 `--release 2` 等递增。软件包附带 `CHANGELOG.md` 与中英文 man 手册，RPM 变更记录同样取 `CHANGELOG.md` 中当前版本条目的日期。
 
 **Arch Linux**：`packaging/archlinux/PKGBUILD` 打包当前检出的已提交 HEAD，未提交的修改不会进入软件包：
 

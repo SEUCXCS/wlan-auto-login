@@ -10,14 +10,14 @@
 | --- | --- | --- |
 | `crates/wlan-api` | `wlanlogin-lib` | 校园网门户协议、JSONP 解析、认证状态与 HTTP 诊断 |
 | `crates/wlan-app` | `wlanlogin-cli` | CLI / TUI、业务控制、后台守护与操作系统集成 |
-| `xtask` | `xtask` | macOS / Windows / Debian 打包与平台源码边界检查 |
+| `xtask` | `xtask` | macOS / Windows / Debian / RPM 打包与平台源码边界检查 |
 | `packaging/windows` | `wlanlogin-installer` | 独立 workspace 的 Windows 安装向导与 MSI 自定义动作 |
 | `docs` | — | 门户协议说明与研究记录 |
 
 原生构建依赖：
 
 - **通用**：Rust、Cargo、`rustfmt`、`clippy`、Git。
-- **Linux**：C 工具链、`pkg-config`、D-Bus 开发库、`dbus-daemon` 及标准 POSIX 工具（Debian/Ubuntu：`build-essential pkg-config libdbus-1-dev dbus-daemon`）。
+- **Linux**：C 工具链、`pkg-config`、D-Bus 开发库、`dbus-daemon` 及标准 POSIX 工具（Debian/Ubuntu：`build-essential pkg-config libdbus-1-dev dbus-daemon`；Fedora：`gcc pkgconf-pkg-config dbus-devel dbus-daemon`）。
 - **macOS**：Xcode Command Line Tools。
 - **Windows**：与目标架构对应的 MSVC 或 GNU 构建工具；打包安装向导另需 .NET 8 SDK 与 WiX 6.0.2（含 `WixToolset.UI.wixext/6.0.2`）。
 
@@ -86,6 +86,8 @@
 | `commands/bundle/macos.rs` 及子模块 | macOS 应用构建、组装（`assemble.rs`）、构建号原子分配（`build_number.rs`）、签名验证（`sign.rs`）与原子发布回滚（`publish.rs`） |
 | `commands/bundle/windows.rs` | Windows CLI / 安装动作 / 初始化 DLL 构建、MSI 与安装向导打包及 cabinet 逐字节校验 |
 | `commands/bundle/deb.rs` | Linux CLI 构建、`dpkg-shlibdeps` 计算共享库依赖并校验 Debian 12 glibc 下限、生成 Debian 变更记录、按 `packaging/debian/` 模板生成元数据并用 `dpkg-deb` 打包 |
+| `commands/bundle/rpm.rs` | Linux CLI 构建、按 `packaging/fedora/wlanlogin.spec` 模板用 `rpmbuild` 打包，并按生成的 `GLIBC_*` 依赖校验 Fedora 43 glibc 下限 |
+| `commands/bundle/linux.rs` | Debian 与 RPM 共用的工具检查、`CHANGELOG.md` 发布日期解析与文件暂存 |
 | `support/` | Cargo JSON 产物构建（`cargo.rs`）、外部进程（`process.rs`）、工作区资源（`workspace.rs`）与平台工具检查（`platform/`）；不依赖 `cli` 或 `commands`，复用 `infra/identity.rs` |
 
 新增顶层命令需在 `cli.rs` 与 `commands.rs` 注册并实现 `commands/<command>.rs`；新增打包平台需在 `cli/bundle.rs`、`commands/bundle.rs` 注册并实现 `commands/bundle/<platform>.rs`，打包资源存放于 `packaging/<platform>/`。
@@ -94,7 +96,9 @@ Linux 软件包只安装 CLI（`/usr/bin/wlanlogin`）、许可证、README、`C
 
 `bundle deb` 最低支持 Debian 12 与 Ubuntu 24.04：`dpkg-shlibdeps` 计算出的 `libc6` 要求高于 Debian 12 的 2.36 时打包失败，因此须在 Debian 12 或更旧的系统上构建。版本为 `<workspace 版本>-<revision>`（预发布的 `-` 转为 `~`，`--revision` 默认 1），`Depends` 由 `dpkg-shlibdeps` 结果与 `packaging/debian/control` 中的运行依赖组成。`CHANGELOG.md` 安装为上游 `changelog.gz`，另生成单条目 `changelog.Debian.gz`，其维护者取自 control 模板、日期取自 `CHANGELOG.md` 中当前版本的 `## [<version>] - <YYYY-MM-DD>` 标题，缺少该条目时打包失败。
 
-`packaging/archlinux/PKGBUILD` 以 `git+file` 拉取所在检出的已提交 HEAD，`pkgver` 在解析 PKGBUILD 时由该提交的 workspace 版本、提交数与短哈希计算；不要改用 `pkgver()`，否则 makepkg 会改写受版本控制的 PKGBUILD。`check()` 只执行 `--version` 与 `--help`。修改运行依赖或安装文件时同步更新两份软件包定义。
+`bundle rpm` 最低支持 Fedora 43：`rpmbuild` 生成的 `GLIBC_*` 符号版本依赖中最高版本高于 Fedora 43 的 2.42 时打包失败；未生成该依赖（缺少 rpm 的 ELF 依赖生成器）时同样失败。`packaging/fedora/wlanlogin.spec` 是模板，`@NAME@` 占位符由 xtask 填写，`%install` 从 `%{_sourcedir}` 安装预先构建的 CLI 与文档，不在 rpmbuild 中编译；Fedora 的 rpm-build 与 Debian/Ubuntu 的 `rpm` 均可构建。版本为 `<workspace 版本>-<release>%{?dist}`（预发布的 `-` 转为 `~`，`--release` 默认 1），`%changelog` 日期同样取自 `CHANGELOG.md` 中当前版本的条目。
+
+`packaging/archlinux/PKGBUILD` 以 `git+file` 拉取所在检出的已提交 HEAD，`pkgver` 在解析 PKGBUILD 时由该提交的 workspace 版本、提交数与短哈希计算；不要改用 `pkgver()`，否则 makepkg 会改写受版本控制的 PKGBUILD。`check()` 只执行 `--version` 与 `--help`。修改运行依赖或安装文件时同步更新 Debian、RPM 与 Arch 三份软件包定义。
 
 发布前在 `CHANGELOG.md` 中将 `[Unreleased]` 的内容移入带日期的版本条目，并更新文末的比较链接。
 

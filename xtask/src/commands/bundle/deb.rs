@@ -7,6 +7,7 @@ use std::{
     process::{Command, Stdio},
 };
 
+use super::linux::{self, release_date, stage, write_file};
 use crate::{
     cli::bundle::DebArgs,
     support::{cargo, identity, platform, process, workspace},
@@ -24,23 +25,18 @@ pub fn run(options: &DebArgs) -> Result<()> {
         .unwrap_or(std::env::consts::ARCH);
     let architecture = architecture(target)?;
     // Fail before compiling when the host or the sources cannot produce a package.
-    for tool in ["dpkg-deb", "dpkg-shlibdeps"] {
-        let available = Command::new(tool)
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success());
-        ensure!(
-            available,
-            "{tool} is required; install dpkg-dev on a Debian or Ubuntu host"
-        );
-    }
+    linux::require_tools(
+        &["dpkg-deb", "dpkg-shlibdeps"],
+        "install dpkg-dev on a Debian or Ubuntu host",
+    )?;
     let root = workspace::root()?;
     let upstream = env!("CARGO_PKG_VERSION");
     let version = debian_version(upstream, options.revision);
     let changelog = fs::read_to_string(root.join("CHANGELOG.md"))?;
-    let date = rfc5322_date(release_date(&changelog, upstream)?)?;
+    let date = linux::format_date(
+        release_date(&changelog, upstream)?,
+        "+%a, %d %b %Y %H:%M:%S %z",
+    )?;
     let control_template = fs::read_to_string(root.join("packaging/debian/control"))?;
     let maintainer = control_field(&control_template, "Maintainer")?;
 
@@ -141,30 +137,6 @@ fn debian_version(upstream: &str, revision: u32) -> String {
     format!("{}-{revision}", upstream.replacen('-', "~", 1))
 }
 
-/// The Debian changelog entry carries the date of the version's CHANGELOG.md entry.
-fn release_date<'a>(changelog: &'a str, version: &str) -> Result<&'a str> {
-    let heading = format!("## [{version}] - ");
-    changelog
-        .lines()
-        .find_map(|line| line.strip_prefix(heading.as_str()))
-        .map(str::trim)
-        .with_context(|| format!("CHANGELOG.md has no \"## [{version}] - YYYY-MM-DD\" entry"))
-}
-
-fn rfc5322_date(date: &str) -> Result<String> {
-    let output = Command::new("date")
-        .env("LC_ALL", "C")
-        .args(["--utc", "--rfc-email", "--date"])
-        .arg(date)
-        .output()
-        .context("Failed to run date")?;
-    ensure!(
-        output.status.success(),
-        "CHANGELOG.md has an invalid release date: {date}"
-    );
-    Ok(String::from_utf8(output.stdout)?.trim_end().to_owned())
-}
-
 fn control_field<'a>(control: &'a str, name: &str) -> Result<&'a str> {
     control
         .lines()
@@ -177,24 +149,6 @@ fn debian_changelog_entry(version: &str, upstream: &str, maintainer: &str, date:
         "{} ({version}) unstable; urgency=medium\n\n  * Package upstream release {upstream}; see changelog.gz.\n\n -- {maintainer}  {date}\n",
         identity::APP_NAME
     )
-}
-
-fn create_parent(path: &Path) -> Result<()> {
-    fs::create_dir_all(path.parent().context("Package path has no parent")?)?;
-    Ok(())
-}
-
-fn stage(source: &Path, destination: &Path, mode: u32) -> Result<()> {
-    create_parent(destination)?;
-    fs::copy(source, destination)
-        .with_context(|| format!("Failed to stage {}", source.display()))?;
-    platform::set_mode(destination, mode)
-}
-
-fn write_file(destination: &Path, contents: &str) -> Result<()> {
-    create_parent(destination)?;
-    fs::write(destination, contents)?;
-    platform::set_mode(destination, 0o644)
 }
 
 fn stage_document(source: &Path, destination: &Path) -> Result<()> {
@@ -321,15 +275,5 @@ mod tests {
             Some("2.39")
         );
         assert_eq!(glibc_requirement("libdbus-1-3 (>= 1.10)"), None);
-    }
-
-    #[test]
-    fn release_date_matches_the_exact_version() -> Result<()> {
-        let changelog =
-            "## [Unreleased]\n\n## [0.2.0-alpha.1] - 2026-11-20\n\n## [0.2.0] - 2026-11-25\n";
-        assert_eq!(release_date(changelog, "0.2.0")?, "2026-11-25");
-        assert_eq!(release_date(changelog, "0.2.0-alpha.1")?, "2026-11-20");
-        assert!(release_date(changelog, "0.3.0").is_err());
-        Ok(())
     }
 }
