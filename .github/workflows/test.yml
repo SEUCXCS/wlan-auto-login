@@ -115,6 +115,10 @@ jobs:
             "$binary" "$command" --help
           done
 
+      - name: Check the Debian package
+        if: runner.os == 'Linux'
+        run: cargo xtask bundle deb --profile dev --target "$BUILD_TARGET" --target-dir target
+
       - name: Check Windows installer code and payload
         if: runner.os == 'Windows'
         shell: pwsh
@@ -131,3 +135,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo xtask bundle windows --profile dev --target $env:BUILD_TARGET --target-dir target --wix $wix
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  archlinux:
+    name: Arch Linux package
+    runs-on: ubuntu-22.04
+    container: docker.io/library/archlinux:base-devel
+    timeout-minutes: 30
+    steps:
+      # makepkg also checks runtime dependencies; git must precede checkout to keep history.
+      - name: Install packaging dependencies
+        run: pacman -Syu --noconfirm --needed git rust pkgconf dbus networkmanager
+
+      # The PKGBUILD derives pkgver from the commit count, so fetch the full history.
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # check() in the PKGBUILD runs the packaged CLI.
+      - name: Build the package as an unprivileged user
+        run: |
+          useradd --create-home builder
+          chown -R builder: "$GITHUB_WORKSPACE"
+          cd packaging/archlinux
+          runuser -u builder -- makepkg --noconfirm

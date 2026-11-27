@@ -109,14 +109,14 @@ sudo "$HOME/.local/bin/wlanlogin" --system service status
 <details>
 <summary>使用 Debian / Ubuntu 或 Arch Linux 软件包安装</summary>
 
-按[软件包打包](#build-linux-packages)生成软件包后安装：
+从 [Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) 下载软件包（或按[软件包打包](#build-linux-packages)自行生成）后安装：
 
 ```sh
 # Debian 12+ / Ubuntu 24.04+
-sudo apt install ./target/release/bundle/wlanlogin_<version>-1_amd64.deb
+sudo apt install ./wlanlogin_<version>-1_amd64.deb
 
 # Arch Linux
-sudo pacman -U packaging/archlinux/wlanlogin-<pkgver>-<pkgrel>-x86_64.pkg.tar.zst
+sudo pacman -U ./wlanlogin-<pkgver>-<pkgrel>-x86_64.pkg.tar.zst
 ```
 
 软件包将命令安装为 `/usr/bin/wlanlogin`，附带英文与中文 man 手册（`man wlanlogin`；中文环境如 `LANG=zh_CN.UTF-8` 下显示中文版），并依赖 NetworkManager、systemd 与 D-Bus；它不注册服务，也不预置配置或凭据。安装后执行上文第 3 步的 `service install`，系统模式使用 `sudo wlanlogin --system service install`。
