@@ -148,6 +148,7 @@ mod tests {
             vec!["xtask", "bundle", "--help"],
             vec!["xtask", "bundle", "macos", "--help"],
             vec!["xtask", "bundle", "windows", "--help"],
+            vec!["xtask", "bundle", "deb", "--help"],
         ] {
             let error = match Cli::try_parse_from(arguments) {
                 Err(error) => error,

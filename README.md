@@ -107,6 +107,25 @@ sudo "$HOME/.local/bin/wlanlogin" --system service status
 ```
 
 <details>
+<summary>使用 Debian / Ubuntu 或 Arch Linux 软件包安装</summary>
+
+按[软件包打包](#build-linux-packages)生成软件包后安装：
+
+```sh
+# Debian / Ubuntu
+sudo apt install ./target/release/bundle/wlanlogin_<version>_amd64.deb
+
+# Arch Linux
+sudo pacman -U packaging/archlinux/wlanlogin-<pkgver>-<pkgrel>-x86_64.pkg.tar.zst
+```
+
+软件包将命令安装为 `/usr/bin/wlanlogin`，并依赖 NetworkManager、systemd 与 D-Bus；它不注册服务，也不预置配置或凭据。安装后执行上文第 3 步的 `service install`，系统模式使用 `sudo wlanlogin --system service install`。
+
+升级软件包后，在原作用域重新执行 `service install` 更新后台副本；移除软件包前，先执行同作用域的 `service uninstall`（需清除配置与凭据时加 `--purge`）。
+
+</details>
+
+<details>
 <summary>桌面钱包与旧版系统说明</summary>
 
 - **桌面钱包（用户模式）**：后台服务仅在接入 `Student_CX` 且需要认证时读取钱包。若桌面自动登录未解锁钱包，执行一次 `wlanlogin --user login` 或在桌面密钥环中解锁后，后台将自动重试。
@@ -393,6 +412,27 @@ cd wlan-auto-login
 cargo build --release --locked -p wlanlogin-cli --bin wlanlogin
 install -Dm 0755 target/release/wlanlogin "$HOME/.local/bin/wlanlogin"
 ```
+
+<a id="build-linux-packages"></a>
+
+#### 软件包打包
+
+**Debian / Ubuntu**：额外安装 `dpkg-dev`（`build-essential` 已包含）后执行：
+
+```sh
+cargo xtask bundle deb
+```
+
+产物为 `target/release/bundle/wlanlogin_<version>_<arch>.deb`；指定 `--target` 时路径增加 target 层级，以输出的 `Bundle:` 路径为准。共享库依赖版本由 `dpkg-shlibdeps` 按构建主机计算，软件包只能安装到 glibc 不低于构建主机的系统，面向多个发行版时请在其中最旧的版本上构建（例如 Ubuntu 22.04）。
+
+**Arch Linux**：`packaging/archlinux/PKGBUILD` 打包当前检出的已提交 HEAD，未提交的修改不会进入软件包：
+
+```sh
+cd packaging/archlinux
+makepkg -s
+```
+
+产物为 `packaging/archlinux/wlanlogin-<pkgver>-<pkgrel>-<arch>.pkg.tar.zst`，`pkgver` 形如 `0.2.0.r154.g8f5777a`（workspace 版本、提交数与短哈希）。
 
 <a id="build-macos"></a>
 

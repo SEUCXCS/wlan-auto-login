@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | `crates/wlan-api` | `wlanlogin-lib` | 校园网门户协议、JSONP 解析、认证状态与 HTTP 诊断 |
 | `crates/wlan-app` | `wlanlogin-cli` | CLI / TUI、业务控制、后台守护与操作系统集成 |
-| `xtask` | `xtask` | macOS / Windows 打包与平台源码边界检查 |
+| `xtask` | `xtask` | macOS / Windows / Debian 打包与平台源码边界检查 |
 | `packaging/windows` | `wlanlogin-installer` | 独立 workspace 的 Windows 安装向导与 MSI 自定义动作 |
 | `docs` | — | 门户协议说明与研究记录 |
 
@@ -85,9 +85,12 @@
 | `commands/bundle.rs` | 打包平台分发 |
 | `commands/bundle/macos.rs` 及子模块 | macOS 应用构建、组装（`assemble.rs`）、构建号原子分配（`build_number.rs`）、签名验证（`sign.rs`）与原子发布回滚（`publish.rs`） |
 | `commands/bundle/windows.rs` | Windows CLI / 安装动作 / 初始化 DLL 构建、MSI 与安装向导打包及 cabinet 逐字节校验 |
+| `commands/bundle/deb.rs` | Linux CLI 构建、`dpkg-shlibdeps` 计算共享库依赖、按 `packaging/debian/` 模板生成元数据并用 `dpkg-deb` 打包 |
 | `support/` | Cargo JSON 产物构建（`cargo.rs`）、外部进程（`process.rs`）、工作区资源（`workspace.rs`）与平台工具检查（`platform/`）；不依赖 `cli` 或 `commands`，复用 `infra/identity.rs` |
 
 新增顶层命令需在 `cli.rs` 与 `commands.rs` 注册并实现 `commands/<command>.rs`；新增打包平台需在 `cli/bundle.rs`、`commands/bundle.rs` 注册并实现 `commands/bundle/<platform>.rs`，打包资源存放于 `packaging/<platform>/`。
+
+Linux 软件包只安装 CLI（`/usr/bin/wlanlogin`）、许可证与 README。systemd unit 与后台副本仍归 `service install/uninstall` 管理，软件包不得放置同名 unit、启用服务或写入运行数据目录。`bundle deb` 的版本取 workspace 版本（预发布的 `-` 转为 `~`），`Depends` 由 `dpkg-shlibdeps` 结果与 `packaging/debian/control` 中的运行依赖组成。`packaging/archlinux/PKGBUILD` 以 `git+file` 拉取所在检出的已提交 HEAD，`pkgver` 在解析 PKGBUILD 时由该提交的 workspace 版本、提交数与短哈希计算；不要改用 `pkgver()`，否则 makepkg 会改写受版本控制的 PKGBUILD。`check()` 只执行 `--version` 与 `--help`。修改运行依赖时同步更新两份元数据。
 
 `packaging/windows` 使用独立 Cargo workspace 与 `Cargo.lock`：
 - `installer.wxs` 定义 WixUI 向导页、文件组件、PATH、升级与动作顺序；`initialize.rs` 准备唯一事务 ID 与一次性 DPAPI 凭据文件。

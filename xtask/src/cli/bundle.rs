@@ -15,6 +15,14 @@ pub enum BundlePlatform {
     Macos(MacosArgs),
     /// Build a Windows Installer setup executable.
     Windows(WindowsArgs),
+    /// Build a Debian package (.deb) on a Debian or Ubuntu host.
+    Deb(DebArgs),
+}
+
+#[derive(Args)]
+pub struct DebArgs {
+    #[command(flatten)]
+    pub build: BuildArgs,
 }
 
 #[derive(Args)]
