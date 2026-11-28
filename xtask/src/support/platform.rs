@@ -21,7 +21,7 @@ mod linux;
 pub use linux::{require_linux, set_mode};
 #[cfg(not(target_os = "linux"))]
 pub fn require_linux() -> anyhow::Result<()> {
-    anyhow::bail!("Debian packaging requires a Linux host with dpkg-dev")
+    anyhow::bail!("Linux packaging requires a Linux host")
 }
 #[cfg(not(target_os = "linux"))]
 pub fn set_mode(_path: &std::path::Path, _mode: u32) -> anyhow::Result<()> {
