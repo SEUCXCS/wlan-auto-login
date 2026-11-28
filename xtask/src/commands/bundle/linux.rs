@@ -49,17 +49,23 @@ fn package_timestamp(root: &Path, source_date_epoch: Option<&OsStr>) -> Result<u
             .context("SOURCE_DATE_EPOCH must be a non-negative integer Unix timestamp");
     }
 
-    // An archive extracted inside another checkout must not inherit its HEAD date.
-    let output = Command::new("git")
+    // An archive extracted inside another checkout must not inherit its HEAD date,
+    // while git worktrees and submodules use a `.git` file rather than a directory.
+    ensure!(
+        root.join(".git").exists(),
+        "Cannot read the source commit date: no .git entry in {}. Set SOURCE_DATE_EPOCH",
+        root.display()
+    );
+    let mut command = Command::new("git");
+    command
         .current_dir(root)
-        .args([
-            "--git-dir=.git",
-            "log",
-            "-1",
-            "--no-show-signature",
-            "--format=%ct",
-            "HEAD",
-        ])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .args(["log", "-1", "--no-show-signature", "--format=%ct", "HEAD"]);
+    if let Some(parent) = root.parent() {
+        command.env("GIT_CEILING_DIRECTORIES", parent);
+    }
+    let output = command
         .output()
         .context("Failed to run Git for the package changelog date. Set SOURCE_DATE_EPOCH")?;
     ensure!(
@@ -107,6 +113,53 @@ mod tests {
         }
         assert!(matches!(
             package_timestamp(source.path(), None),
+            Err(error) if error.to_string().contains("Set SOURCE_DATE_EPOCH")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn git_timestamp_supports_worktrees_and_ignores_parent_repositories() -> Result<()> {
+        let sandbox = tempfile::tempdir()?;
+        let repo = sandbox.path().join("repo");
+        let worktree = sandbox.path().join("worktree");
+        fs::create_dir(&repo)?;
+
+        let run_git = |dir: &Path, args: &[&str]| -> Result<()> {
+            let output = Command::new("git")
+                .current_dir(dir)
+                .env("GIT_AUTHOR_NAME", "test")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_AUTHOR_DATE", "1795651200 +0000")
+                .env("GIT_COMMITTER_NAME", "test")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_DATE", "1795651200 +0000")
+                .args(args)
+                .output()?;
+            ensure!(
+                output.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(())
+        };
+
+        run_git(&repo, &["init", "-q"])?;
+        fs::write(repo.join("README.md"), "test\n")?;
+        run_git(&repo, &["add", "README.md"])?;
+        run_git(&repo, &["commit", "-q", "--no-gpg-sign", "-m", "init"])?;
+        let worktree_path = worktree.to_str().context("worktree path is not UTF-8")?;
+        run_git(&repo, &["worktree", "add", "-q", "--detach", worktree_path])?;
+
+        assert!(worktree.join(".git").is_file());
+        assert_eq!(package_timestamp(&repo, None)?, 1_795_651_200);
+        assert_eq!(package_timestamp(&worktree, None)?, 1_795_651_200);
+
+        let nested = repo.join("extracted-archive");
+        fs::create_dir(&nested)?;
+        assert!(matches!(
+            package_timestamp(&nested, None),
             Err(error) if error.to_string().contains("Set SOURCE_DATE_EPOCH")
         ));
         Ok(())
