@@ -48,7 +48,7 @@ pub struct Client {
 pub enum LoginPreparation<'a> {
     AlreadyOnline,
     Unknown,
-    Offline(PreparedLogin<'a>),
+    Offline(Box<PreparedLogin<'a>>),
 }
 
 /// An offline device and its page configuration, ready for a single submission.
@@ -121,11 +121,11 @@ impl Client {
         let page = self
             .load_page(RequestOperation::Login, &status, &status.vlan, &status.ipv6)
             .await?;
-        Ok(LoginPreparation::Offline(PreparedLogin {
+        Ok(LoginPreparation::Offline(Box::new(PreparedLogin {
             client: self,
             status,
             page,
-        }))
+        })))
     }
 }
 
