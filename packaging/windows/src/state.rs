@@ -254,7 +254,7 @@ impl Snapshot {
             .and_then(|file| file.bytes.as_ref())
             .is_some_and(|bytes| {
                 serde_json::from_slice::<serde_json::Value>(bytes)
-                    .map_or(true, |value| !value.is_object())
+                    .map_or(true, |value| generation_from_control(&value).is_err())
             });
         let generation = if control_invalid && allow_invalid_control {
             0
@@ -434,9 +434,15 @@ pub fn read_control(paths: &Paths) -> Result<serde_json::Value> {
     }
 }
 pub fn generation(paths: &Paths) -> Result<u64> {
-    Ok(read_control(paths)?["credential_generation"]
-        .as_u64()
-        .unwrap_or(0))
+    generation_from_control(&read_control(paths)?)
+}
+
+fn generation_from_control(state: &serde_json::Value) -> Result<u64> {
+    let state = state.as_object().context("Invalid control state")?;
+    match state.get("credential_generation") {
+        Some(value) => value.as_u64().context("Invalid credential generation"),
+        None => Ok(0),
+    }
 }
 pub fn remove_file(path: &Path) -> Result<()> {
     win::plain_path(path)?;
