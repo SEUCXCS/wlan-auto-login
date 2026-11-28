@@ -47,7 +47,8 @@ pub async fn run(context: &Context, mut args: LoginArgs, installing: bool) -> Re
     };
     let wifi = context.wifi().await;
     let store = context.credentials(request.credential_store)?;
-    let needs_login = !installing || install::prepare(&request, refresh, &wifi, &store).await?;
+    let needs_login =
+        !installing || install::prepare(&context.paths, &request, refresh, &wifi, &store).await?;
     if needs_login {
         let mut prepared =
             login::prepare(&context.paths, request, installing, &wifi, &store).await?;
