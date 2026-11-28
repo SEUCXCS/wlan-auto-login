@@ -41,6 +41,8 @@ pub enum ProtocolError {
     MissingProgramIndex,
     #[error("Missing page_index in page configuration")]
     MissingPageIndex,
+    #[error("Portal has not confirmed that the device is offline")]
+    LoginStateUnknown,
 }
 
 #[derive(Debug, thiserror::Error)]

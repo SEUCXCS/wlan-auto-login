@@ -5,12 +5,15 @@ use crate::infra::{
     error::{Context, Message, Result},
     paths::Paths,
 };
+use crate::system::define::wifi::WifiState;
 use crate::system::{
     credentials::{CredentialMode, Store},
     shared::services,
     wifi::{self, WifiConnection},
 };
-use wlanlogin_lib::{Client, Credentials, Line, LoginOutcome};
+use wlanlogin_lib::{
+    Client, Credentials, Error as PortalError, Line, LoginOutcome, LoginPreparation, ProtocolError,
+};
 
 #[derive(Default)]
 pub struct LoginRequest {
@@ -115,10 +118,34 @@ pub async fn execute(
     let _operation = control::operation_lock(paths).await?;
     // Credential entry, keychain access and locking can take time; recheck SSID
     // immediately before even the initial portal status request.
-    let state = wifi::wifi_state(wifi).await;
-    let warning = state.notice();
-    let outcome = if state.is_target() {
-        Some(client.login(&form.credentials, form.line).await?)
+    let (session, mut warning) = match wifi.target_session().await {
+        Ok(Some(session)) => (Some(session), None),
+        Ok(None) => (None, WifiState::Other.notice()),
+        Err(error) => (None, WifiState::Unavailable(format!("{error:#}")).notice()),
+    };
+    let outcome = if let Some(session) = session {
+        if form.credentials.username.trim().is_empty() || form.credentials.password.is_empty() {
+            return Err(PortalError::EmptyCredentials.into());
+        }
+        match client.prepare_login().await? {
+            LoginPreparation::AlreadyOnline => Some(LoginOutcome::AlreadyOnline),
+            LoginPreparation::Unknown => {
+                return Err(PortalError::Protocol(ProtocolError::LoginStateUnknown).into());
+            }
+            LoginPreparation::Offline(prepared) => match wifi.target_session().await {
+                Ok(Some(current)) if current == session => {
+                    Some(prepared.submit(&form.credentials, form.line).await?)
+                }
+                Ok(_) => {
+                    warning = Some(Message::WifiSessionChangedBeforeLogin.to_string());
+                    None
+                }
+                Err(error) => {
+                    warning = WifiState::Unavailable(format!("{error:#}")).notice();
+                    None
+                }
+            },
+        }
     } else {
         None
     };
@@ -363,6 +390,7 @@ mod tests {
             let (client, listener) = mock_portal().await?;
             let store = TestStore::default();
             let wifi = TestWifi::new([
+                Ok(Some("student-session".into())),
                 Ok(Some("student-session".into())),
                 Ok(Some("student-session".into())),
             ]);

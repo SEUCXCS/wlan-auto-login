@@ -217,6 +217,7 @@ fn failure(error: &Error) -> (&'static str, &'static str) {
             ProtocolError::PageConfigRejected => ("portal", "page_config_rejected"),
             ProtocolError::MissingProgramIndex => ("response", "missing_program_index"),
             ProtocolError::MissingPageIndex => ("response", "missing_page_index"),
+            ProtocolError::LoginStateUnknown => ("portal", "login_state_unknown"),
         },
         Error::MissingIp => ("response", "missing_device_ipv4"),
         Error::Rejected { .. } => ("portal", "operation_rejected"),

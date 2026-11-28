@@ -561,6 +561,32 @@ async fn already_offline_logout_avoids_portal_action() -> TestResult {
 }
 
 #[tokio::test]
+async fn unknown_status_never_reaches_page_or_login() -> TestResult {
+    let (client, task) = server(vec![include_str!("fixtures/chkstatus-unknown.jsonp")]).await?;
+    assert!(matches!(
+        client
+            .login(
+                &Credentials {
+                    username: "student".into(),
+                    password: "test-secret".into()
+                },
+                Line::Free1,
+            )
+            .await,
+        Err(Error::Protocol(
+            wlanlogin_lib::ProtocolError::LoginStateUnknown
+        ))
+    ));
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await??
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_device_status_prevents_action_request() -> TestResult {
     let (client, task) = server(vec![r#"dr1({"result":1});"#]).await?;
     assert!(client.logout().await.is_err());

@@ -100,6 +100,7 @@ pub(super) async fn run_loop(
                         )
                         .await
                     },
+                    &session,
                     &mut policy,
                     scheduled,
                 ),
