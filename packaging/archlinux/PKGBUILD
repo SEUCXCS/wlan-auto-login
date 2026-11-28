@@ -45,7 +45,7 @@ check() {
   [[ "$("$binary" --version)" == "wlanlogin $_version" ]]
   "$binary" --help >/dev/null
   local command
-  for command in login logout service permission daemon; do
+  for command in login logout service permission config daemon; do
     "$binary" "$command" --help >/dev/null
   done
 }

@@ -111,7 +111,7 @@ jobs:
           fi
           "$binary" --version
           "$binary" --help
-          for command in login logout service permission daemon; do
+          for command in login logout service permission config daemon; do
             "$binary" "$command" --help
           done
 
