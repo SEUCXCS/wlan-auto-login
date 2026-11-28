@@ -1,6 +1,5 @@
 //! Release the inherited console from a managed Windows daemon.
 use crate::infra::{error::Result, paths::Paths};
-pub(crate) use crate::system::shared::flow::run::run;
 use crate::system::shared::flow::{
     hooks::Hooks,
     run::{RunContext, RunHooks, Step},

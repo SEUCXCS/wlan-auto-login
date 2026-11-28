@@ -6,7 +6,6 @@ use crate::infra::{
     paths::Paths,
     scope::Scope,
 };
-pub(crate) use crate::system::shared::flow::install::{run, validate_scope};
 use crate::system::{
     define::services::Plan,
     linux::services::manager::Registration,

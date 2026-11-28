@@ -29,6 +29,12 @@ pub(super) use hooks::NoHooks as NativeRun;
 #[cfg(not(target_os = "macos"))]
 pub(super) use hooks::NoHooks as NativeStatus;
 
+// These workflows currently need only their provider's native operations.
+pub(super) use hooks::NoHooks as NativeCredentials;
+pub(super) use hooks::NoHooks as NativeLogs;
+pub(super) use hooks::NoHooks as NativePermissions;
+pub(super) use hooks::NoHooks as NativeWifi;
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::uninstall::uninstall_plan;

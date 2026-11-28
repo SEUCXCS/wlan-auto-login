@@ -1,6 +1,5 @@
 //! Hold managed launchd and Wi-Fi host guards throughout the application run.
 use crate::infra::{error::Result, paths::Paths, scope::Scope};
-pub(crate) use crate::system::shared::flow::run::run;
 use crate::system::{
     macos::runtime::{host, service},
     shared::flow::{

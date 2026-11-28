@@ -30,6 +30,8 @@ pub(crate) async fn run(
 ) -> Result<()> {
     let context = RunContext { paths, managed };
     let hooks = super::NativeRun;
+    // macOS holds its service and Wi-Fi guards here; other platforms return ().
+    #[allow(clippy::let_unit_value)]
     let _guard = step(
         &hooks,
         Step::Prepare,

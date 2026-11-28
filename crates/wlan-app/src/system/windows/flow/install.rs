@@ -4,7 +4,6 @@ use crate::infra::{
     error::{Context, Error, Message, Result},
     filesystem::private_dir,
 };
-pub(crate) use crate::system::shared::flow::install::{run, validate_scope};
 use crate::system::{
     define::services::Manager,
     shared::{

@@ -1,5 +1,7 @@
 //! Invalidate cached reads before deleting the selected scope's credential storage.
+use super::Step;
 use crate::infra::{control::State, error::Result, paths::Paths};
+use crate::system::flow::{NativeCredentials, hooks::step};
 
 pub(crate) async fn run(paths: &Paths) -> Result<()> {
     run_with(paths, crate::system::shared::credentials::delete(paths)).await
@@ -10,9 +12,11 @@ async fn run_with(
     delete: impl std::future::Future<Output = Result<()>>,
 ) -> Result<()> {
     // Caller holds the operation lock; failed invalidation must prevent deletion.
-    State::invalidate_credentials(paths)?;
-
-    delete.await
+    step(&NativeCredentials, Step::Invalidate, paths, async {
+        State::invalidate_credentials(paths)
+    })
+    .await?;
+    step(&NativeCredentials, Step::Delete, paths, delete).await
 }
 
 #[cfg(test)]

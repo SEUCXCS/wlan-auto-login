@@ -3,7 +3,6 @@ use crate::infra::{
     cleanup,
     error::{Context, Error, Message, Result, ensure},
 };
-pub(crate) use crate::system::shared::flow::uninstall::run;
 use crate::system::{
     define::services::{Manager, Plan},
     shared::flow::{

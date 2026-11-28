@@ -1,8 +1,5 @@
 //! Refine launchd wrapper status using the authenticated daemon endpoint.
 use crate::infra::{error::Result, scope::Scope};
-#[cfg(test)]
-pub(crate) use crate::system::shared::flow::status::inspect;
-pub(crate) use crate::system::shared::flow::status::run;
 use crate::system::{
     define::services::ServiceState,
     shared::flow::{

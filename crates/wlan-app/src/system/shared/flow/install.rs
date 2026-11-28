@@ -237,17 +237,27 @@ pub(crate) async fn run_plan<R: Runner>(
             // Retention still runs if its before hook fails. Never discard recovery material.
             let before = backend.before(Step::RetainRecovery, context).await;
             let mut recovered = Vec::new();
-            let payload = staged.retain();
-            match payload {
-                Ok(files) => recovered.extend(files),
-                Err(error) => rollback.record(Err(error)),
-            }
-            match backend.retain_registration(context, &snapshot) {
-                Ok(path) => recovered.extend(path),
-                Err(error) => rollback.record(Err(error)),
-            }
+            let payload = staged.retain().map(|files| recovered.extend(files));
+            let registration = backend
+                .retain_registration(context, &snapshot)
+                .map(|path| recovered.extend(path));
+            let retention = match (payload, registration) {
+                (Err(primary), Err(secondary)) => {
+                    rollback.record(Err(secondary));
+                    Err(primary)
+                }
+                (first, second) => first.and(second),
+            };
+            let after = backend
+                .after(
+                    Step::RetainRecovery,
+                    context,
+                    retention.as_ref().map(|_| ()),
+                )
+                .await;
+            rollback.record(retention);
             rollback.record(before);
-            rollback.record(backend.after(Step::RetainRecovery, context, Ok(())).await);
+            rollback.record(after);
             let recovered = recovered
                 .iter()
                 .map(|path| path.display().to_string())

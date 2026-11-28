@@ -74,5 +74,3 @@ impl UninstallHooks for NativeHooks {
         }
     }
 }
-
-pub(crate) use crate::system::shared::flow::uninstall::run;

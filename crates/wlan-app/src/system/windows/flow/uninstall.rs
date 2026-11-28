@@ -1,5 +1,4 @@
 //! Windows releases its file handles before removing runtime locks.
-pub(crate) use crate::system::shared::flow::uninstall::run;
 use crate::system::shared::flow::{
     hooks::Hooks,
     uninstall::{Step, UninstallContext, UninstallHooks},
