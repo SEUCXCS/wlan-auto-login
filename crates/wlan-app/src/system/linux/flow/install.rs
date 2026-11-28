@@ -8,13 +8,21 @@ use crate::system::shared::services::artifacts::{Plan, assert_owned};
 
 use crate::system::shared::services::artifacts::{ensure_no_conflicting_install, plan};
 
+use crate::infra::command::{Runner, SystemRunner};
+use crate::system::linux::services::manager::Registration;
+use crate::system::shared::services::steps::execute_optional;
 use crate::{
     infra::control,
     infra::{filesystem::private_dir, paths::Paths},
 };
 use std::{fs, path::Path};
 
-async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
+async fn install_plan(
+    paths: &Paths,
+    plan: Plan,
+    source: &Path,
+    runner: &impl Runner,
+) -> Result<()> {
     crate::infra::error::ensure!(
         plan.scope == paths.scope,
         Message::ServicePlanDoesNotMatchTheSelected
@@ -59,8 +67,10 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
         )?;
     }
 
+    let system = paths.scope == Scope::System;
+    let registration = Registration::capture(system, &plan, runner).await?;
     // Stop and wait before replacing either file.
-    stop_before_replacing(paths, &plan).await?;
+    stop_before_replacing(paths, &plan, runner).await?;
 
     // Publish the staged binary and definition, then register and start.
     let outcome: Result<()> = async {
@@ -70,7 +80,7 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
 
         write_definition(&plan.definition, plan.content.as_bytes())?;
         for command in &plan.start {
-            command.run().await?;
+            execute_optional(runner, command).await?;
         }
         Ok(())
     }
@@ -80,9 +90,11 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
     if let Err(error) = outcome {
         // A failed stop or unregister forbids restoring files under a live process.
         let mut rollback = crate::system::shared::services::transaction::Rollback::default();
-        rollback.step(stop_before_replacing(paths, &plan)).await;
+        rollback
+            .step(stop_before_replacing(paths, &plan, runner))
+            .await;
         for command in &plan.remove {
-            rollback.step(command.run()).await;
+            rollback.step(execute_optional(runner, command)).await;
         }
 
         if rollback.safe() {
@@ -90,16 +102,9 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
             rollback.record(old_definition.restore(&plan.definition));
         }
 
-        if rollback.safe() {
-            let commands = if old_definition.existed() {
-                &plan.start
-            } else {
-                &plan.reload
-            };
-            for command in commands {
-                rollback.step(command.run()).await;
-            }
-        }
+        rollback
+            .step(registration.restore(system, &plan, runner))
+            .await;
 
         if !rollback.safe() {
             // Retain every surviving backup for a concrete recovery path.
@@ -136,9 +141,9 @@ async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn stop_before_replacing(paths: &Paths, plan: &Plan) -> Result<()> {
+async fn stop_before_replacing(paths: &Paths, plan: &Plan, runner: &impl Runner) -> Result<()> {
     for command in &plan.stop {
-        command.run().await?;
+        execute_optional(runner, command).await?;
     }
     control::stop(paths).await;
     control::wait_stopped(paths).await?;
@@ -172,7 +177,13 @@ pub(crate) async fn run(paths: &Paths) -> Result<()> {
             Message::SystemCredentialsAreMissingRunLoginSystemRemember
         );
     }
-    install_plan(paths, plan(paths)?, &std::env::current_exe()?).await
+    install_plan(
+        paths,
+        plan(paths)?,
+        &std::env::current_exe()?,
+        &SystemRunner,
+    )
+    .await
 }
 
 pub(crate) use crate::system::shared::services::artifacts::ensure_no_conflicting_install as validate_scope;
@@ -181,7 +192,10 @@ pub(crate) use crate::system::shared::services::artifacts::ensure_no_conflicting
 mod tests {
     use super::*;
 
-    use crate::infra::command::Invocation;
+    use crate::infra::command::{
+        Invocation,
+        tests::{FakeRunner, STOPPED},
+    };
 
     use crate::system::define::services::{LABEL, Manager};
 
@@ -224,7 +238,15 @@ mod tests {
                     [original.as_os_str(), definition.as_os_str()],
                 )],
             };
-            assert!(install_plan(&paths, plan, &source).await.is_err());
+            let stopped = "LoadState=loaded\nActiveState=inactive\nSubState=dead\nUnitFileState=disabled\nMainPID=0";
+            let runner = FakeRunner::new([(true, stopped), (false, "failed registration")]);
+            let result = install_plan(&paths, plan, &source, &runner).await;
+            assert!(result.is_err());
+            assert_eq!(
+                runner.calls.borrow().len(),
+                2,
+                "a disabled stopped service stays stopped"
+            );
             assert_eq!(fs::read_to_string(executable)?, "old executable");
             assert_eq!(fs::read(definition)?, fs::read(original)?);
         }
@@ -262,7 +284,11 @@ mod tests {
                 reload: vec![],
                 start: vec![Invocation::new("false", std::iter::empty::<&str>())],
             };
-            assert!(install_plan(&paths, plan, &source).await.is_err());
+            let runner = FakeRunner::new([
+                (true, "LoadState=not-found"),
+                (false, "failed registration"),
+            ]);
+            assert!(install_plan(&paths, plan, &source, &runner).await.is_err());
             assert!(!executable.exists());
             assert!(!definition.exists());
         }
@@ -296,7 +322,13 @@ mod tests {
             remove: Vec::new(),
             reload: Vec::new(),
         };
-        let error = install_plan(&paths, plan, &source)
+        let runner = FakeRunner::new([
+            (true, STOPPED),
+            (true, ""),
+            (false, "failed registration"),
+            (false, "failed stop"),
+        ]);
+        let error = install_plan(&paths, plan, &source, &runner)
             .await
             .err()
             .context("expected failed rollback")?;

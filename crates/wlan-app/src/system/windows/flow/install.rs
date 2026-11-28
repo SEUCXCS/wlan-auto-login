@@ -87,6 +87,15 @@ async fn install_plan(
         _ => None,
     };
 
+    let previous_service = if matches!(
+        plan.manager,
+        crate::system::define::services::Manager::WindowsService
+    ) {
+        Some(crate::system::windows::services::manager::ScmRegistration::capture(runner).await?)
+    } else {
+        None
+    };
+
     // Capture both artifacts before staging the replacement executable.
     let old_definition = Backup::capture(&plan.definition)?;
     let old_executable = Backup::capture(&plan.executable)?;
@@ -150,15 +159,8 @@ async fn install_plan(
                 rollback
                     .step(snapshot.restore(name, &plan.definition, runner))
                     .await;
-            } else {
-                let commands = if old_definition.existed() {
-                    &plan.start
-                } else {
-                    &plan.reload
-                };
-                for command in commands {
-                    rollback.step(execute(command, runner)).await;
-                }
+            } else if let Some(registration) = &previous_service {
+                rollback.step(registration.restore(&plan, runner)).await;
             }
         }
 

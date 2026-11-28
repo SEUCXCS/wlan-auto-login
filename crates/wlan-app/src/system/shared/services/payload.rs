@@ -25,9 +25,6 @@ impl Backup {
             Err(e) => Err(e.into()),
         }
     }
-    pub(crate) fn existed(&self) -> bool {
-        self.0.is_some()
-    }
     pub(crate) fn retain(mut self) -> Result<Option<std::path::PathBuf>> {
         self.0
             .take()
