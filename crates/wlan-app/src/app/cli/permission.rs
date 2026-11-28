@@ -11,7 +11,7 @@ pub(in crate::app) async fn run(command: PermissionCommand, scope: Scope) -> Res
     let provider = crate::system::native::permission::Permissions;
     let (id, request, json) = match command {
         PermissionCommand::List { json } => {
-            let permissions = crate::app::controller::permission::list(&provider);
+            let permissions = crate::app::controller::permission::list(&provider).await?;
             if json {
                 println!(
                     "{}",

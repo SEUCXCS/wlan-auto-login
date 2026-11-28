@@ -33,10 +33,66 @@ pub(crate) async fn manage_task(
     Ok(())
 }
 pub(crate) async fn query_service(runner: &impl Runner) -> Result<ServiceState> {
+    parse_windows_service(&service_properties(runner).await?)
+}
+async fn service_properties(runner: &impl Runner) -> Result<String> {
     let command = windows_service_query();
     let result = runner.output(&command).await?;
     result.check(&command)?;
-    parse_windows_service(&result.stdout)
+    Ok(result.stdout)
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) struct ScmRegistration {
+    state: ServiceState,
+    start_type: Option<&'static str>,
+}
+
+#[cfg(target_os = "windows")]
+impl ScmRegistration {
+    pub(crate) async fn capture(runner: &impl Runner) -> Result<Self> {
+        let properties = service_properties(runner).await?;
+        let state = parse_windows_service(&properties)?;
+        let values = fields(&properties);
+        let start_type = if state.registered {
+            Some(match values.get("StartType") {
+                Some(&"2") if values.get("Delayed") == Some(&"1") => "delayed-auto",
+                Some(&"2") => "auto",
+                Some(&"3") => "demand",
+                Some(&"4") => "disabled",
+                _ => bail!("SCM returned an unsupported start type"),
+            })
+        } else {
+            None
+        };
+        Ok(Self { state, start_type })
+    }
+
+    pub(crate) async fn restore(&self, plan: &Plan, runner: &impl Runner) -> Result<()> {
+        let Some(start_type) = self.start_type else {
+            return Ok(());
+        };
+        for mut command in plan.start.iter().cloned() {
+            if command.args.first().is_some_and(|verb| verb == "start")
+                && !self.state.running
+                && self.state.state != "starting"
+            {
+                continue;
+            }
+            if let Some(index) = command
+                .args
+                .iter()
+                .position(|argument| argument == "start=")
+            {
+                let Some(argument) = command.args.get_mut(index + 1) else {
+                    bail!("SCM registration command is missing its start type");
+                };
+                *argument = start_type.into();
+            }
+            crate::system::shared::services::steps::execute_optional(runner, &command).await?;
+        }
+        Ok(())
+    }
 }
 pub(crate) async fn manage_service(
     plan: &Plan,
@@ -140,8 +196,11 @@ try {
     if ($null -eq $service) { [Console]::WriteLine('Installed=0'); exit 0 }
     [Console]::WriteLine('Installed=1')
     [Console]::WriteLine('State=' + [int]$service.Status)
-    $start = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\{service}').Start
+    $config = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\{service}'
+    $start = $config.Start
     [Console]::WriteLine('Enabled=' + [int]($start -eq 2))
+    [Console]::WriteLine('StartType=' + [int]$start)
+    [Console]::WriteLine('Delayed=' + [int]($config.DelayedAutoStart -eq 1))
 } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
 "#
     .replace("{service}", LABEL);
@@ -190,6 +249,39 @@ mod tests {
     use super::*;
     use crate::infra::error::Context;
     use crate::system::define::services::ServiceManager;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn scm_rollback_preserves_a_disabled_stopped_service() -> Result<()> {
+        let runner = crate::infra::command::tests::FakeRunner::new([
+            (
+                true,
+                "Installed=1\nState=1\nEnabled=0\nStartType=4\nDelayed=0",
+            ),
+            (true, ""),
+            (true, ""),
+            (true, ""),
+            (true, ""),
+        ]);
+        let plan = crate::system::windows::services::definition::windows_system_plan(
+            "daemon.exe".into(),
+            "service.json".into(),
+        )?;
+        ScmRegistration::capture(&runner)
+            .await?
+            .restore(&plan, &runner)
+            .await?;
+        let calls = runner.calls.borrow();
+        assert_eq!(calls.len(), 5);
+        assert!(calls[1].args.iter().any(|argument| argument == "disabled"));
+        assert!(calls[2].args.iter().any(|argument| argument == "disabled"));
+        assert!(
+            calls
+                .iter()
+                .all(|call| call.args.first().is_none_or(|argument| argument != "start"))
+        );
+        Ok(())
+    }
 
     #[cfg(windows)]
     #[tokio::test]

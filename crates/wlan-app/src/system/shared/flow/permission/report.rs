@@ -1,4 +1,5 @@
 //! Query every requested capability without losing independent diagnostics.
+use super::Step;
 use crate::infra::{
     error::{Context, Message, Result},
     scope::Scope,
@@ -7,6 +8,7 @@ use crate::system::define::permission::{
     PermissionId, PermissionProvider, PermissionReport, PermissionRequestOutcome, PermissionResult,
     PermissionStatus,
 };
+use crate::system::flow::{NativePermissions, hooks::step};
 
 pub async fn report(
     provider: &impl PermissionProvider,
@@ -16,38 +18,45 @@ pub async fn report(
     interactive: bool,
 ) -> Result<PermissionReport> {
     // Validate explicit identifiers before checking or requesting any capability.
-    let ids = match id {
-        Some(id) => {
-            let id = PermissionId(id.into());
-            provider.validate(&id)?;
-            vec![id]
+    let ids: Vec<_> = step(&NativePermissions, Step::Select, provider, async {
+        match id {
+            Some(id) => {
+                let id = PermissionId(id.into());
+                provider.validate(&id)?;
+                Ok(vec![id])
+            }
+            None => Ok(provider.permissions().into_iter().map(|p| p.id).collect()),
         }
-        None => provider.permissions().into_iter().map(|p| p.id).collect(),
-    };
+    })
+    .await?;
 
     // Bound each independent native check; non-interactive requests never show UI.
     let mut permissions = Vec::new();
     for id in ids {
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(if request { 90 } else { 10 }),
-            async {
-                if request && !interactive {
-                    Ok(PermissionStatus::NeedsInteraction)
-                } else if request {
-                    provider.request(&id).await.map(|outcome| match outcome {
-                        PermissionRequestOutcome::Completed(status) => status,
-                        PermissionRequestOutcome::NotImplemented => {
-                            PermissionStatus::NotImplemented
-                        }
-                    })
-                } else {
-                    provider.status(&id).await
-                }
-            },
-        )
-        .await
-        .context(Message::PermissionTimedOut)
-        .and_then(|result| result);
+        let operation = if request { Step::Request } else { Step::Check };
+        let result = step(&NativePermissions, operation, &id, async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(if request { 90 } else { 10 }),
+                async {
+                    if request && !interactive {
+                        Ok(PermissionStatus::NeedsInteraction)
+                    } else if request {
+                        provider.request(&id).await.map(|outcome| match outcome {
+                            PermissionRequestOutcome::Completed(status) => status,
+                            PermissionRequestOutcome::NotImplemented => {
+                                PermissionStatus::NotImplemented
+                            }
+                        })
+                    } else {
+                        provider.status(&id).await
+                    }
+                },
+            )
+            .await
+            .context(Message::PermissionTimedOut)
+            .and_then(|result| result)
+        })
+        .await;
 
         // Preserve individual failures without hiding other permission results.
         let (status, error) = match result {

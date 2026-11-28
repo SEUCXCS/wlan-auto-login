@@ -163,9 +163,6 @@ impl Payload {
     pub fn staged(&self) -> PathBuf {
         self.directory().join("new.app")
     }
-    pub fn existed(&self) -> bool {
-        self.had_previous
-    }
     pub fn publish(&mut self) -> Result<()> {
         if self.destination.try_exists()? {
             fs::rename(&self.destination, self.directory().join("old.app"))?;

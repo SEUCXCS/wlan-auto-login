@@ -1,6 +1,8 @@
 //! Credential prerequisites and installation, independent of input presentation.
 use crate::app::controller::login::LoginRequest;
 use crate::infra::{
+    config::Preferences,
+    control,
     error::{Message, Result},
     paths::Paths,
 };
@@ -12,6 +14,7 @@ pub fn validate_scope(paths: &Paths) -> Result<()> {
     crate::system::flow::install::validate_scope(paths)
 }
 pub async fn prepare(
+    paths: &Paths,
     request: &LoginRequest,
     refresh: bool,
     wifi: &impl WifiConnection,
@@ -35,6 +38,9 @@ pub async fn prepare(
             "{}",
             Message::ServiceInstallationRequiresSavedCredentialsRememberMe
         );
+    } else if let Some(line) = request.line {
+        let _operation = control::operation_lock(paths).await?;
+        Preferences { line }.save(paths)?;
     }
     Ok(required)
 }
@@ -64,18 +70,58 @@ mod tests {
         }
     }
 
+    struct SavedStore;
+    impl Store for SavedStore {
+        async fn load(&self) -> Result<Option<Credentials>> {
+            Ok(Some(Credentials {
+                username: "test-user".into(),
+                password: "test-password".into(),
+            }))
+        }
+        async fn save(&self, _: Credentials) -> Result<()> {
+            unreachable!("line-only installation must not save credentials")
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_credentials_allow_setting_the_line_without_login() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::test(dir.path());
+        for line in [Some(wlanlogin_lib::Line::Free2), None] {
+            let request = LoginRequest {
+                line,
+                ..Default::default()
+            };
+            assert!(!prepare(&paths, &request, false, &Offline, &SavedStore).await?);
+            assert_eq!(Preferences::load(&paths)?.line, wlanlogin_lib::Line::Free2);
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn credential_refresh_does_not_read_the_keychain_before_login_preparation() -> Result<()>
     {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::test(dir.path());
         let explicit = LoginRequest {
             username: Some("student".into()),
             password: Some("secret".into()),
             ..Default::default()
         };
-        assert!(prepare(&explicit, false, &Offline, &InaccessibleStore).await?);
-        assert!(prepare(&LoginRequest::default(), true, &Offline, &InaccessibleStore).await?);
+        assert!(prepare(&paths, &explicit, false, &Offline, &InaccessibleStore).await?);
         assert!(
             prepare(
+                &paths,
+                &LoginRequest::default(),
+                true,
+                &Offline,
+                &InaccessibleStore
+            )
+            .await?
+        );
+        assert!(
+            prepare(
+                &paths,
                 &LoginRequest::default(),
                 false,
                 &Offline,

@@ -15,7 +15,6 @@ pub(crate) fn fields(text: &str) -> HashMap<&str, &str> {
         .map(|(key, value)| (key.trim(), value.trim()))
         .collect()
 }
-pub(crate) mod hooks;
 pub(crate) mod logs;
 pub(crate) mod transaction;
 

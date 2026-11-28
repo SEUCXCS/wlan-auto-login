@@ -277,6 +277,8 @@ wlanlogin logout --forget                    # 注销、停止后台并删除已
 | `--non-interactive` | — | 缺少必要信息时直接报错退出 |
 | `--credential-store` | — | Linux 系统模式凭据存储：`native` 或 `protected-file` |
 
+已有凭据时，可用 `wlanlogin service install --line free2` 更新后台使用的线路。
+
 脚本自动化建议使用 `--password-stdin` 与 `--non-interactive`，避免密码进入 shell 历史或进程参数列表：
 
 ```sh

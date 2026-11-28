@@ -55,7 +55,7 @@ impl Policy {
                     .session
                     .as_deref()
                     .zip(session.as_deref())
-                    .is_some_and(|(old, new)| old.split('#').next() == new.split('#').next());
+                    .is_some_and(|(old, new)| Self::interface(old) == Self::interface(new));
             if !same_interface_on_restart {
                 control.paused = false;
             }
@@ -80,6 +80,20 @@ impl Policy {
         }
         changed || saved_changed
     }
+    fn interface(session: &str) -> &str {
+        let Some((interface, _)) = session.split_once('#') else {
+            return session;
+        };
+        // Older macOS helpers prefixed the stable interface with a 128-bit instance ID.
+        if let Some((instance, interface)) = interface.split_once(':')
+            && instance.len() == 32
+            && instance.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return interface;
+        }
+        interface
+    }
+
     pub(super) fn should_check(&self, control: &control::State, now: Instant) -> bool {
         self.session.is_some()
             && !control.paused
@@ -228,18 +242,26 @@ mod tests {
     }
     #[test]
     fn native_monitor_restart_does_not_clear_manual_pause() {
-        let mut state = control::State {
-            paused: true,
-            session: Some("interface#7".into()),
-            revision: 0,
-            credential_generation: 0,
-        };
-        let mut policy = Policy::default();
-        policy.update(Some("interface#0".into()), &mut state);
-        assert!(state.paused);
-        policy.update(None, &mut state);
-        policy.update(Some("interface#1".into()), &mut state);
-        assert!(!state.paused);
+        for (old, new) in [
+            ("interface#7", "interface#0"),
+            ("en0#7:old-instance", "en0#0:new-instance"),
+            (
+                "abbac001112233445566778899aabbee:en0#7",
+                "en0#0:new-instance",
+            ),
+        ] {
+            let mut state = control::State {
+                paused: true,
+                session: Some(old.into()),
+                ..Default::default()
+            };
+            let mut policy = Policy::default();
+            policy.update(Some(new.into()), &mut state);
+            assert!(state.paused, "{old} -> {new}");
+            policy.update(None, &mut state);
+            policy.update(Some(new.into()), &mut state);
+            assert!(!state.paused);
+        }
     }
 
     #[test]

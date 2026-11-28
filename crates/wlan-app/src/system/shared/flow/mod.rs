@@ -1,6 +1,8 @@
 //! Default workflows composed from shared steps and native adapters.
 pub(crate) mod control;
 pub(crate) mod credentials;
+pub(crate) mod hooks;
+pub(crate) mod install;
 pub(crate) mod logs;
 pub(crate) mod permission;
 pub(crate) mod restart;
@@ -8,16 +10,30 @@ pub(crate) mod run;
 pub(crate) mod start;
 pub(crate) mod status;
 pub(crate) mod stop;
-#[cfg(target_os = "linux")]
-#[path = "../../linux/flow/uninstall_default.rs"]
-pub(crate) mod uninstall;
-#[cfg(target_os = "macos")]
-#[path = "../../macos/flow/uninstall_default.rs"]
-pub(crate) mod uninstall;
-#[cfg(target_os = "windows")]
-#[path = "../../windows/flow/uninstall_default.rs"]
 pub(crate) mod uninstall;
 pub(crate) mod wifi;
+
+#[cfg(target_os = "macos")]
+pub(super) use crate::system::macos::flow::control::NativeHooks as NativeControl;
+#[cfg(not(target_os = "macos"))]
+pub(super) use hooks::NoHooks as NativeControl;
+
+#[cfg(target_os = "macos")]
+pub(super) use crate::system::macos::flow::{
+    run::NativeHooks as NativeRun, status::NativeHooks as NativeStatus,
+};
+#[cfg(target_os = "windows")]
+pub(super) use crate::system::windows::flow::run::NativeHooks as NativeRun;
+#[cfg(target_os = "linux")]
+pub(super) use hooks::NoHooks as NativeRun;
+#[cfg(not(target_os = "macos"))]
+pub(super) use hooks::NoHooks as NativeStatus;
+
+// These workflows currently need only their provider's native operations.
+pub(super) use hooks::NoHooks as NativeCredentials;
+pub(super) use hooks::NoHooks as NativeLogs;
+pub(super) use hooks::NoHooks as NativePermissions;
+pub(super) use hooks::NoHooks as NativeWifi;
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -40,7 +56,14 @@ pub(crate) mod tests {
     const MAC_SYSTEM_REMOVED: &str = r#"{"version":1,"service":"dev.cxcs.tools.wlanlogin","scope":"system","status":"not_registered"}"#;
 
     pub(crate) struct FixtureHooks;
-    impl crate::system::shared::services::hooks::UninstallHooks for FixtureHooks {
+    impl super::hooks::Hooks<super::uninstall::Step, super::uninstall::UninstallContext<'_>>
+        for FixtureHooks
+    {
+    }
+    impl super::uninstall::UninstallHooks for FixtureHooks {
+        fn retain_locks(&self) -> bool {
+            control::RETAIN_LOCKS_ON_PURGE
+        }
         fn packaged_definition(&self, plan: &Plan) -> bool {
             matches!(plan.manager, Manager::MacosAppService { .. })
         }
@@ -152,6 +175,20 @@ pub(crate) mod tests {
         })
     }
 
+    pub(crate) fn assert_purged(paths: &Paths) -> Result<()> {
+        assert!(!paths.runtime.exists() && !paths.secrets.exists());
+        if control::RETAIN_LOCKS_ON_PURGE {
+            let mut files = fs::read_dir(&paths.config)?
+                .map(|entry| entry.map(|entry| entry.file_name()))
+                .collect::<std::io::Result<Vec<_>>>()?;
+            files.sort();
+            assert_eq!(files, ["daemon.lock", "operation.lock", "service.lock"]);
+        } else {
+            assert!(!paths.config.exists());
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn purge_cleans_each_platform_and_scope_without_removing_shared_files() -> Result<()> {
         for kind in 0..6 {
@@ -169,8 +206,7 @@ pub(crate) mod tests {
             .await?;
             assert!(deleted.get());
             assert!(!plan.definition.exists() && !plan.executable.exists());
-            assert!(!paths.config.exists() && !paths.runtime.exists() && !paths.secrets.exists());
-            assert!(!dir.path().join("SEUCXCS/wlanlogin").exists());
+            assert_purged(&paths)?;
             assert_eq!(
                 fs::read_to_string(sibling.join("settings.json"))?,
                 "preserve"
@@ -265,7 +301,7 @@ pub(crate) mod tests {
         let calls = runner.calls.borrow();
         assert_eq!(calls[1].args[1], "stop");
         assert_eq!(calls[4].args[1], "disable");
-        assert!(!paths.config.exists());
+        assert_purged(&paths)?;
         Ok(())
     }
 
@@ -326,7 +362,7 @@ pub(crate) mod tests {
         })
         .await?;
         assert!(!plan.executable.exists());
-        assert!(!dir.path().join("SEUCXCS/wlanlogin").exists());
+        assert_purged(&paths)?;
         Ok(())
     }
 
@@ -335,6 +371,10 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir()?;
         let (paths, plan) = fixture(dir.path(), 0)?;
         fs::write(paths.config.join("personal-note"), "preserve")?;
+        let lock_path = paths.config.join("operation.lock");
+        if control::RETAIN_LOCKS_ON_PURGE {
+            fs::write(&lock_path, "existing lock inode")?;
+        }
         uninstall_plan(&paths, &plan, true, &removal_runner(0), async {
             cleanup::remove_file(&paths.secrets.join("login.cred"))
         })
@@ -351,6 +391,9 @@ pub(crate) mod tests {
         );
         assert!(!paths.config.join("daemon.log").exists());
         assert!(!paths.runtime.exists());
+        if control::RETAIN_LOCKS_ON_PURGE {
+            assert_eq!(fs::read_to_string(lock_path)?, "existing lock inode");
+        }
         Ok(())
     }
 
@@ -395,9 +438,7 @@ pub(crate) mod tests {
                 })
                 .await?;
                 assert!(deleted.get());
-                assert!(
-                    !paths.config.exists() && !paths.runtime.exists() && !paths.secrets.exists()
-                );
+                assert_purged(&paths)?;
             }
         }
         Ok(())

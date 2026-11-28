@@ -6,11 +6,13 @@ use crate::infra::{
     error::{Context, Message, Result},
     paths::Paths,
 };
-use crate::system::define::credentials::{BackgroundRead, CredentialPermit, Validity, WaitReason};
+use crate::system::define::credentials::{
+    BackgroundRead, CredentialPermit, SessionState, Validity, WaitReason,
+};
 use crate::system::define::wifi::WifiConnection;
 use std::future::Future;
 use tokio::time::Instant;
-use wlanlogin_lib::{AuthState, Client, LoginOutcome};
+use wlanlogin_lib::{AuthState, Client, LoginOutcome, LoginPreparation};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Outcome {
@@ -77,12 +79,14 @@ impl Outcome {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn tick<V>(
     client: &Client,
     paths: &Paths,
     monitor: &impl WifiConnection,
     read_credentials: impl Future<Output = Result<BackgroundRead>>,
     validate: impl FnOnce(CredentialPermit) -> V,
+    readiness: &tokio::sync::watch::Receiver<SessionState>,
     policy: &mut Policy,
     scheduled: bool,
 ) -> Result<Outcome>
@@ -140,7 +144,7 @@ where
             return Ok(Outcome::WaitingForCredentials(reason));
         }
     };
-    // Recheck the Wi-Fi immediately before sending credentials after an await.
+    // Avoid starting portal preflight if reading credentials outlasted this connection.
     if monitor
         .target_session()
         .await
@@ -150,7 +154,15 @@ where
     {
         return Ok(Outcome::WifiSessionChanged);
     }
-    // Wi-Fi inspection awaited after consumption; validate the permit once more.
+    let prepared = match client.prepare_login().await? {
+        LoginPreparation::AlreadyOnline => {
+            policy.online();
+            return Ok(Outcome::Online);
+        }
+        LoginPreparation::Unknown => return Ok(Outcome::UnknownPortalState),
+        LoginPreparation::Offline(prepared) => prepared,
+    };
+    // Validate the live permit after the portal preflight, then recheck Wi-Fi.
     let validity = match validate(saved.permit.clone()).await {
         Ok(validity) => validity,
         Err(error) => {
@@ -174,7 +186,31 @@ where
         ));
     }
     let line = Preferences::load(paths)?.line;
-    match client.login(&saved.credentials, line).await {
+    if monitor
+        .target_session()
+        .await
+        .context(Message::WifiIdentificationFailed)?
+        .as_deref()
+        != policy.session()
+    {
+        return Ok(Outcome::WifiSessionChanged);
+    }
+    if saved
+        .permit
+        .session
+        .as_ref()
+        .is_some_and(|permit| permit.state != *readiness.borrow())
+    {
+        policy.wait_for_credentials();
+        return Ok(Outcome::WaitingForCredentials(WaitReason::Session));
+    }
+    if control::State::load(paths)?.credential_generation != saved.permit.generation {
+        policy.wait_for_credentials();
+        return Ok(Outcome::WaitingForCredentials(
+            WaitReason::CredentialsChanged,
+        ));
+    }
+    match prepared.submit(&saved.credentials, line).await {
         Ok(LoginOutcome::Authenticated) => {
             policy.success();
             tracing::info!(line = %line, "{}", Message::Authenticated);
@@ -217,7 +253,10 @@ mod tests {
             "/../wlan-api/tests/fixtures/chkstatus-online.jsonp"
         ));
         const OFFLINE: &str = r#"dr1({"result":0,"v46ip":"10.0.0.12"});"#;
-        const UNKNOWN: &str = r#"dr1({"result":99,"v46ip":"10.0.0.12"});"#;
+        const UNKNOWN: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../wlan-api/tests/fixtures/chkstatus-unknown.jsonp"
+        ));
         const PAGE_CONFIG: &str = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../wlan-api/tests/fixtures/login-page-config.jsonp"
@@ -244,6 +283,13 @@ mod tests {
                 )),
             ),
             (vec![OFFLINE, ONLINE], true, 240, false, Outcome::Online),
+            (
+                vec![OFFLINE, UNKNOWN],
+                true,
+                30,
+                false,
+                Outcome::UnknownPortalState,
+            ),
             (
                 vec![OFFLINE, OFFLINE, PAGE_CONFIG, r#"dr1({"result":1});"#],
                 true,
@@ -324,6 +370,7 @@ mod tests {
                     })
                 },
                 |_| async { Ok(Validity::Valid) },
+                &tokio::sync::watch::channel(SessionState::default()).1,
                 &mut policy,
                 true,
             )
@@ -349,6 +396,7 @@ mod tests {
                 &FixedWifi,
                 async { panic!("premature credential read") },
                 |_| async { Ok(Validity::Valid) },
+                &tokio::sync::watch::channel(SessionState::default()).1,
                 &mut policy,
                 true,
             )
@@ -401,6 +449,7 @@ mod tests {
             &UnavailableWifi,
             async { panic!("Wi-Fi failure must not read credentials") },
             |_| async { Ok(Validity::Valid) },
+            &tokio::sync::watch::channel(SessionState::default()).1,
             &mut policy,
             true,
         )
@@ -425,6 +474,7 @@ mod tests {
                 &FixedWifi,
                 async { panic!("paused retry must not read credentials") },
                 |_| async { Ok(Validity::Valid) },
+                &tokio::sync::watch::channel(SessionState::default()).1,
                 &mut policy,
                 true,
             )
@@ -438,6 +488,7 @@ mod tests {
                 &DisconnectedWifi,
                 async { panic!("disconnected check must not read credentials") },
                 |_| async { Ok(Validity::Valid) },
+                &tokio::sync::watch::channel(SessionState::default()).1,
                 &mut policy,
                 true,
             )
@@ -492,14 +543,25 @@ mod tests {
                 ..Default::default()
             })?;
             let server = tokio::spawn(async move {
-                let (mut stream, _) = listener.accept().await?;
-                let mut request = Vec::new();
-                while !request.ends_with(b"\r\n\r\n") {
-                    request.push(stream.read_u8().await?);
+                let offline = r#"dr1({"result":0,"v46ip":"10.0.0.12"});"#;
+                let page = include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../wlan-api/tests/fixtures/login-page-config.jsonp"
+                ));
+                let replies = [
+                    ("GET /status", offline),
+                    ("GET /status", offline),
+                    ("GET /page/loadConfig", page),
+                ];
+                for (prefix, body) in replies.into_iter().take(if case == 3 { 1 } else { 3 }) {
+                    let (mut stream, _) = listener.accept().await?;
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        request.push(stream.read_u8().await?);
+                    }
+                    assert!(String::from_utf8(request)?.starts_with(prefix));
+                    stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
                 }
-                assert!(String::from_utf8(request)?.starts_with("GET /status"));
-                let body = r#"dr1({"result":0,"v46ip":"10.0.0.12"});"#;
-                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
                 Ok::<_, crate::infra::error::Error>(listener)
             });
             let dir = tempfile::tempdir()?;
@@ -551,6 +613,7 @@ mod tests {
                         _ => panic!("changed Wi-Fi must prevent further credential validation"),
                     }
                 },
+                &tokio::sync::watch::channel(SessionState::default()).1,
                 &mut policy,
                 true,
             )
@@ -569,7 +632,7 @@ mod tests {
             assert_eq!(outcome, expected);
             assert!(!policy.credentials_rejected());
             let listener = tokio::time::timeout(Duration::from_secs(2), server).await???;
-            // Only the initial status query is allowed; even login's status query is forbidden.
+            // No credential-bearing request may follow a rejected checkpoint.
             assert!(
                 tokio::time::timeout(Duration::from_millis(30), listener.accept())
                     .await

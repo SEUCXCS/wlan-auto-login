@@ -3,7 +3,7 @@ use crate::infra::{
     cleanup,
     command::{Invocation, Runner, SystemRunner},
     control,
-    error::{Context, Message, Result},
+    error::{Context, Error, Message, Result},
     paths::{self, Paths},
     scope::Scope,
 };
@@ -17,178 +17,194 @@ use crate::system::{
 };
 use std::{fs, future::Future, path::Path};
 
-async fn install(paths: &Paths, previous_plan: Plan) -> Result<()> {
-    // Validate the selected scope before preparing or changing native artifacts.
-    crate::infra::error::ensure!(
-        paths.scope == previous_plan.scope,
-        crate::infra::error::Message::ServicePlanDoesNotMatchTheSelected
-    );
+use crate::system::define::services::{Manager, ServiceState};
+use crate::system::shared::flow::{
+    hooks::Hooks,
+    install::{Backend, InstallContext, Payload as InstallPayload, Step},
+};
+use std::path::PathBuf;
 
-    // Acquire the service lock and validate ownership of the signed definitions.
-    let plan = crate::system::macos::services::definition::native_plan(paths)?;
-    if paths.scope == Scope::System {
-        prepare_system_directories()?;
-    }
-    let _lock = control::service_lock(paths)?;
-    crate::system::shared::services::artifacts::assert_owned(&plan.definition)?;
-    cleanup::validate_directory(
-        plan.definition
-            .parent()
-            .context(Message::ServiceDefinitionHasNoParentDirectory)?,
-    )?;
-
-    // Verify the complete source bundle and both immutable signed job definitions.
-    let source = bundle::source()?;
-    payload::validate(&source).await?;
-    for system in [false, true] {
-        let definition = source.join(crate::infra::identity::macos_service_path(system));
-        let expected = if system == (paths.scope == Scope::System) {
-            plan.content.clone()
-        } else {
-            crate::infra::identity::macos_service_plist(system)
-        };
-        crate::infra::error::ensure!(
-            fs::read_to_string(&definition).ok().as_deref() == Some(expected.as_str()),
-            Message::MacosServiceDefinitionMissing
-        );
-    }
-
-    // Stage the full payload and validate both staged and existing identities.
-    let destination = paths::macos_bundle(paths.scope)?;
-    let mut transaction = Payload::stage(&source, &destination)?;
-    payload::validate(&transaction.staged()).await?;
-    if destination.exists() {
-        payload::validate(&destination).await?;
-    }
-
-    // Capture liveness, then stop the old job before replacing signed code.
-    let state = previous_plan.manager.query(&SystemRunner).await?;
-    stop(paths, &previous_plan).await?;
-
-    let outcome = async {
-        // Stop authenticated transient helpers before unregistration/replacement.
-        host::stop_helpers(
-            paths.scope,
-            if destination.exists() {
-                &destination
-            } else {
-                &source
-            },
-        )
-        .await?;
-
-        // Unregister using the old signed bundle before replacing it. A raw
-        // bootout alone preserves native registration for future logins.
-        unregister(&previous_plan).await?;
-        transaction.publish()?;
-
-        // Application root is public code, while state/secrets stay private.
-        if paths.scope == Scope::System {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(
-                destination.parent().context(Message::InstallationPathHasNoParentDirectory)?,
-                fs::Permissions::from_mode(0o755),
-            )?;
-        }
-
-        // Check access from the installed identity; repair only a known authorization need.
-        prepare_credentials(paths.scope, &plan.executable).await?;
-
-        // Authorize the newly installed identity, which can differ after ad-hoc signing.
-        if let Err(error) = host::prepare(access::interaction_allowed()).await {
-            if paths.scope == Scope::System && !access::interaction_allowed() {
-                tracing::warn!(%error, "System service will wait for an authorized GUI-session Wi-Fi host");
-            } else { return Err(error); }
-        }
-
-        // Packaged definitions were signed by xtask. Installation never rewrites them.
-        for command in &plan.start {
-            crate::system::macos::services::app_service::output(command, &SystemRunner).await?;
-        }
-
-        crate::system::macos::services::readiness::wait_installed(paths, &plan).await
-    }
-    .await;
-
-    // Reuse the shared stop barrier, retaining signed recovery data on failure.
-    if let Err(error) = outcome {
-        // Never restore files underneath a process which failed to stop.
-        let mut rollback = crate::system::shared::services::transaction::Rollback::default();
-        rollback.step(stop(paths, &plan)).await;
-        rollback
-            .step(host::stop_helpers(paths.scope, &destination))
-            .await;
-        rollback.step(unregister(&plan)).await;
-        let mut failures = if rollback.safe() {
-            Vec::new()
-        } else {
-            vec![rollback.detail()]
-        };
-        if failures.is_empty() {
-            if let Err(e) = transaction.restore() {
-                failures.push(e.to_string());
+pub(crate) struct NativeHooks;
+impl<R: Runner> Hooks<Step, InstallContext<'_, R>> for NativeHooks {
+    async fn before(&self, step: Step, context: &InstallContext<'_, R>) -> Result<()> {
+        match step {
+            Step::Publish => {
+                let destination = paths::macos_bundle(context.paths.scope)?;
+                let app = if destination.exists() {
+                    &destination
+                } else {
+                    context.source
+                };
+                host::stop_helpers(context.paths.scope, app).await?;
+                unregister(context.previous).await?;
             }
-            if failures.is_empty() {
+            Step::Register => {
+                prepare_credentials(context.paths.scope, &context.plan.executable).await?;
+                if let Err(error) = host::prepare(access::interaction_allowed()).await {
+                    if context.paths.scope == Scope::System && !access::interaction_allowed() {
+                        tracing::warn!(%error, "System service will wait for an authorized GUI-session Wi-Fi host");
+                    } else {
+                        return Err(error);
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn after(
+        &self,
+        step: Step,
+        context: &InstallContext<'_, R>,
+        result: std::result::Result<(), &Error>,
+    ) -> Result<()> {
+        if result.is_err() {
+            return Ok(());
+        }
+        match step {
+            Step::Validate if context.paths.scope == Scope::System => prepare_system_directories()?,
+            Step::Publish if context.paths.scope == Scope::System => {
+                use std::os::unix::fs::PermissionsExt;
+                let destination = paths::macos_bundle(context.paths.scope)?;
+                fs::set_permissions(
+                    destination
+                        .parent()
+                        .context(Message::InstallationPathHasNoParentDirectory)?,
+                    fs::Permissions::from_mode(0o755),
+                )?;
+            }
+            Step::RestorePayload => {
                 let original = std::env::current_exe()?;
-                let executable = if transaction.existed() {
-                    &plan.executable
+                let executable = if context.plan.executable.is_file() {
+                    &context.plan.executable
                 } else {
                     &original
                 };
-                if let Err(e) = prepare_credentials(paths.scope, executable).await {
-                    failures.push(e.to_string());
-                }
+                prepare_credentials(context.paths.scope, executable).await?;
             }
-            if failures.is_empty() && state.registered {
-                for command in &previous_plan.start {
-                    if let Err(e) =
-                        crate::system::macos::services::app_service::output(command, &SystemRunner)
-                            .await
-                    {
-                        failures.push(e.to_string());
-                    }
-                }
-                // Native registration survives a session-only stop. Restore
-                // that registration without resuming a previously stopped job.
-                if failures.is_empty()
-                    && !state.running
-                    && !state.pending
-                    && matches!(
-                        previous_plan.manager,
-                        crate::system::define::services::Manager::MacosAppService { .. }
-                    )
-                    && let Err(e) = stop(paths, &previous_plan).await
-                {
-                    failures.push(e.to_string());
-                }
-            }
+            _ => {}
         }
-        if !failures.is_empty() {
-            let backup = transaction.retain();
-            return Err(error).context(Message::BundleRollbackIncomplete {
-                failures: failures.join("; "),
-                backup: backup.display().to_string(),
-            });
-        }
-        return Err(error).context(Message::BundleInstallationRestored);
+        Ok(())
+    }
+}
+
+impl<R: Runner> Backend<R> for NativeHooks {
+    type Staged = Payload;
+    type Registration = ServiceState;
+
+    fn target_plan(&self, paths: &Paths) -> Result<Plan> {
+        crate::system::macos::services::definition::native_plan(paths)
+    }
+    fn previous_plan(&self, paths: &Paths) -> Result<Option<Plan>> {
+        crate::system::macos::services::definition::plan(paths).map(Some)
+    }
+    fn source(&self) -> Result<PathBuf> {
+        bundle::source()
     }
 
-    // Commit only a successful native registration or a known pending-approval state.
-    let ready = outcome?;
-    transaction.commit();
-    if ready {
-        tracing::info!(
-            scope = paths.scope.label(),
-            "Signed application installed and managed daemon ready"
-        );
-    } else {
-        tracing::warn!(
-            scope = paths.scope.label(),
-            "{}",
-            Message::MacosBackgroundApprovalRequired
-        );
+    async fn stage(&self, context: &InstallContext<'_, R>) -> Result<Payload> {
+        cleanup::validate_directory(
+            context
+                .plan
+                .definition
+                .parent()
+                .context(Message::ServiceDefinitionHasNoParentDirectory)?,
+        )?;
+        let source = context.source;
+        payload::validate(source).await?;
+        for system in [false, true] {
+            let definition = source.join(crate::infra::identity::macos_service_path(system));
+            let expected = if system == (context.paths.scope == Scope::System) {
+                context.plan.content.clone()
+            } else {
+                crate::infra::identity::macos_service_plist(system)
+            };
+            crate::infra::error::ensure!(
+                fs::read_to_string(&definition).ok().as_deref() == Some(expected.as_str()),
+                Message::MacosServiceDefinitionMissing
+            );
+        }
+        let destination = paths::macos_bundle(context.paths.scope)?;
+        let staged = Payload::stage(source, &destination)?;
+        payload::validate(&staged.staged()).await?;
+        if destination.exists() {
+            payload::validate(&destination).await?;
+        }
+        Ok(staged)
     }
-    Ok(())
+
+    async fn snapshot(&self, context: &InstallContext<'_, R>) -> Result<ServiceState> {
+        context.previous.manager.query(context.runner).await
+    }
+    async fn stop(&self, context: &InstallContext<'_, R>, plan: &Plan) -> Result<()> {
+        stop(context.paths, plan).await
+    }
+    async fn remove_failed(&self, context: &InstallContext<'_, R>) -> Result<()> {
+        host::stop_helpers(
+            context.paths.scope,
+            &paths::macos_bundle(context.paths.scope)?,
+        )
+        .await?;
+        unregister(context.plan).await
+    }
+    async fn verify(&self, context: &InstallContext<'_, R>) -> Result<bool> {
+        crate::system::macos::services::readiness::wait_installed(context.paths, context.plan).await
+    }
+    async fn restore_registration(
+        &self,
+        context: &InstallContext<'_, R>,
+        state: &ServiceState,
+    ) -> Result<()> {
+        if state.registered {
+            for command in &context.previous.start {
+                crate::system::macos::services::app_service::output(command, context.runner)
+                    .await?;
+            }
+            if !state.running
+                && !state.pending
+                && matches!(context.previous.manager, Manager::MacosAppService { .. })
+            {
+                stop(context.paths, context.previous).await?;
+            }
+        }
+        Ok(())
+    }
+    fn restored_error(&self) -> Message {
+        Message::BundleInstallationRestored
+    }
+    fn incomplete_error(&self, failures: String, backup: String) -> Message {
+        Message::BundleRollbackIncomplete { failures, backup }
+    }
+    fn report_installed(&self, paths: &Paths, ready: bool) {
+        if ready {
+            tracing::info!(
+                scope = paths.scope.label(),
+                "Signed application installed and managed daemon ready"
+            );
+        } else {
+            tracing::warn!(
+                scope = paths.scope.label(),
+                "{}",
+                Message::MacosBackgroundApprovalRequired
+            );
+        }
+    }
+}
+
+impl InstallPayload for Payload {
+    fn publish(&mut self, _plan: &Plan) -> Result<()> {
+        Payload::publish(self)
+    }
+    fn restore(&mut self, _plan: &Plan) -> Result<()> {
+        Payload::restore(self)
+    }
+    fn retain(mut self) -> Result<Vec<PathBuf>> {
+        Ok(vec![Payload::retain(&mut self)])
+    }
+    fn commit(self) {
+        Payload::commit(self);
+    }
 }
 
 async fn unregister(plan: &Plan) -> Result<()> {
@@ -341,19 +357,6 @@ fn prepare_system_directories() -> Result<()> {
     fs::set_permissions(application, fs::Permissions::from_mode(0o755))?;
     Ok(())
 }
-
-/// Prepare native installation metadata before entering the platform workflow.
-pub(crate) async fn run(paths: &Paths) -> Result<()> {
-    // Reject conflicting user/system installations before changing artifacts.
-    crate::system::shared::services::artifacts::ensure_no_conflicting_install(paths)?;
-
-    // Capture the currently selected service plan for rollback.
-    let previous = crate::system::macos::services::definition::plan(paths)?;
-
-    install(paths, previous).await
-}
-
-pub(crate) use crate::system::shared::services::artifacts::ensure_no_conflicting_install as validate_scope;
 
 #[cfg(test)]
 mod tests {

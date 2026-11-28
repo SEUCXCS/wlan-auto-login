@@ -73,7 +73,7 @@ mod launch;
 mod protocol;
 mod server;
 pub(crate) use client::{location_permission, prepare, snapshot, stop_helpers};
-use identity::{Session, session};
+use identity::Session;
 use launch::launch_host;
 #[cfg(test)]
 use launch::{host_launch, launch};

@@ -111,7 +111,7 @@ async fn serve(
                                     Ok::<_, crate::infra::error::Error>(snapshot)
                                 }.await;
                                 match result {
-                                    Ok(session) => response.session = session.map(|session| format!("{instance}:{session}")),
+                                    Ok(session) => response.session = session.map(|session| format!("{session}:{instance}")),
                                     Err(error) => response.error = Some(error.to_string()),
                                 }
                             },

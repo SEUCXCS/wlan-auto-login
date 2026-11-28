@@ -137,6 +137,13 @@ struct Directory {
 }
 
 #[derive(Serialize, Deserialize)]
+struct RollbackWrite {
+    before: u64,
+    generation: u64,
+    transaction: String,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct Snapshot {
     version: u32,
     scope: Scope,
@@ -149,7 +156,9 @@ pub struct Snapshot {
     credential: Option<Credential>,
     pub registration: Option<Registration>,
     pub generation: u64,
-    pub maximum_generation: u64,
+    maximum_generation: u64,
+    #[serde(default)]
+    rollback_write: Option<RollbackWrite>,
 }
 impl Snapshot {
     pub fn capture(paths: &Paths, scope: Scope, changes_credentials: bool) -> Result<Self> {
@@ -245,7 +254,7 @@ impl Snapshot {
             .and_then(|file| file.bytes.as_ref())
             .is_some_and(|bytes| {
                 serde_json::from_slice::<serde_json::Value>(bytes)
-                    .map_or(true, |value| !value.is_object())
+                    .map_or(true, |value| generation_from_control(&value).is_err())
             });
         let generation = if control_invalid && allow_invalid_control {
             0
@@ -274,6 +283,7 @@ impl Snapshot {
             maximum_generation: generation
                 .checked_add(u64::from(changes_credentials))
                 .context("Credential generation exhausted")?,
+            rollback_write: None,
         })
     }
     pub fn fresh(&self) -> bool {
@@ -297,12 +307,48 @@ impl Snapshot {
         );
         Ok(())
     }
-    pub fn restore_files(&self, paths: &Paths) -> Result<()> {
-        let current_generation = self.current_generation(paths)?;
+    pub(crate) fn checked_generation(&self, paths: &Paths) -> Result<u64> {
+        let current = self.current_generation(paths)?;
+        let unchanged = if let Some(write) = &self.rollback_write {
+            current == write.before
+                || (current == write.generation
+                    && read_control(paths)?["installer_rollback"] == write.transaction)
+        } else {
+            current <= self.maximum_generation
+        };
         ensure!(
-            current_generation <= self.maximum_generation,
+            unchanged,
             "Credentials changed concurrently; snapshot retained for recovery"
         );
+        Ok(current)
+    }
+
+    pub(crate) fn reserve_rollback(
+        &mut self,
+        paths: &Paths,
+        observed: u64,
+        transaction: &str,
+    ) -> Result<()> {
+        let current = self.checked_generation(paths)?;
+        ensure!(
+            current == observed,
+            "Credentials changed during service stop; snapshot retained for recovery"
+        );
+        if self.rollback_write.is_none() && !self.fresh() && !self.control_invalid {
+            self.rollback_write = Some(RollbackWrite {
+                before: current,
+                generation: current
+                    .max(self.generation)
+                    .checked_add(1)
+                    .context("Credential generation exhausted")?,
+                transaction: transaction.into(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn restore_files(&self, paths: &Paths) -> Result<()> {
+        let current_generation = self.checked_generation(paths)?;
         // The caller has stopped the daemon and holds both daemon and operation locks.
         let restore_generation = !self.fresh() && !self.control_invalid;
         if restore_generation {
@@ -319,12 +365,16 @@ impl Snapshot {
                     serde_json::json!({"paused":false,"session":null,"revision":0,"credential_generation":0})
                 }
             };
-            state["credential_generation"] = serde_json::json!(
+            let generation = if let Some(write) = &self.rollback_write {
+                state["installer_rollback"] = serde_json::json!(write.transaction);
+                write.generation
+            } else {
                 current_generation
                     .max(self.generation)
                     .checked_add(1)
                     .context("Credential generation exhausted")?
-            );
+            };
+            state["credential_generation"] = serde_json::json!(generation);
             win::write_atomic(&control, &serde_json::to_vec(&state)?)?;
         }
         for file in &self.files {
@@ -338,7 +388,7 @@ impl Snapshot {
         }
         Ok(())
     }
-    pub fn current_generation(&self, paths: &Paths) -> Result<u64> {
+    fn current_generation(&self, paths: &Paths) -> Result<u64> {
         match generation(paths) {
             Err(_) if self.control_invalid => Ok(0),
             value => value,
@@ -384,9 +434,15 @@ pub fn read_control(paths: &Paths) -> Result<serde_json::Value> {
     }
 }
 pub fn generation(paths: &Paths) -> Result<u64> {
-    Ok(read_control(paths)?["credential_generation"]
-        .as_u64()
-        .unwrap_or(0))
+    generation_from_control(&read_control(paths)?)
+}
+
+fn generation_from_control(state: &serde_json::Value) -> Result<u64> {
+    let state = state.as_object().context("Invalid control state")?;
+    match state.get("credential_generation") {
+        Some(value) => value.as_u64().context("Invalid credential generation"),
+        None => Ok(0),
+    }
 }
 pub fn remove_file(path: &Path) -> Result<()> {
     win::plain_path(path)?;
@@ -470,6 +526,7 @@ mod tests {
             registration: None,
             generation: 8,
             maximum_generation: 9,
+            rollback_write: None,
         };
         Ok((directory, paths, snapshot))
     }
@@ -512,6 +569,31 @@ mod tests {
             fs::read(paths.config.join("preferences.json"))?,
             b"concurrent preferences"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn rollback_rechecks_after_stop_and_can_retry_its_own_write() -> Result<()> {
+        let (_directory, paths, mut snapshot) = fixture()?;
+        let before_stop = snapshot.checked_generation(&paths)?;
+        let control = paths.config.join("control.json");
+        let updated = br#"{"paused":false,"session":null,"revision":5,"credential_generation":9}"#;
+        fs::write(&control, updated)?;
+        assert!(
+            snapshot
+                .reserve_rollback(&paths, before_stop, "test")
+                .is_err()
+        );
+        assert_eq!(fs::read(&control)?, updated);
+
+        snapshot.reserve_rollback(&paths, 9, "test")?;
+        snapshot.restore_files(&paths)?;
+        snapshot.reserve_rollback(&paths, 10, "test")?;
+        snapshot.restore_files(&paths)?;
+        assert_eq!(read_control(&paths)?["credential_generation"], 10);
+
+        fs::write(&control, br#"{"credential_generation":10}"#)?;
+        assert!(snapshot.checked_generation(&paths).is_err());
         Ok(())
     }
     #[test]

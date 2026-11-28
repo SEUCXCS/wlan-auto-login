@@ -1,244 +1,159 @@
-//! Platform-owned installation transaction; native preparation stays here.
-
-use crate::infra::command::{Invocation, Runner, SystemRunner};
-use crate::infra::error::Message;
-use crate::infra::error::{Context, Result};
-
-use crate::system::shared::services::artifacts::{Plan, assert_owned};
-
-use crate::system::shared::services::artifacts::{ensure_no_conflicting_install, plan};
-
-use crate::system::windows::services::wait as steps;
-
-use crate::{
-    infra::control,
-    infra::{filesystem::private_dir, paths::Paths},
+//! Validate Windows task XML and preserve native SCM or task registration.
+use crate::infra::{
+    command::Runner,
+    error::{Context, Error, Message, Result},
+    filesystem::private_dir,
 };
-use std::{fs, path::Path};
+use crate::system::{
+    define::services::Manager,
+    shared::{
+        flow::{
+            hooks::Hooks,
+            install::{Backend, FilePayload, InstallContext, Step},
+        },
+        services::steps::execute_optional,
+    },
+    windows::services::{artifacts, manager::ScmRegistration, task, wait},
+};
+#[cfg(test)]
+use crate::{infra::paths::Paths, system::define::services::Plan};
+use std::{fs, path::PathBuf};
 
-pub async fn run(paths: &Paths) -> Result<()> {
-    run_with(paths, Ok).await
+pub(crate) struct NativeHooks;
+pub(crate) enum Registration {
+    Task(task::Snapshot),
+    Service(ScmRegistration),
 }
-
-pub(crate) async fn run_with(
-    paths: &Paths,
-    prepare: impl FnOnce(Plan) -> Result<Plan>,
-) -> Result<()> {
-    // Validate scope ownership before constructing or changing native artifacts.
-    ensure_no_conflicting_install(paths)?;
-    let plan = prepare(plan(paths)?)?;
-
-    // Stage and publish through the common transaction.
-    install_plan(paths, plan, &std::env::current_exe()?, &SystemRunner).await
-}
-
-async fn install_plan(
-    paths: &Paths,
-    plan: Plan,
-    source: &Path,
-    runner: &impl Runner,
-) -> Result<()> {
-    crate::infra::error::ensure!(
-        plan.scope == paths.scope,
-        Message::ServicePlanDoesNotMatchTheSelected
-    );
-
-    // Serialize updates and validate the exact owned definition before staging.
-    let _service_lock = control::service_lock(paths)?;
-    assert_owned(&plan.definition)?;
-
-    // Prepare scope-appropriate directories without changing shared service folders.
-    let source = source.canonicalize()?;
-    let binary_dir = plan
-        .executable
-        .parent()
-        .context(Message::InstallationPathHasNoParentDirectory)?;
-    private_dir(binary_dir)?;
-
-    if paths.scope == crate::infra::scope::Scope::System {
-        crate::infra::filesystem::restrict_windows(binary_dir, true)?;
-    }
-
-    if let Some(parent) = plan.definition.parent() {
-        fs::create_dir_all(parent)?;
-
-        if paths.scope == crate::infra::scope::Scope::System {
-            crate::infra::filesystem::restrict_windows(parent, true)?;
-        }
-    }
-
-    // Validate the actual encoded task file before stopping an existing service.
-    let definition_bytes = crate::system::windows::services::artifacts::definition_bytes(&plan);
-    // TempPath keeps cleanup ownership while closing the writable Windows handle.
-    let staged_definition = stage_definition(&plan.definition, &definition_bytes)?.into_temp_path();
-    if matches!(
-        plan.manager,
-        crate::system::define::services::Manager::TaskScheduler { .. }
-    ) {
-        crate::system::windows::services::task::validate(staged_definition.as_ref(), runner)
-            .await?;
-    }
-
-    // Registration is independent of stale files left by an earlier failed install.
-    let previous_task = match &plan.manager {
-        crate::system::define::services::Manager::TaskScheduler { name } => {
-            Some(crate::system::windows::services::task::capture(name, runner).await?)
-        }
-        _ => None,
-    };
-
-    // Capture both artifacts before staging the replacement executable.
-    let old_definition = Backup::capture(&plan.definition)?;
-    let old_executable = Backup::capture(&plan.executable)?;
-    // Stage the executable before changing a running service.
-    let staged = tempfile::NamedTempFile::new_in(binary_dir)?;
-    fs::copy(&source, staged.path())?;
-
-    // Stop and wait before replacing either file.
-    stop_before_replacing(paths, &plan, runner).await?;
-
-    // Publish the staged binary and definition, then register and start.
-    let outcome: Result<()> = async {
-        if source != plan.executable.canonicalize().unwrap_or_default() {
-            staged.persist(&plan.executable).map_err(|e| e.error)?;
-        }
-
-        staged_definition
-            .persist(&plan.definition)
-            .map_err(|e| e.error)?;
-        for command in &plan.start {
-            execute(command, runner).await?;
-        }
-        if matches!(
-            plan.manager,
-            crate::system::define::services::Manager::TaskScheduler { .. }
-        ) {
-            steps::wait_task_started(&plan.manager, runner).await?;
+impl<R: Runner> Hooks<Step, InstallContext<'_, R>> for NativeHooks {
+    async fn after(
+        &self,
+        step: Step,
+        context: &InstallContext<'_, R>,
+        result: std::result::Result<(), &Error>,
+    ) -> Result<()> {
+        if result.is_ok() && matches!(step, Step::StopPrevious | Step::StopFailed) {
+            let plan = if step == Step::StopPrevious {
+                context.previous
+            } else {
+                context.plan
+            };
+            wait::wait_task_stopped(&plan.manager, context.runner).await?;
         }
         Ok(())
     }
-    .await;
+}
 
-    // Recovery uses the same stop/unregister barrier as signed bundles.
-    if let Err(error) = outcome {
-        // A failed stop or unregister forbids restoring files under a live process.
-        let mut rollback = crate::system::shared::services::transaction::Rollback::default();
-        rollback
-            .step(stop_before_replacing(paths, &plan, runner))
-            .await;
-        if let crate::system::define::services::Manager::TaskScheduler { name } = &plan.manager {
-            rollback
-                .step(crate::system::windows::services::task::remove(name, runner))
-                .await;
+impl<R: Runner> Backend<R> for NativeHooks {
+    type Staged = FilePayload;
+    type Registration = Registration;
+
+    async fn stage(&self, context: &InstallContext<'_, R>) -> Result<FilePayload> {
+        let plan = context.plan;
+        let bin = plan
+            .executable
+            .parent()
+            .context(Message::InstallationPathHasNoParentDirectory)?;
+        let definition = plan
+            .definition
+            .parent()
+            .context(Message::ServiceDefinitionHasNoParentDirectory)?;
+        private_dir(bin)?;
+        fs::create_dir_all(definition)?;
+        if context.paths.scope == crate::infra::scope::Scope::System {
+            crate::infra::filesystem::restrict_windows(bin, true)?;
+            crate::infra::filesystem::restrict_windows(definition, true)?;
+        }
+        let staged = FilePayload::stage(plan, context.source, &artifacts::definition_bytes(plan))?;
+        if matches!(plan.manager, Manager::TaskScheduler { .. }) {
+            task::validate(staged.definition()?, context.runner).await?;
+        }
+        Ok(staged)
+    }
+
+    async fn snapshot(&self, context: &InstallContext<'_, R>) -> Result<Registration> {
+        match &context.previous.manager {
+            Manager::TaskScheduler { name } => Ok(Registration::Task(
+                task::capture(name, context.runner).await?,
+            )),
+            _ => Ok(Registration::Service(
+                ScmRegistration::capture(context.runner).await?,
+            )),
+        }
+    }
+
+    async fn remove_failed(&self, context: &InstallContext<'_, R>) -> Result<()> {
+        if let Manager::TaskScheduler { name } = &context.plan.manager {
+            task::remove(name, context.runner).await?;
         } else {
-            for command in &plan.remove {
-                rollback.step(execute(command, runner)).await;
+            for command in &context.plan.remove {
+                execute_optional(context.runner, command).await?;
             }
         }
-
-        if rollback.safe() {
-            rollback.record(old_executable.restore(&plan.executable));
-            rollback.record(old_definition.restore(&plan.definition));
-        }
-
-        if rollback.safe() {
-            if let (
-                Some(snapshot),
-                crate::system::define::services::Manager::TaskScheduler { name },
-            ) = (&previous_task, &plan.manager)
-            {
-                rollback
-                    .step(snapshot.restore(name, &plan.definition, runner))
-                    .await;
-            } else {
-                let commands = if old_definition.existed() {
-                    &plan.start
-                } else {
-                    &plan.reload
-                };
-                for command in commands {
-                    rollback.step(execute(command, runner)).await;
-                }
-            }
-        }
-
-        if !rollback.safe() {
-            // Retain every surviving backup for a concrete recovery path.
-            let mut recovery = Vec::new();
-            for backup in [old_executable, old_definition] {
-                if let Some(path) = backup.retain()? {
-                    recovery.push(path.display().to_string());
-                }
-            }
-            if let Some(snapshot) = &previous_task {
-                match snapshot.retain(&plan.definition) {
-                    Ok(Some(path)) => recovery.push(path.display().to_string()),
-                    Ok(None) => {}
-                    Err(retain_error) => rollback.record(Err(retain_error)),
-                }
-            }
-            return Err(error).context(Message::InstallationFailedAndRollbackWasIncomplete {
-                value0: format!(
-                    "{}; recovery files: {}",
-                    rollback.detail(),
-                    recovery.join(", ")
-                ),
-            });
-        }
-        return Err(error).context(Message::InstallationFailedInstallationFilesRestored);
+        Ok(())
     }
 
-    // Successful publication is reported only after registration/start checks.
-    tracing::info!(
-        "{}",
-        Message::ServiceInstalledAndStartedForScope {
-            value0: (paths.scope.label()).to_string(),
-            value1: (if paths.scope == crate::infra::scope::Scope::System {
-                "autostart enabled at boot"
-            } else {
-                "autostart enabled at user login"
-            })
-            .to_string()
+    async fn verify(&self, context: &InstallContext<'_, R>) -> Result<bool> {
+        if matches!(context.plan.manager, Manager::TaskScheduler { .. }) {
+            wait::wait_task_started(&context.plan.manager, context.runner).await?;
         }
-    );
-    Ok(())
-}
-
-async fn stop_before_replacing(paths: &Paths, plan: &Plan, runner: &impl Runner) -> Result<()> {
-    for command in &plan.stop {
-        execute(command, runner).await?;
+        Ok(true)
     }
-    control::stop(paths).await;
-    control::wait_stopped(paths).await?;
 
-    steps::wait_task_stopped(&plan.manager, runner).await?;
-    Ok(())
-}
-use crate::system::shared::services::payload::Backup;
-fn stage_definition(path: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
-    use std::io::Write;
-    let mut file = tempfile::NamedTempFile::new_in(
-        path.parent()
-            .context(Message::ServiceDefinitionHasNoParentDirectory)?,
-    )?;
-    file.write_all(bytes)?;
-    file.as_file().sync_all()?;
-    Ok(file)
-}
-
-pub(crate) use crate::system::shared::services::artifacts::ensure_no_conflicting_install as validate_scope;
-
-async fn execute(command: &Invocation, runner: &impl Runner) -> Result<()> {
-    let result = runner.output(command).await?;
-    if !command.optional {
-        result.check(command)?;
+    async fn restore_registration(
+        &self,
+        context: &InstallContext<'_, R>,
+        registration: &Registration,
+    ) -> Result<()> {
+        match (registration, &context.previous.manager) {
+            (Registration::Task(snapshot), Manager::TaskScheduler { name }) => {
+                snapshot
+                    .restore(name, &context.previous.definition, context.runner)
+                    .await
+            }
+            (Registration::Service(snapshot), _) => {
+                snapshot.restore(context.previous, context.runner).await
+            }
+            _ => crate::infra::error::bail!(
+                "Task registration snapshot does not match the service plan"
+            ),
+        }
     }
-    Ok(())
+
+    fn retain_registration(
+        &self,
+        context: &InstallContext<'_, R>,
+        registration: &Registration,
+    ) -> Result<Option<PathBuf>> {
+        match registration {
+            Registration::Task(snapshot) => snapshot.retain(&context.previous.definition),
+            Registration::Service(_) => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::command::{Invocation, SystemRunner};
+
+    async fn install_plan(
+        paths: &Paths,
+        plan: Plan,
+        source: &std::path::Path,
+        runner: &impl Runner,
+    ) -> Result<()> {
+        crate::system::shared::flow::install::run_plan(
+            &InstallContext {
+                paths,
+                plan: &plan,
+                previous: &plan,
+                source,
+                runner,
+            },
+            &NativeHooks,
+        )
+        .await
+    }
     use crate::infra::command::{CommandOutput, tests::FakeRunner};
     const ABSENT: &str = "Installed=0";
     const READY: &str = "Installed=1

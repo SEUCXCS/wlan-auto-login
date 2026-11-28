@@ -18,6 +18,40 @@ fn platform_predicate(value: &str) -> bool {
             .any(|token| matches!(token, "unix" | "windows"))
 }
 fn validate_source(relative: &str, source: &str) -> Result<()> {
+    let native_flow = [
+        "system/linux/flow/",
+        "system/macos/flow/",
+        "system/windows/flow/",
+    ]
+    .iter()
+    .any(|root| relative.starts_with(root));
+    for (index, line) in source.lines().enumerate() {
+        let line = line.trim();
+        let number = index + 1;
+        if relative.starts_with("system/shared/flow/") {
+            ensure!(
+                !line.starts_with("#[path"),
+                "{relative}:{number}: shared workflows must own their source"
+            );
+        }
+        if native_flow && line.starts_with("pub") {
+            let forwards = line.contains("use ") && line.contains("shared::flow");
+            let replaces = ["run", "install", "uninstall", "start", "stop", "restart"]
+                .iter()
+                .any(|entry| line.contains(&format!("fn {entry}(")));
+            ensure!(
+                !forwards && !replaces,
+                "{relative}:{number}: native workflows should provide steps or hooks; common entrypoints belong in shared/flow"
+            );
+        }
+        if relative == "system.rs" && line.starts_with("pub") {
+            ensure!(
+                !line.contains("use native::flow"),
+                "{relative}:{number}: the public flow facade must select shared workflows"
+            );
+        }
+    }
+
     if ["system/linux/", "system/macos/", "system/windows/"]
         .iter()
         .any(|root| relative.starts_with(root))
@@ -105,6 +139,41 @@ pub fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_workflows_own_their_entrypoints() {
+        for (file, source) in [
+            ("system.rs", "pub(crate) use native::flow;"),
+            (
+                "system/shared/flow/mod.rs",
+                "#[path = \"../../windows/flow/uninstall.rs\"]",
+            ),
+            (
+                "system/windows/flow/install.rs",
+                "pub(crate) use crate::system::shared::flow::install::run;",
+            ),
+            (
+                "system/macos/flow/install.rs",
+                "pub(crate) async fn run() {}",
+            ),
+        ] {
+            assert!(validate_source(file, source).is_err());
+        }
+        assert!(
+            validate_source(
+                "system/macos/flow/install.rs",
+                "impl Hooks for NativeHooks {} "
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_source(
+                "system/linux/flow/session.rs",
+                "pub(crate) async fn ready() {} "
+            )
+            .is_ok()
+        );
+    }
     #[test]
     fn only_declarations_and_reexports_are_allowed_in_facades() {
         assert!(

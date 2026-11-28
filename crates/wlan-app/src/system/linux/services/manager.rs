@@ -6,6 +6,10 @@ use crate::infra::{
 use crate::system::define::services::{Action, Plan, ServiceManager, ServiceState};
 use crate::system::shared::services::{fields, steps::execute};
 pub(crate) async fn query(system: bool, name: &str, runner: &impl Runner) -> Result<ServiceState> {
+    parse_systemd(&query_properties(system, name, runner).await?)
+}
+
+async fn query_properties(system: bool, name: &str, runner: &impl Runner) -> Result<String> {
     let command = Invocation::new(
         "systemctl",
         [
@@ -20,7 +24,66 @@ pub(crate) async fn query(system: bool, name: &str, runner: &impl Runner) -> Res
     if fields(&result.stdout).get("LoadState") != Some(&"not-found") {
         result.check(&command)?;
     }
-    parse_systemd(&result.stdout)
+    Ok(result.stdout)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) struct Registration {
+    state: ServiceState,
+    enablement: Option<&'static str>,
+}
+
+#[cfg(target_os = "linux")]
+impl Registration {
+    pub(crate) async fn capture(system: bool, plan: &Plan, runner: &impl Runner) -> Result<Self> {
+        let properties = query_properties(system, plan.manager.name(), runner).await?;
+        let enablement = match fields(&properties).get("UnitFileState") {
+            Some(&"enabled") => Some("enable"),
+            Some(&"enabled-runtime") => Some("enable-runtime"),
+            _ => None,
+        };
+        Ok(Self {
+            state: parse_systemd(&properties)?,
+            enablement,
+        })
+    }
+
+    pub(crate) async fn restore(
+        &self,
+        system: bool,
+        plan: &Plan,
+        runner: &impl Runner,
+    ) -> Result<()> {
+        for command in &plan.reload {
+            crate::system::shared::services::steps::execute_optional(runner, command).await?;
+        }
+        if !self.state.registered {
+            return Ok(());
+        }
+        let scope = if system { "--system" } else { "--user" };
+        let name = plan.manager.name();
+        match self.enablement {
+            Some("enable") => {
+                execute(
+                    runner,
+                    Invocation::new("systemctl", [scope, "enable", name]),
+                )
+                .await?
+            }
+            Some("enable-runtime") => {
+                execute(
+                    runner,
+                    Invocation::new("systemctl", [scope, "--runtime", "enable", name]),
+                )
+                .await?
+            }
+            _ => {}
+        }
+        if self.state.running {
+            execute(runner, Invocation::new("systemctl", [scope, "start", name])).await?;
+        }
+        Ok(())
+    }
 }
 pub(crate) async fn manage(
     system: bool,

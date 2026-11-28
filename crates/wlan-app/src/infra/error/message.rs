@@ -479,6 +479,8 @@ pub enum Message {
     FailedToGenerateControlTokenE { e: String },
     #[error("Portal authentication state is unknown; skipping login")]
     PortalStateUnknown,
+    #[error("Wi-Fi session changed before credential submission")]
+    WifiSessionChangedBeforeLogin,
     #[error("Failed to apply system credential access control: {result}")]
     FailedToApplySystemCredentialAccessControl { result: String },
     #[error("Failed to create system credential access control: {result}")]

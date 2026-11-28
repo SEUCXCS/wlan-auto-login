@@ -33,7 +33,7 @@ pub async fn snapshot() -> Result<Option<String>> {
 
 async fn call(operation: Operation, launch: bool) -> Result<Response> {
     let selected = scope();
-    let session = session(selected)?;
+    let session = Session::resolve(selected)?;
     let app = bundle::resolve(selected)?;
     let mut stream = match connect(&session, selected, &app).await? {
         Some(stream) => stream,
@@ -94,7 +94,7 @@ async fn call(operation: Operation, launch: bool) -> Result<Response> {
     );
     if selected == Scope::System {
         ensure!(
-            session.uid == super::identity::session(selected)?.uid,
+            session.uid == Session::resolve(selected)?.uid,
             Message::MacosUserSessionUnavailable
         );
     }
@@ -107,7 +107,7 @@ async fn call(operation: Operation, launch: bool) -> Result<Response> {
 /// Stop transient hosts before changing their code identity. Managed hosts are
 /// stopped by daemon control; no helper is launched during cleanup.
 pub async fn stop_helpers(selected: Scope, app: &Path) -> Result<()> {
-    let session = match session(selected) {
+    let session = match Session::resolve(selected) {
         Ok(session) => session,
         Err(_) if selected == Scope::System && fs::metadata("/dev/console")?.uid() == 0 => {
             return Ok(());

@@ -9,6 +9,7 @@ pub struct State {
     pub paused: bool,
     pub session: Option<String>,
     pub revision: u64,
+    #[serde(default)]
     pub credential_generation: u64,
 }
 
@@ -87,13 +88,20 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn initial_state_requires_generation_and_exhaustion_never_wraps() -> Result<()> {
+    fn legacy_state_defaults_generation_and_exhaustion_never_wraps() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let paths = Paths::test(dir.path());
         assert_eq!(State::load(&paths)?.credential_generation, 0);
         fs::write(
             paths.config.join("control.json"),
             r#"{"paused":false,"session":null,"revision":0}"#,
+        )?;
+        assert_eq!(State::load(&paths)?.credential_generation, 0);
+        State::invalidate_credentials(&paths)?;
+        assert_eq!(State::load(&paths)?.credential_generation, 1);
+        fs::write(
+            paths.config.join("control.json"),
+            r#"{"paused":false,"session":null,"revision":0,"credential_generation":"invalid"}"#,
         )?;
         assert!(State::load(&paths).is_err());
         State {

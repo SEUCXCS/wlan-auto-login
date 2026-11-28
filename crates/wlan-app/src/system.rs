@@ -17,6 +17,4 @@ pub(crate) use windows as native;
 compile_error!("Supported platforms: Linux, macOS and Windows");
 
 pub(crate) mod shared;
-pub(crate) use shared::{credentials, wifi};
-
-pub(crate) use native::flow;
+pub(crate) use shared::{credentials, flow, wifi};

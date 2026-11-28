@@ -1,4 +1,5 @@
 //! Collect installation, native registration, version and runtime diagnostics.
+use super::hooks::{Hooks, NoHooks, step};
 use crate::infra::{
     command::{Invocation, Runner, SystemRunner},
     error::{Context, Message, Result},
@@ -10,35 +11,32 @@ use crate::system::{
     shared::services::artifacts::plan,
 };
 
-pub(crate) trait Backend {
-    fn query(
-        &self,
-        paths: Option<&Paths>,
-        plan: &Plan,
-        runner: &impl Runner,
-    ) -> impl std::future::Future<Output = Result<ServiceState>>;
-}
-pub(crate) struct DefaultBackend;
-impl Backend for DefaultBackend {
-    async fn query(
-        &self,
-        _paths: Option<&Paths>,
-        plan: &Plan,
-        runner: &impl Runner,
-    ) -> Result<ServiceState> {
-        plan.manager.query(runner).await
-    }
-}
-#[allow(dead_code)]
-pub(crate) async fn run(paths: &Paths, discover: bool) -> Result<Vec<InstallationReport>> {
-    run_with(paths, discover, &DefaultBackend).await
+#[derive(Clone, Copy)]
+pub(crate) enum Step {
+    Inspect,
+    Query,
+    Version,
+    Runtime,
 }
 
-pub(crate) async fn run_with(
-    paths: &Paths,
-    discover: bool,
-    backend: &impl Backend,
-) -> Result<Vec<InstallationReport>> {
+pub(crate) struct StatusContext<'a> {
+    pub paths: Option<&'a Paths>,
+    pub plan: &'a Plan,
+}
+
+pub(crate) trait StatusHooks: for<'a> Hooks<Step, StatusContext<'a>> {
+    async fn after_query(
+        &self,
+        _context: &StatusContext<'_>,
+        _state: &mut ServiceState,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+impl StatusHooks for NoHooks {}
+
+pub(crate) async fn run(paths: &Paths, discover: bool) -> Result<Vec<InstallationReport>> {
+    let hooks = super::NativeStatus;
     // Discover only the requested scopes using their native installation plans.
     let mut plans = vec![plan(paths)?];
     if discover && paths.scope == Scope::User {
@@ -49,15 +47,28 @@ pub(crate) async fn run_with(
     let mut reports = Vec::new();
     for plan in plans {
         let scope_paths = Paths::new(plan.scope)?;
-        let mut report = inspect_with(&plan, &SystemRunner, Some(&scope_paths), backend).await?;
+        let context = StatusContext {
+            paths: Some(&scope_paths),
+            plan: &plan,
+        };
+        let mut report = inspect_with(&context, &SystemRunner, &hooks).await?;
 
         // Authenticated status IPC reports only state; it never opens credential storage.
-        if report
-            .state
-            .as_ref()
-            .is_some_and(|r| r.as_ref().is_ok_and(|s| s.running))
+        if let Some(paths) = context.paths
+            && report
+                .state
+                .as_ref()
+                .is_some_and(|state| state.as_ref().is_ok_and(|state| state.running))
         {
-            report.runtime = Some(crate::infra::control::status(&scope_paths).await);
+            report.runtime = Some(
+                step(
+                    &hooks,
+                    Step::Runtime,
+                    &context,
+                    crate::infra::control::status(paths),
+                )
+                .await,
+            );
         }
 
         // Return only installations with observable artifacts.
@@ -70,20 +81,27 @@ pub(crate) async fn run_with(
 
 #[cfg(test)]
 pub(crate) async fn inspect(plan: &Plan, runner: &impl Runner) -> Result<InstallationReport> {
-    inspect_with(plan, runner, None, &DefaultBackend).await
+    inspect_with(&StatusContext { plan, paths: None }, runner, &NoHooks).await
 }
 async fn inspect_with(
-    plan: &Plan,
+    context: &StatusContext<'_>,
     runner: &impl Runner,
-    paths: Option<&Paths>,
-    backend: &impl Backend,
+    hooks: &impl StatusHooks,
 ) -> Result<InstallationReport> {
-    // Artifact inspection validates ownership independently of native registration.
-    let files = Artifacts::read(plan)?;
-
-    // A missing install must not execute a native manager or installed program.
+    let plan = context.plan;
+    let files = step(hooks, Step::Inspect, context, async {
+        Artifacts::read(plan)
+    })
+    .await?;
     let state = if files.any() {
-        Some(backend.query(paths, plan, runner).await)
+        Some(
+            step(hooks, Step::Query, context, async {
+                let mut state = plan.manager.query(runner).await?;
+                hooks.after_query(context, &mut state).await?;
+                Ok(state)
+            })
+            .await,
+        )
     } else {
         None
     };
@@ -91,7 +109,15 @@ async fn inspect_with(
 
     // Execute only --version, and only for a complete installation.
     let version = if files.complete() {
-        Some(installed_version(plan, runner).await)
+        Some(
+            step(
+                hooks,
+                Step::Version,
+                context,
+                installed_version(plan, runner),
+            )
+            .await,
+        )
     } else {
         None
     };

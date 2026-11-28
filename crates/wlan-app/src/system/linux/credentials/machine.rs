@@ -8,7 +8,14 @@ use crate::infra::filesystem::{private_dir, write_private};
 use crate::infra::paths::Paths;
 use wlanlogin_lib::Credentials;
 
-use std::{fs, path::Path, sync::Mutex, time::SystemTime};
+use std::{
+    fs,
+    io::Read,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    path::Path,
+    sync::Mutex,
+    time::SystemTime,
+};
 
 use zeroize::Zeroizing;
 
@@ -17,7 +24,28 @@ pub struct MachineStore {
 
     mode: Option<CredentialMode>,
 
-    cache: Mutex<Option<(SystemTime, u64, Credentials)>>,
+    cache: Mutex<Option<(FileVersion, Credentials)>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct FileVersion {
+    generation: u64,
+    device: u64,
+    inode: u64,
+    modified: SystemTime,
+    length: u64,
+}
+
+impl FileVersion {
+    fn new(metadata: &fs::Metadata, generation: u64) -> Result<Self> {
+        Ok(Self {
+            generation,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            modified: metadata.modified()?,
+            length: metadata.len(),
+        })
+    }
 }
 
 pub async fn delete(paths: &Paths) -> Result<()> {
@@ -77,75 +105,67 @@ impl MachineStore {
         self.paths.secrets.join("login.json")
     }
 
-    pub async fn load(&self, background: bool) -> Result<Option<Credentials>> {
+    pub async fn load(&self, generation: Option<u64>) -> Result<Option<Credentials>> {
+        let open = |path: &Path| {
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(path)
+        };
+        let (mut file, encrypted) = match open(&self.native_file()) {
+            Ok(file) => (file, true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match open(&self.plain_file()) {
+                    Ok(file) => (file, false),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let metadata = file.metadata()?;
+        validate_private(&metadata).map_err(|error| {
+            crate::system::shared::credentials::diagnostics::specific(
+                error,
+                crate::infra::error::credentials::Kind::UnsafeStorage,
+                crate::infra::error::credentials::Stage::Inspect,
+            )
+        })?;
+        let version = generation
+            .map(|generation| FileVersion::new(&metadata, generation))
+            .transpose()?;
+        if let Some(version) = &version
+            && let Some((cached, credentials)) = &*self
+                .cache
+                .lock()
+                .map_err(|_| crate::infra::error::error!(Message::CredentialCacheLockPoisoned))?
+            && cached == version
         {
-            let path = if self.native_file().try_exists()? {
-                self.native_file()
-            } else {
-                self.plain_file()
-            };
-            let metadata = match fs::symlink_metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(error) => return Err(error.into()),
-            };
-            validate_private(&path).map_err(|error| {
+            return Ok(Some(credentials.clone()));
+        }
+
+        // Read the file we inspected. A unit's startup copy can predate this generation.
+        let mut bytes = Zeroizing::new(Vec::new());
+        file.read_to_end(&mut bytes)?;
+        if encrypted {
+            bytes = crypt("decrypt", &bytes).await.map_err(|error| {
                 crate::system::shared::credentials::diagnostics::specific(
                     error,
-                    crate::infra::error::credentials::Kind::UnsafeStorage,
-                    crate::infra::error::credentials::Stage::Inspect,
+                    crate::infra::error::credentials::Kind::DecryptionFailed,
+                    crate::infra::error::credentials::Stage::Decrypt,
                 )
             })?;
-            let modified = metadata.modified()?;
-            if background
-                && let Some((old, length, credentials)) = &*self.cache.lock().map_err(|_| {
-                    crate::infra::error::error!(Message::CredentialCacheLockPoisoned)
-                })?
-                && *old == modified
-                && *length == metadata.len()
-            {
-                return Ok(Some(credentials.clone()));
-            }
-
-            let bytes = if path == self.plain_file() {
-                Zeroizing::new(fs::read(&path)?)
-            } else {
-                let first_load = self
-                    .cache
-                    .lock()
-                    .map_err(|_| crate::infra::error::error!(Message::CredentialCacheLockPoisoned))?
-                    .is_none();
-                let supplied = if background && first_load {
-                    std::env::var_os("CREDENTIALS_DIRECTORY")
-                        .map(std::path::PathBuf::from)
-                        .map(|dir| dir.join("login"))
-                } else {
-                    None
-                };
-                if let Some(supplied) = supplied {
-                    validate_private(&supplied)?;
-                    Zeroizing::new(fs::read(supplied)?)
-                } else {
-                    let encrypted = Zeroizing::new(fs::read(&path)?);
-                    crypt("decrypt", &encrypted).await.map_err(|error| {
-                        crate::system::shared::credentials::diagnostics::specific(
-                            error,
-                            crate::infra::error::credentials::Kind::DecryptionFailed,
-                            crate::infra::error::credentials::Stage::Decrypt,
-                        )
-                    })?
-                }
-            };
-
-            let credentials =
-                decode(std::str::from_utf8(&bytes).context(Message::SystemCredentialsAreNotUTF8)?)?;
+        }
+        let credentials =
+            decode(std::str::from_utf8(&bytes).context(Message::SystemCredentialsAreNotUTF8)?)?;
+        if let Some(version) = version {
             *self
                 .cache
                 .lock()
                 .map_err(|_| crate::infra::error::error!(Message::CredentialCacheLockPoisoned))? =
-                Some((modified, metadata.len(), credentials.clone()));
-            Ok(Some(credentials))
+                Some((version, credentials.clone()));
         }
+        Ok(Some(credentials))
     }
 
     pub async fn save(&self, credentials: Credentials) -> Result<()> {
@@ -187,15 +207,13 @@ impl MachineStore {
     }
 }
 
-fn validate_private(path: &Path) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
+fn validate_private(metadata: &fs::Metadata) -> Result<()> {
     crate::infra::error::ensure!(
         metadata.is_file() && !metadata.file_type().is_symlink(),
         Message::CredentialPathMustBeARegularFile
     );
 
     {
-        use std::os::unix::fs::MetadataExt;
         crate::infra::error::ensure!(
             metadata.uid() == 0 && metadata.mode() & 0o077 == 0,
             Message::SystemCredentialsMustBeOwnedByRoot
@@ -243,21 +261,6 @@ async fn crypt_with(
         }
     );
     Ok(Zeroizing::new(output.stdout))
-}
-
-pub fn linux_credential_directive(paths: &Paths) -> Result<String> {
-    if paths.secrets.join("login.cred").try_exists()? {
-        Ok(format!(
-            "LoadCredentialEncrypted=login:{}\n",
-            paths.secrets.join("login.cred").display()
-        ))
-    } else if paths.secrets.join("login.json").try_exists()? {
-        // The explicit protected-file backend also supports systemd versions
-        // predating LoadCredential; the root service reads its private file.
-        Ok(String::new())
-    } else {
-        crate::infra::error::bail!(Message::SystemCredentialsAreMissingRunLoginSystemRemember)
-    }
 }
 
 #[cfg(test)]
@@ -363,11 +366,11 @@ mod tests {
         let secret = dir.path().join("secret");
         fs::write(&secret, "test data")?;
         fs::set_permissions(&secret, fs::Permissions::from_mode(0o644))?;
-        assert!(validate_private(&secret).is_err());
+        assert!(validate_private(&fs::symlink_metadata(&secret)?).is_err());
         fs::set_permissions(&secret, fs::Permissions::from_mode(0o600))?;
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&secret, &link)?;
-        assert!(validate_private(&link).is_err());
+        assert!(validate_private(&fs::symlink_metadata(&link)?).is_err());
         Ok(())
     }
 }

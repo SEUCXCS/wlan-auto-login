@@ -6,6 +6,6 @@ mod diagnostics;
 mod error;
 mod types;
 
-pub use client::{Client, PortalConfig};
+pub use client::{Client, LoginPreparation, PortalConfig, PreparedLogin};
 pub use error::{Error, ProtocolError, RequestOperation};
 pub use types::{AuthState, Credentials, Line, LoginOutcome, Status};

@@ -65,7 +65,8 @@ Module roots in `crates/wlan-app/src`: `app.rs`, `infra.rs`, `system.rs`.
   - Put all target-dependent implementations under `system/{linux,macos,windows}/` (`flow`, `services`, `credentials`, `wifi`, `permission`, `runtime`).
   - Elsewhere, `cfg` / `cfg_attr` / `cfg!` for target OS is permitted ONLY in checked facades for module selection/re-export (same for test code; plain `#[cfg(test)]` is allowed). Never replace compile-time branches with runtime OS-name checks.
   - `system/<platform>/runtime/infra` compiles once via the `infra.rs` facade; shared state/protocol stays in `infra/control`.
-  - Keep native API, XML encoding, ACL, and task-registration logic out of `system/shared`. Re-export `system/shared/flow` defaults when a platform has no override; never stub an unimplemented operation with success.
+  - `system::flow` exports `system/shared/flow`. Shared workflows own step order, locks, validation, and rollback. Platform `flow/` modules supply native hooks and platform-only commands such as Linux session notifications. Keep native APIs, XML encoding, ACLs, and task registration in platform code.
+  - Each workflow step supports typed before/after hooks. A failed before hook prevents the step, and the after hook observes the result of an attempted step. Preserve the primary error and retain recovery backups even if a retention hook fails.
 - **`xtask` layout**: `main.rs` delegates to `commands::run`; `cli.rs` + `cli/bundle.rs` declare commands (build flags after platform subcommand; `--codesign-identity` macOS-only); `commands/<cmd>.rs` and `commands/bundle/<platform>.rs` implement tasks; `support/` must not depend on `cli` or `commands` and locates binaries via Cargo JSON output.
 - **Linux packages**: `.deb` (`packaging/linux/distro/debian/`), `.rpm` (`packaging/linux/distro/fedora/wlanlogin.spec`), and Arch (`packaging/linux/distro/archlinux/PKGBUILD`) ship only `/usr/bin/wlanlogin`, license, README, and both man pages in `packaging/linux/man/`. Never ship systemd units, enable services, or write runtime data from a package. Keep dependencies and installed files synced across all three packages, and update both man pages on any CLI/config/env/path change.
 - **Linux package floors & dates**: `.deb` targets Debian 12 / Ubuntu 24.04 (`libc6 <= 2.36`, build on Debian 12); `.rpm` targets Fedora 43 (`GLIBC_* <= 2.42`, fail if none generated, packages prebuilt CLI from `%{_sourcedir}`). Package changelog dates format in UTC from `SOURCE_DATE_EPOCH` (required for archives without `.git`) or current Git `HEAD`. User-facing release notes live on GitHub Releases.
@@ -76,7 +77,7 @@ Module roots in `crates/wlan-app/src`: `app.rs`, `infra.rs`, `system.rs`.
 ### Daemon & Portal
 
 - `AuthState::Unknown` MUST NEVER trigger automatic login.
-- Always recheck the Wi-Fi session after any `await` before submitting portal credentials.
+- Check portal status first and load page configuration only for confirmed `Offline`. Complete preflight before verifying the live credential permit and Wi-Fi session. After the final Wi-Fi await, check the local session and credential generations again before submitting.
 - Keep shutdown listeners alive and continuously drain NetworkManager / credential D-Bus event streams.
 - Bound native calls and credential reads; keep at most one background credential read task in flight (timeout, logout, or invalidation must not spawn a second task).
 - Keep `--user` and `--system` scopes strictly isolated (credentials, state, cleanup, wake/reset).
@@ -86,13 +87,14 @@ Module roots in `crates/wlan-app/src`: `app.rs`, `infra.rs`, `system.rs`.
 
 - **No startup pre-read**: Read credentials only after target Wi-Fi, pause, policy, and confirmed portal `Offline` guards pass.
 - **Credential freshness (`CredentialPermit`)**: Bind reads to scope, config root, and persisted `credential_generation` in `control.json` (independent of pause/schedule revision; defaults to `0` if missing). `save.rs` and `delete.rs` MUST atomically increment and persist `credential_generation` under the operation lock before native mutation; persistence failure aborts mutation, and failed mutation never restores old generations. Revalidate permits on task completion (including post-timeout cached results) and after the final Wi-Fi await.
-- **Purge**: `service uninstall --purge` deletes scoped credentials after verified stop/unregistration while holding daemon and operation locks, without requiring `control.json` to parse.
+- **Purge**: `service uninstall --purge` deletes scoped credentials after verified stop and unregistration while holding daemon and operation locks. It accepts a damaged `control.json`. Linux and macOS keep private scope locks in the persistent state directory through purge. During upgrade, check the legacy daemon lock before creating a replacement process.
 - **Error classification & IPC**: Typed errors live in `infra/error/credentials.rs`, classified in `shared/credentials/diagnostics.rs`. Keep daemon alive and preserve credentials on both `Waiting` and `Failed`. Never misclassify timeout (`NoReply`), format/version, duplicate, decryption, validation, or task errors as permission `Waiting`; keep unknown errors neutral. Status IPC is version 3 only (bounded JSON, validates scope/token, never triggers Keyring or leaks credentials/raw native messages).
 - **Permissions**: Open string `PermissionId`, dynamic `PermissionProvider::permissions()` (empty on Linux/Windows; `macos.location` & `macos.keychain` on macOS). `check` never triggers UI; `get` requires interactive stdin + stderr; background/non-interactive calls never prompt. Validate every field of `PermissionReport` during install. Reject unknown IDs, never report unavailable as granted, never delete credentials on failure.
 
 ### Platform-Specific Rules
 
 - **Linux**: User reads require a live logind graphical session, display socket, and synchronized D-Bus activation environment (even if a provider is already running) before calling official `dbus-secret-service` (DH encryption, zero prompt timeout, standard `org.freedesktop.secrets`, standard D-Bus activation). No vendoring, owner pinning, or desktop sniffing; keep `default.target` and system scope independent of GUI. Bind Linux user permits to logind session ID, `TimestampMonotonic`, and local session generation (verified before and after live queries); keep `session-ready`/`session-end` hints in memory only.
+  - Machine reads use the current protected file. Bind cached credentials to the generation and the identity of the file descriptor used to read them.
 - **macOS**:
   - `CFBundleShortVersionString` = Cargo version; `CFBundleVersion` = atomic integer in `.bundle-build/build-number` (shared across profiles/targets, survives `cargo clean`, never reused on failure or silently reset).
   - Install whole signed `.app` bundles (`flow/install.rs` + `services/payload.rs`); validate exact xtask bundle member inventory and reject symlinks/unknown files.
@@ -119,6 +121,7 @@ Module roots in `crates/wlan-app/src`: `app.rs`, `infra.rs`, `system.rs`.
 
 - Keep all `wlan-app` tests inline at the bottom of their owning file (`#[cfg(test)] mod tests`). Never split into `tests.rs`, separate test directories, or `#[path]` includes. Preserve `wlan-api` integration tests and fixtures.
 - Maintain one table-driven cross-platform suite per shared contract: `app.rs` (CLI), `infra.rs` (infrastructure), `system/define/credentials.rs` (credentials), `system/shared/flow/mod.rs` (uninstall transaction). Keep only documented native exceptions in platform modules. Use native symlink/junction helpers for directory-redirection tests.
+- Establish workflow regression coverage before moving code. Keep smoke tests focused on whether the entrypoint drives the workflow. Reuse shared IPC and shutdown assertions while exercising native transports and signals on their respective platforms.
 - Never hit the real campus portal, switch Wi-Fi, read real keyrings, or mutate real OS services. Use loopback HTTP mocks, temp dirs, fake credentials/commands, private `dbus-daemon`, and isolated child processes.
 - Never run the whole suite with `--include-ignored` (`signal_child`, `provider_child`, `read_child` are invoked explicitly by parent tests).
 - If a sandbox blocks local sockets or subprocesses, rerun isolated tests in a permitted environment and report environment vs product failures clearly.

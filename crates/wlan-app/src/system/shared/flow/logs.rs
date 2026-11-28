@@ -1,4 +1,5 @@
 //! Run the complete log workflow without starting a daemon or mutating services.
+use super::{NativeLogs, hooks::step};
 use crate::infra::{
     error::{Message, Result, ensure},
     paths::Paths,
@@ -9,6 +10,13 @@ use crate::system::{
     define::services::{Artifacts, LogBackend, LogOptions, Plan},
     shared::services::artifacts::plan,
 };
+
+#[derive(Clone, Copy)]
+pub(crate) enum Step {
+    Inspect,
+    SelectSource,
+    Read,
+}
 
 pub(crate) async fn run(
     paths: &Paths,
@@ -43,11 +51,24 @@ async fn run_plan(
     backend: &impl LogBackend,
 ) -> Result<()> {
     // Inspect the selected installation before choosing any native log source.
-    validate(plan)?;
-    let source = backend.source(paths, plan, options)?;
+    let context = (paths, plan, options);
+    step(&NativeLogs, Step::Inspect, &context, async {
+        validate(plan)
+    })
+    .await?;
+    let source = step(&NativeLogs, Step::SelectSource, &context, async {
+        backend.source(paths, plan, options)
+    })
+    .await?;
 
     // Native readers receive the same cancellation/output contract as file logs.
-    let result = backend.read(source, options, output, stop).await;
+    let result = step(
+        &NativeLogs,
+        Step::Read,
+        &context,
+        backend.read(source, options, output, stop),
+    )
+    .await;
 
     // Closing a downstream pipe is a normal end to log consumption.
     match result {

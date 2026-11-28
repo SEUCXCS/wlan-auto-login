@@ -1,30 +1,36 @@
-use crate::infra::{command::Runner, control, error::Result, paths::Paths};
-use crate::system::define::services::{Action, Plan, ServiceManager, ServiceState};
+//! Synchronize managed IPC and readiness with signed launchd jobs.
+use crate::infra::{
+    control,
+    error::{Error, Result},
+};
+use crate::system::{
+    macos::services::{bundle, readiness},
+    shared::flow::{
+        control::{ControlContext, ControlHooks, Step},
+        hooks::Hooks,
+    },
+};
 
-pub(crate) async fn apply(
-    paths: &Paths,
-    plan: &Plan,
-    action: Action,
-    mut state: ServiceState,
-    runner: &impl Runner,
-) -> Result<()> {
-    // Plans without a signed bundle use only the normalized manager contract.
-    if crate::system::macos::services::bundle::enclosing(&plan.executable).is_none() {
-        return crate::system::shared::services::steps::apply(paths, plan, action, state, runner)
-            .await;
+pub(crate) struct NativeHooks;
+impl ControlHooks for NativeHooks {
+    fn separate_stop(&self, context: &ControlContext<'_>) -> bool {
+        bundle::enclosing(&context.plan.executable).is_some()
     }
-
-    if matches!(action, Action::Stop | Action::Restart) {
-        // bootout first, so KeepAlive cannot race the explicit app shutdown.
-        plan.manager
-            .manage(plan, Action::Stop, state, runner)
-            .await?;
-        control::stop_managed(paths).await?;
-        state = ServiceState::absent();
-        if matches!(action, Action::Stop) {
-            return Ok(());
+}
+impl Hooks<Step, ControlContext<'_>> for NativeHooks {
+    async fn after(
+        &self,
+        step: Step,
+        context: &ControlContext<'_>,
+        result: std::result::Result<(), &Error>,
+    ) -> Result<()> {
+        if result.is_ok() && self.separate_stop(context) {
+            match step {
+                Step::StopRegistered => control::stop_managed(context.paths).await?,
+                Step::Apply => readiness::wait_ready(context.paths, context.plan).await?,
+                _ => {}
+            }
         }
+        Ok(())
     }
-    plan.manager.manage(plan, action, state, runner).await?;
-    crate::system::macos::services::readiness::wait_ready(paths, plan).await
 }

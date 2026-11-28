@@ -13,8 +13,6 @@ use std::{fs, io::Read, sync::Mutex, time::SystemTime};
 pub struct MachineStore {
     paths: Paths,
 
-    mode: Option<CredentialMode>,
-
     cache: Mutex<Option<(SystemTime, u64, Credentials)>>,
 }
 
@@ -52,8 +50,6 @@ impl MachineStore {
 
         Ok(Self {
             paths,
-
-            mode,
 
             cache: Mutex::new(None),
         })
@@ -144,36 +140,18 @@ impl MachineStore {
 
     pub async fn save(&self, credentials: Credentials) -> Result<()> {
         let text = encode(&credentials)?;
-
-        {
-            let plain = {
-                let _ = &self.mode;
-                false
-            };
-            let (path, bytes) = if plain {
-                tracing::warn!("{}", Message::SystemCredentialsWillBeStoredAsPlaintext);
-                (self.plain_file(), Zeroizing::new(text.as_bytes().to_vec()))
-            } else {
-                let bytes = encrypt(text.as_bytes())?;
-                (self.native_file(), bytes)
-            };
-            let _directory = machine_directory(&self.paths.secrets, true)?;
-            write_machine_file(&path, &bytes)?;
-            let previous = if plain {
-                self.native_file()
-            } else {
-                self.plain_file()
-            };
-            if previous.try_exists()? {
-                fs::remove_file(previous)?;
-            }
-            *self
-                .cache
-                .lock()
-                .map_err(|_| crate::infra::error::error!(Message::CredentialCacheLockPoisoned))? =
-                None;
-            Ok(())
+        let bytes = encrypt(text.as_bytes())?;
+        let _directory = machine_directory(&self.paths.secrets, true)?;
+        write_machine_file(&self.native_file(), &bytes)?;
+        let previous = self.plain_file();
+        if previous.try_exists()? {
+            fs::remove_file(previous)?;
         }
+        *self
+            .cache
+            .lock()
+            .map_err(|_| crate::infra::error::error!(Message::CredentialCacheLockPoisoned))? = None;
+        Ok(())
     }
 }
 

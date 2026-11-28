@@ -44,6 +44,20 @@ pub struct Client {
     config: PortalConfig,
 }
 
+/// The portal state observed during a login preflight.
+pub enum LoginPreparation<'a> {
+    AlreadyOnline,
+    Unknown,
+    Offline(Box<PreparedLogin<'a>>),
+}
+
+/// An offline device and its page configuration, ready for a single submission.
+pub struct PreparedLogin<'a> {
+    client: &'a Client,
+    status: Status,
+    page: PortalPage,
+}
+
 struct PortalPage {
     program_index: String,
     page_index: String,
@@ -86,17 +100,51 @@ impl Client {
         credentials: &Credentials,
         line: Line,
     ) -> Result<LoginOutcome, Error> {
-        let username = credentials.username.trim();
-        if username.is_empty() || credentials.password.is_empty() {
+        if credentials.username.trim().is_empty() || credentials.password.is_empty() {
             return Err(Error::EmptyCredentials);
         }
+        match self.prepare_login().await? {
+            LoginPreparation::AlreadyOnline => Ok(LoginOutcome::AlreadyOnline),
+            LoginPreparation::Unknown => Err(Error::Protocol(ProtocolError::LoginStateUnknown)),
+            LoginPreparation::Offline(prepared) => prepared.submit(credentials, line).await,
+        }
+    }
+
+    /// Resolve all portal prerequisites before the caller checks its local session.
+    pub async fn prepare_login(&self) -> Result<LoginPreparation<'_>, Error> {
         let status = self.status_for(RequestOperation::Login).await?;
-        if status.auth == AuthState::Online {
-            return Ok(LoginOutcome::AlreadyOnline);
+        match status.auth {
+            AuthState::Online => return Ok(LoginPreparation::AlreadyOnline),
+            AuthState::Unknown => return Ok(LoginPreparation::Unknown),
+            AuthState::Offline => {}
         }
         let page = self
             .load_page(RequestOperation::Login, &status, &status.vlan, &status.ipv6)
             .await?;
+        Ok(LoginPreparation::Offline(Box::new(PreparedLogin {
+            client: self,
+            status,
+            page,
+        })))
+    }
+}
+
+impl PreparedLogin<'_> {
+    /// Submit credentials without another portal preflight request.
+    pub async fn submit(
+        self,
+        credentials: &Credentials,
+        line: Line,
+    ) -> Result<LoginOutcome, Error> {
+        let username = credentials.username.trim();
+        if username.is_empty() || credentials.password.is_empty() {
+            return Err(Error::EmptyCredentials);
+        }
+        let Self {
+            client,
+            status,
+            page,
+        } = self;
         let prefix = if page.account_prefix { ",0," } else { "" };
         let account = Zeroizing::new(format!("{prefix}{username}{}", line.suffix()));
         let encoded_account = Zeroizing::new(BASE64.encode(account.as_bytes()));
@@ -144,18 +192,21 @@ impl Client {
             credentials.password.as_str(),
             username,
         ];
-        self.request(
-            RequestOperation::Login,
-            RequestOperation::Login,
-            &self.config.login_url,
-            &query,
-            &secrets,
-            |value| check_action(value, &secrets),
-        )
-        .await
-        .map(|()| LoginOutcome::Authenticated)
+        client
+            .request(
+                RequestOperation::Login,
+                RequestOperation::Login,
+                &client.config.login_url,
+                &query,
+                &secrets,
+                |value| check_action(value, &secrets),
+            )
+            .await
+            .map(|()| LoginOutcome::Authenticated)
     }
+}
 
+impl Client {
     async fn load_page(
         &self,
         operation: RequestOperation,
@@ -405,13 +456,11 @@ fn text_field(value: &Value, names: &[&str]) -> Option<String> {
 }
 
 fn parse_status(value: &Value) -> Result<Status, Error> {
-    let ip: Ipv4Addr = text_field(
-        value,
-        &["v46ip", "v4ip", "userip", "user_ip", "wlan_user_ip"],
-    )
-    .and_then(|v| v.parse().ok())
-    .filter(|ip: &Ipv4Addr| !ip.is_unspecified() && !ip.is_broadcast() && !ip.is_multicast())
-    .ok_or(Error::MissingIp)?;
+    let ip = ["v46ip", "v4ip", "userip", "user_ip", "wlan_user_ip"]
+        .into_iter()
+        .filter_map(|name| value[name].as_str()?.parse::<Ipv4Addr>().ok())
+        .find(|ip| !ip.is_unspecified() && !ip.is_broadcast() && !ip.is_multicast())
+        .ok_or(Error::MissingIp)?;
     // Dr.COM a41.js checkStatus defines result: 0 offline, 1 online. Keep
     // explicit compatibility flags first; an invalid present flag stays unknown.
     let auth = match value.get("online").or_else(|| value.get("is_login")) {

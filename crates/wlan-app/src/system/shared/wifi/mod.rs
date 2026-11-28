@@ -54,7 +54,7 @@ impl WifiConnection for WifiProbe {
     }
 }
 
-pub(crate) use crate::system::native::flow::wifi::state::run as wifi_state;
+pub(crate) use crate::system::flow::wifi::state::run as wifi_state;
 
 mod worker;
 #[allow(unused_imports)]

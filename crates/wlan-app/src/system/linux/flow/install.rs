@@ -1,211 +1,126 @@
-//! Platform-owned installation transaction; native preparation stays here.
-
-use crate::infra::error::Message;
-use crate::infra::error::{Context, Result};
-use crate::infra::scope::Scope;
-
-use crate::system::shared::services::artifacts::{Plan, assert_owned};
-
-use crate::system::shared::services::artifacts::{ensure_no_conflicting_install, plan};
-
-use crate::{
-    infra::control,
-    infra::{filesystem::private_dir, paths::Paths},
+//! systemd registration and Unix installation permissions.
+use crate::infra::{
+    command::Runner,
+    error::{Context, Message, Result},
+    filesystem::private_dir,
+    paths::Paths,
+    scope::Scope,
 };
-use std::{fs, path::Path};
+use crate::system::{
+    define::services::Plan,
+    linux::services::manager::Registration,
+    shared::{
+        flow::{
+            hooks::Hooks,
+            install::{Backend, FilePayload, InstallContext, Step},
+        },
+        services::artifacts::plan,
+    },
+};
+use std::{fs, os::unix::fs::PermissionsExt};
 
-async fn run_with(paths: &Paths, prepare: impl FnOnce(Plan) -> Result<Plan>) -> Result<()> {
-    // Validate scope ownership before constructing or changing native artifacts.
-    ensure_no_conflicting_install(paths)?;
-    let plan = prepare(plan(paths)?)?;
+pub(crate) struct NativeHooks;
+impl<R: Runner> Hooks<Step, InstallContext<'_, R>> for NativeHooks {}
+impl<R: Runner> Backend<R> for NativeHooks {
+    type Staged = FilePayload;
+    type Registration = Registration;
 
-    // Stage and publish through the common transaction.
-    install_plan(paths, plan, &std::env::current_exe()?).await
-}
-
-async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
-    crate::infra::error::ensure!(
-        plan.scope == paths.scope,
-        Message::ServicePlanDoesNotMatchTheSelected
-    );
-
-    // Serialize updates and validate the exact owned definition before staging.
-    let _service_lock = control::service_lock(paths)?;
-    assert_owned(&plan.definition)?;
-
-    // Prepare scope-appropriate directories without changing shared service folders.
-    let source = source.canonicalize()?;
-    let binary_dir = plan
-        .executable
-        .parent()
-        .context(Message::InstallationPathHasNoParentDirectory)?;
-    private_dir(binary_dir)?;
-
-    if paths.scope == crate::infra::scope::Scope::System {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(binary_dir, fs::Permissions::from_mode(0o755))?;
-    }
-    if let Some(parent) = plan.definition.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    // Capture both artifacts before staging the replacement executable.
-    let old_definition = Backup::capture(&plan.definition)?;
-    let old_executable = Backup::capture(&plan.executable)?;
-    // Stage the executable before changing a running service.
-    let staged = tempfile::NamedTempFile::new_in(binary_dir)?;
-    fs::copy(&source, staged.path())?;
-
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(
-            staged.path(),
-            fs::Permissions::from_mode(if paths.scope == crate::infra::scope::Scope::System {
-                0o755
-            } else {
-                0o700
-            }),
-        )?;
-    }
-
-    // Stop and wait before replacing either file.
-    stop_before_replacing(paths, &plan).await?;
-
-    // Publish the staged binary and definition, then register and start.
-    let outcome: Result<()> = async {
-        if source != plan.executable.canonicalize().unwrap_or_default() {
-            staged.persist(&plan.executable).map_err(|e| e.error)?;
-        }
-
-        write_definition(&plan.definition, plan.content.as_bytes())?;
-        for command in &plan.start {
-            command.run().await?;
-        }
-        Ok(())
-    }
-    .await;
-
-    // Recovery uses the same stop/unregister barrier as signed bundles.
-    if let Err(error) = outcome {
-        // A failed stop or unregister forbids restoring files under a live process.
-        let mut rollback = crate::system::shared::services::transaction::Rollback::default();
-        rollback.step(stop_before_replacing(paths, &plan)).await;
-        for command in &plan.remove {
-            rollback.step(command.run()).await;
-        }
-
-        if rollback.safe() {
-            rollback.record(old_executable.restore(&plan.executable));
-            rollback.record(old_definition.restore(&plan.definition));
-        }
-
-        if rollback.safe() {
-            let commands = if old_definition.existed() {
-                &plan.start
-            } else {
-                &plan.reload
-            };
-            for command in commands {
-                rollback.step(command.run()).await;
-            }
-        }
-
-        if !rollback.safe() {
-            // Retain every surviving backup for a concrete recovery path.
-            let mut recovery = Vec::new();
-            for backup in [old_executable, old_definition] {
-                if let Some(path) = backup.retain()? {
-                    recovery.push(path.display().to_string());
-                }
-            }
-            return Err(error).context(Message::InstallationFailedAndRollbackWasIncomplete {
-                value0: format!(
-                    "{}; recovery files: {}",
-                    rollback.detail(),
-                    recovery.join(", ")
-                ),
-            });
-        }
-        return Err(error).context(Message::InstallationFailedInstallationFilesRestored);
-    }
-
-    // Successful publication is reported only after registration/start checks.
-    tracing::info!(
-        "{}",
-        Message::ServiceInstalledAndStartedForScope {
-            value0: (paths.scope.label()).to_string(),
-            value1: (if paths.scope == crate::infra::scope::Scope::System {
-                "autostart enabled at boot"
-            } else {
-                "autostart enabled at user login"
-            })
-            .to_string()
-        }
-    );
-    Ok(())
-}
-
-async fn stop_before_replacing(paths: &Paths, plan: &Plan) -> Result<()> {
-    for command in &plan.stop {
-        command.run().await?;
-    }
-    control::stop(paths).await;
-    control::wait_stopped(paths).await?;
-
-    Ok(())
-}
-use crate::system::shared::services::payload::Backup;
-pub(crate) fn write_definition(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    let mut file = tempfile::NamedTempFile::new_in(
-        path.parent()
-            .context(Message::ServiceDefinitionHasNoParentDirectory)?,
-    )?;
-    file.write_all(bytes)?;
-    file.as_file().sync_all()?;
-    file.persist(path).map_err(|e| e.error)?;
-
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o644))?;
-    }
-    Ok(())
-}
-
-pub(crate) async fn run(paths: &Paths) -> Result<()> {
-    // System services receive native encrypted credentials through systemd.
-    run_with(paths, |mut plan| {
+    fn target_plan(&self, paths: &Paths) -> Result<Plan> {
         if paths.scope == Scope::System {
-            plan.content = plan.content.replace(
-                "# CREDENTIALS\n",
-                &crate::system::credentials::linux_credential_directive(paths)?,
+            crate::infra::error::ensure!(
+                paths.secrets.join("login.cred").try_exists()?
+                    || paths.secrets.join("login.json").try_exists()?,
+                Message::SystemCredentialsAreMissingRunLoginSystemRemember
             );
         }
-        Ok(plan)
-    })
-    .await
-}
+        plan(paths)
+    }
 
-pub(crate) use crate::system::shared::services::artifacts::ensure_no_conflicting_install as validate_scope;
+    async fn stage(&self, context: &InstallContext<'_, R>) -> Result<FilePayload> {
+        let plan = context.plan;
+        let bin = plan
+            .executable
+            .parent()
+            .context(Message::InstallationPathHasNoParentDirectory)?;
+        let definition = plan
+            .definition
+            .parent()
+            .context(Message::ServiceDefinitionHasNoParentDirectory)?;
+        private_dir(bin)?;
+        let mode = if context.paths.scope == Scope::System {
+            0o755
+        } else {
+            0o700
+        };
+        if mode == 0o755 {
+            fs::set_permissions(bin, fs::Permissions::from_mode(mode))?;
+        }
+        fs::create_dir_all(definition)?;
+        let staged = FilePayload::stage(plan, context.source, plan.content.as_bytes())?;
+        if let Some(executable) = staged.executable() {
+            fs::set_permissions(executable, fs::Permissions::from_mode(mode))?;
+        }
+        fs::set_permissions(staged.definition()?, fs::Permissions::from_mode(0o644))?;
+        Ok(staged)
+    }
+
+    async fn snapshot(&self, context: &InstallContext<'_, R>) -> Result<Registration> {
+        Registration::capture(
+            context.paths.scope == Scope::System,
+            context.previous,
+            context.runner,
+        )
+        .await
+    }
+
+    async fn restore_registration(
+        &self,
+        context: &InstallContext<'_, R>,
+        registration: &Registration,
+    ) -> Result<()> {
+        registration
+            .restore(
+                context.paths.scope == Scope::System,
+                context.previous,
+                context.runner,
+            )
+            .await
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use crate::infra::command::Invocation;
+    use crate::infra::command::{
+        Invocation,
+        tests::{FakeRunner, STOPPED},
+    };
 
     use crate::system::define::services::{LABEL, Manager};
 
+    async fn install_plan(
+        paths: &Paths,
+        plan: Plan,
+        source: &std::path::Path,
+        runner: &impl Runner,
+    ) -> Result<()> {
+        crate::system::shared::flow::install::run_plan(
+            &InstallContext {
+                paths,
+                plan: &plan,
+                previous: &plan,
+                source,
+                runner,
+            },
+            &NativeHooks,
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn failed_registration_restores_the_previous_service_and_binary() -> Result<()> {
-        let scopes = if true {
-            vec![
-                crate::infra::scope::Scope::User,
-                crate::infra::scope::Scope::System,
-            ]
-        } else {
-            vec![crate::infra::scope::Scope::User]
-        };
+        let scopes = [Scope::User, Scope::System];
         for scope in scopes {
             let dir = tempfile::tempdir()?;
             let mut paths = Paths::test(dir.path().join("config"));
@@ -235,7 +150,15 @@ mod tests {
                     [original.as_os_str(), definition.as_os_str()],
                 )],
             };
-            assert!(install_plan(&paths, plan, &source).await.is_err());
+            let stopped = "LoadState=loaded\nActiveState=inactive\nSubState=dead\nUnitFileState=disabled\nMainPID=0";
+            let runner = FakeRunner::new([(true, stopped), (false, "failed registration")]);
+            let result = install_plan(&paths, plan, &source, &runner).await;
+            assert!(result.is_err());
+            assert_eq!(
+                runner.calls.borrow().len(),
+                2,
+                "a disabled stopped service stays stopped"
+            );
             assert_eq!(fs::read_to_string(executable)?, "old executable");
             assert_eq!(fs::read(definition)?, fs::read(original)?);
         }
@@ -244,14 +167,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_first_install_removes_new_artifacts() -> Result<()> {
-        let scopes = if true {
-            vec![
-                crate::infra::scope::Scope::User,
-                crate::infra::scope::Scope::System,
-            ]
-        } else {
-            vec![crate::infra::scope::Scope::User]
-        };
+        let scopes = [Scope::User, Scope::System];
         for scope in scopes {
             let dir = tempfile::tempdir()?;
             let mut paths = Paths::test(dir.path().join("config"));
@@ -273,7 +189,11 @@ mod tests {
                 reload: vec![],
                 start: vec![Invocation::new("false", std::iter::empty::<&str>())],
             };
-            assert!(install_plan(&paths, plan, &source).await.is_err());
+            let runner = FakeRunner::new([
+                (true, "LoadState=not-found"),
+                (false, "failed registration"),
+            ]);
+            assert!(install_plan(&paths, plan, &source, &runner).await.is_err());
             assert!(!executable.exists());
             assert!(!definition.exists());
         }
@@ -307,7 +227,13 @@ mod tests {
             remove: Vec::new(),
             reload: Vec::new(),
         };
-        let error = install_plan(&paths, plan, &source)
+        let runner = FakeRunner::new([
+            (true, STOPPED),
+            (true, ""),
+            (false, "failed registration"),
+            (false, "failed stop"),
+        ]);
+        let error = install_plan(&paths, plan, &source, &runner)
             .await
             .err()
             .context("expected failed rollback")?;

@@ -21,11 +21,11 @@ pub(super) async fn dispatch(
 
     match &command {
         cli::Command::Service(cli::ServiceCommand::SessionReady) => {
-            crate::system::flow::session::ready(paths).await?;
+            crate::system::linux::flow::session::ready(paths).await?;
             return Ok(None);
         }
         cli::Command::Service(cli::ServiceCommand::SessionEnd) => {
-            crate::system::flow::session::end(paths).await?;
+            crate::system::linux::flow::session::end(paths).await?;
             return Ok(None);
         }
         _ => {}
