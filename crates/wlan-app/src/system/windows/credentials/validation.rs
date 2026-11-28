@@ -19,7 +19,7 @@ pub(crate) fn snapshot(paths: &Paths) -> Result<CredentialPermit> {
 pub(crate) async fn validate(
     paths: &Paths,
     permit: &CredentialPermit,
-    session: &tokio::sync::watch::Receiver<SessionState>,
+    _session: &tokio::sync::watch::Receiver<SessionState>,
 ) -> Result<Validity> {
     // Scope binding prevents a user permit from authorizing system storage or another root.
     ensure!(
@@ -30,14 +30,6 @@ pub(crate) async fn validate(
         return Ok(Validity::CredentialsChanged);
     }
 
-    // Only Linux user storage imposes the graphical-session prerequisite.
-
-    let _ = session;
-
-    // A mutation while native session queries awaited also invalidates the result.
-    if State::load(paths)?.credential_generation != permit.generation {
-        return Ok(Validity::CredentialsChanged);
-    }
     Ok(Validity::Valid)
 }
 
