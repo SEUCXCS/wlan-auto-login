@@ -164,41 +164,25 @@ fn rollback(
     let bytes = win::protect(&fs::read(snapshot_file)?, scope == Scope::Machine, true)?;
     let mut snapshot: Snapshot = serde_json::from_slice(&bytes)?;
     snapshot.validate(paths, scope)?;
-    ensure!(
-        snapshot.current_generation(paths)? <= snapshot.maximum_generation,
-        "Concurrent credential change detected; recovery snapshot retained at {}",
-        journal.display()
-    );
+    let observed = snapshot.checked_generation(paths)?;
 
-    if snapshot.fresh() {
-        // A fresh scope has no older credentials or files to preserve.
-        cli::run(
-            binary,
-            scope,
-            &["service", "uninstall", "--purge"],
-            None,
-            &diagnostics.cli_log(),
-        )?;
-    } else {
-        // Uninstall stops/unregisters before any file restoration and keeps saved credentials.
-        cli::run(
-            binary,
-            scope,
-            &["service", "uninstall"],
-            None,
-            &diagnostics.cli_log(),
-        )?;
-    }
+    // Stop/unregister without mutating credentials. The snapshot removes any
+    // artifacts that were absent on a fresh install only after the locked check.
+    cli::run(
+        binary,
+        scope,
+        &["service", "uninstall"],
+        None,
+        &diagnostics.cli_log(),
+    )?;
     services::wait(scope, false)?;
     let mut locks = lock_state(paths)?;
-    if !snapshot.fresh() {
-        snapshot.maximum_generation = snapshot
-            .current_generation(paths)?
-            .max(snapshot.generation)
-            .checked_add(1)
-            .context("Credential generation exhausted")?;
-        persist(&snapshot, scope, journal)?;
-    }
+    let transaction = journal
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("Invalid recovery transaction directory")?;
+    snapshot.reserve_rollback(paths, observed, transaction)?;
+    persist(&snapshot, scope, journal)?;
     snapshot.restore_files(paths)?;
     // Release the daemon singleton before restoring a previously running registration.
     drop(locks.remove(1));
