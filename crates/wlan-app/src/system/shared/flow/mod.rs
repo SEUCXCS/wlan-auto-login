@@ -2,6 +2,7 @@
 pub(crate) mod control;
 pub(crate) mod credentials;
 pub(crate) mod hooks;
+pub(crate) mod install;
 pub(crate) mod logs;
 pub(crate) mod permission;
 pub(crate) mod restart;
