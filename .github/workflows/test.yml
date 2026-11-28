@@ -2,9 +2,17 @@ name: Tests
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'CONTRIBUTING.md'
+      - 'AGENT.md'
   pull_request:
-    branches: [main, develop]
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'CONTRIBUTING.md'
+      - 'AGENT.md'
   workflow_dispatch:
 
 permissions:
@@ -12,7 +20,7 @@ permissions:
 
 concurrency:
   group: tests-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -55,6 +63,7 @@ jobs:
 
   test:
     name: Test ${{ matrix.target }}
+    needs: quality
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -87,12 +96,32 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes build-essential pkg-config libdbus-1-dev dbus-daemon
+          sudo apt-get install --yes build-essential pkg-config libdbus-1-dev dbus-daemon rpm
 
       - name: Cache Rust build files
+        if: runner.os != 'Windows'
         uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         with:
           key: test-${{ matrix.target }}
+
+      - name: Cache Rust build files (Windows workspaces)
+        if: runner.os == 'Windows'
+        uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+        with:
+          key: test-${{ matrix.target }}
+          workspaces: |
+            . -> target
+            packaging/windows -> packaging/windows/target
+
+      - name: Cache WiX toolset
+        if: runner.os == 'Windows'
+        id: wix-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/wlanlogin-wix
+            ~/.wix
+          key: wix-6.0.2-${{ runner.os }}-${{ runner.arch }}
 
       - name: Lint all targets
         run: cargo clippy --workspace --all-targets --locked --target "$BUILD_TARGET" -- -D warnings
@@ -100,8 +129,8 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace --locked --no-fail-fast --target "$BUILD_TARGET"
 
-      - name: Build workspace binaries
-        run: cargo build --workspace --locked --target "$BUILD_TARGET"
+      - name: Build CLI binary
+        run: cargo build --locked --target "$BUILD_TARGET" -p wlanlogin-cli --bin wlanlogin
 
       - name: Verify CLI startup
         run: |
@@ -111,23 +140,75 @@ jobs:
           fi
           "$binary" --version
           "$binary" --help
-          for command in login logout service permission daemon; do
+          for command in login logout service permission config daemon; do
             "$binary" "$command" --help
           done
+
+      - name: Check the Debian and RPM packages
+        if: runner.os == 'Linux'
+        run: |
+          cargo xtask bundle deb --profile dev --target "$BUILD_TARGET" --target-dir target
+          cargo xtask bundle rpm --profile dev --target "$BUILD_TARGET" --target-dir target
+
+      - name: Check the macOS application bundle
+        if: runner.os == 'macOS'
+        run: cargo xtask bundle macos --profile dev --target "$BUILD_TARGET" --target-dir target --codesign-identity=-
 
       - name: Check Windows installer code and payload
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          WIX_CACHE_HIT: ${{ steps.wix-cache.outputs.cache-hit }}
         run: |
           cargo clippy --manifest-path packaging/windows/Cargo.toml --all-targets --locked -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --manifest-path packaging/windows/Cargo.toml --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $wixTools = Join-Path $env:RUNNER_TEMP 'wlanlogin-wix'
-          dotnet tool install wix --version 6.0.2 --tool-path $wixTools
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $wix = Join-Path $wixTools 'wix.exe'
-          & $wix extension add WixToolset.UI.wixext/6.0.2
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:WIX_CACHE_HIT -ne 'true' -or -not (Test-Path $wix)) {
+            dotnet tool install wix --version 6.0.2 --tool-path $wixTools
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $wix extension add WixToolset.UI.wixext/6.0.2
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           cargo xtask bundle windows --profile dev --target $env:BUILD_TARGET --target-dir target --wix $wix
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  archlinux:
+    name: Arch Linux package
+    needs: quality
+    runs-on: ubuntu-22.04
+    container: docker.io/library/archlinux:base-devel
+    timeout-minutes: 30
+    steps:
+      # makepkg also checks runtime dependencies; git must precede checkout to keep history.
+      - name: Install packaging dependencies
+        run: pacman -Syu --noconfirm --needed git rust pkgconf dbus networkmanager
+
+      # The PKGBUILD derives pkgver from the commit count, so fetch the full history.
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Cache Cargo registry for Arch build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/cargo-home/registry/index
+            ${{ runner.temp }}/cargo-home/registry/cache
+            ${{ runner.temp }}/cargo-home/git/db
+          key: archlinux-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            archlinux-cargo-
+
+      # check() in the PKGBUILD runs the packaged CLI.
+      - name: Build the package as an unprivileged user
+        run: |
+          useradd --create-home builder
+          mkdir -p "$RUNNER_TEMP/cargo-home"
+          chown -R builder: "$GITHUB_WORKSPACE" "$RUNNER_TEMP/cargo-home"
+          cd packaging/archlinux
+          runuser -u builder -- env CARGO_HOME="$RUNNER_TEMP/cargo-home" makepkg --noconfirm

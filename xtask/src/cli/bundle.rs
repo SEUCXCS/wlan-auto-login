@@ -15,6 +15,28 @@ pub enum BundlePlatform {
     Macos(MacosArgs),
     /// Build a Windows Installer setup executable.
     Windows(WindowsArgs),
+    /// Build a Debian package (.deb) on a Debian or Ubuntu host.
+    Deb(DebArgs),
+    /// Build an RPM package (.rpm) for Fedora with rpmbuild.
+    Rpm(RpmArgs),
+}
+
+#[derive(Args)]
+pub struct DebArgs {
+    #[command(flatten)]
+    pub build: BuildArgs,
+    /// Debian revision; increase it to republish the same upstream version.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+    pub revision: u32,
+}
+
+#[derive(Args)]
+pub struct RpmArgs {
+    #[command(flatten)]
+    pub build: BuildArgs,
+    /// RPM release; increase it to republish the same upstream version.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+    pub release: u32,
 }
 
 #[derive(Args)]

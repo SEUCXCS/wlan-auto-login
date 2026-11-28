@@ -10,3 +10,9 @@
 .DS_Store
 
 /.test-tmp/
+
+# Arch Linux makepkg output
+/packaging/archlinux/src/
+/packaging/archlinux/pkg/
+/packaging/archlinux/wlanlogin/
+/packaging/archlinux/*.pkg.tar.*

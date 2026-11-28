@@ -7,11 +7,11 @@
 东南大学成贤学院 `Student_CX` 校园 Wi-Fi 自动登录工具
 
 [![Release](https://img.shields.io/github/v/release/SEUCXCS/wlan-auto-login?style=flat-square)](https://github.com/SEUCXCS/wlan-auto-login/releases)
-[![Tests](https://img.shields.io/github/actions/workflow/status/SEUCXCS/wlan-auto-login/test.yml?branch=develop&label=tests&style=flat-square)](https://github.com/SEUCXCS/wlan-auto-login/actions/workflows/test.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/SEUCXCS/wlan-auto-login/test.yml?branch=main&label=tests&style=flat-square)](https://github.com/SEUCXCS/wlan-auto-login/actions/workflows/test.yml)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)](#安装指南)
 [![License](https://img.shields.io/github/license/SEUCXCS/wlan-auto-login?style=flat-square)](LICENSE)
 
-[下载 Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) · [快速开始](#快速开始) · [使用指南](#使用指南) · [协议文档](#相关文档) · [提交问题](https://github.com/SEUCXCS/wlan-auto-login/issues)
+[下载与版本更新](https://github.com/SEUCXCS/wlan-auto-login/releases) · [快速开始](#快速开始) · [使用指南](#使用指南) · [协议文档](#相关文档) · [提交问题](https://github.com/SEUCXCS/wlan-auto-login/issues)
 
 </div>
 
@@ -29,7 +29,7 @@
 | 平台 | 推荐安装方式 |
 | --- | --- |
 | **Windows** | 从 [Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) 下载 `wlanlogin-windows-setup-<arch>.exe`，运行安装向导并填写账号即可。 |
-| **Linux** | 下载对应架构二进制放到 `~/.local/bin/wlanlogin`，执行 `wlanlogin --user service install`。 |
+| **Linux** | 从 Releases 安装 `.deb` / `.rpm` / Arch 软件包，或将二进制放入 `~/.local/bin/wlanlogin`，再执行 `wlanlogin --user service install`。 |
 | **macOS** | 下载 `wlanlogin.app` 放入 `~/Applications`，完成[本地签名](#macos)并软链至 PATH 后执行 `wlanlogin --user service install`。 |
 
 ## 安装指南
@@ -105,6 +105,28 @@
 sudo "$HOME/.local/bin/wlanlogin" --system service install
 sudo "$HOME/.local/bin/wlanlogin" --system service status
 ```
+
+<details>
+<summary>使用 Debian / Ubuntu、Fedora 或 Arch Linux 软件包安装</summary>
+
+从 [Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) 下载软件包（或按[软件包打包](#build-linux-packages)自行生成）后安装：
+
+```sh
+# Debian 12+ / Ubuntu 24.04+
+sudo apt install ./wlanlogin_<version>-1_amd64.deb
+
+# Fedora 43+
+sudo dnf install ./wlanlogin-<version>-<release>.x86_64.rpm
+
+# Arch Linux
+sudo pacman -U ./wlanlogin-<pkgver>-<pkgrel>-x86_64.pkg.tar.zst
+```
+
+软件包安装 `/usr/bin/wlanlogin` 与中英文 man 手册（`man wlanlogin`，中文环境如 `LANG=zh_CN.UTF-8` 下显示中文版），并自动声明 NetworkManager、systemd 与 D-Bus 依赖。后台服务仍通过上文第 3 步的 `service install` 注册（系统模式使用 `sudo wlanlogin --system service install`）。
+
+升级软件包后，在原作用域重新执行 `service install` 更新后台副本；移除软件包前，先执行同作用域的 `service uninstall`（需清除配置与凭据时加 `--purge`）。
+
+</details>
 
 <details>
 <summary>桌面钱包与旧版系统说明</summary>
@@ -381,6 +403,9 @@ sudo wlanlogin --system permission get macos.keychain
 # Debian / Ubuntu
 sudo apt update && sudo apt install git build-essential pkg-config libdbus-1-dev
 
+# Fedora
+sudo dnf install git gcc pkgconf-pkg-config dbus-devel
+
 # Arch Linux
 sudo pacman -S --needed git base-devel rust pkgconf dbus
 ```
@@ -393,6 +418,54 @@ cd wlan-auto-login
 cargo build --release --locked -p wlanlogin-cli --bin wlanlogin
 install -Dm 0755 target/release/wlanlogin "$HOME/.local/bin/wlanlogin"
 ```
+
+<a id="build-linux-packages"></a>
+
+<details>
+<summary>构建 Debian / Fedora / Arch 软件包</summary>
+
+`.deb` 与 `.rpm` 的共享库依赖均按构建主机生成：`.deb` 最低支持 Debian 12 / Ubuntu 24.04（glibc 2.36），`.rpm` 最低支持 Fedora 43（glibc 2.42），二进制要求的 glibc 高于对应下限时打包会直接报错。两者的变更记录日期默认取自当前 Git 提交；使用不含 `.git` 的源码压缩包构建时，需通过 `SOURCE_DATE_EPOCH` 指定 Unix 秒级时间戳。
+
+**Debian / Ubuntu（`.deb`）**
+
+在 Debian 12（或更旧）主机安装 `dpkg-dev` 后执行：
+
+```sh
+cargo xtask bundle deb
+```
+
+也可在 Debian 12 容器中构建：
+
+```sh
+podman run --rm -v "$PWD":/work -w /work docker.io/library/rust:1-bookworm sh -c '
+  apt-get update && apt-get install -y --no-install-recommends libdbus-1-dev pkg-config dpkg-dev &&
+  cargo xtask bundle deb --target-dir target/debian12'
+```
+
+产物位于 `<target-dir>/release/bundle/wlanlogin_<version>-<revision>_<arch>.deb`（同版本重打可通过 `--revision` 递增修订号）。
+
+**Fedora（`.rpm`）**
+
+在 Fedora 安装 `rpm-build`（或在 Debian/Ubuntu 安装 `rpm`）后执行：
+
+```sh
+cargo xtask bundle rpm
+```
+
+产物位于 `<target-dir>/release/bundle/wlanlogin-<version>-<release>.<arch>.rpm`（同版本重打可通过 `--release` 递增）。
+
+**Arch Linux（`.pkg.tar.zst`）**
+
+`packaging/archlinux/PKGBUILD` 打包当前检出的已提交 HEAD：
+
+```sh
+cd packaging/archlinux
+makepkg -s
+```
+
+产物为 `packaging/archlinux/wlanlogin-<pkgver>-<pkgrel>-<arch>.pkg.tar.zst`，`pkgver` 形如 `<version>.r<提交数>.g<短哈希>`。
+
+</details>
 
 <a id="build-macos"></a>
 
@@ -451,6 +524,7 @@ cargo xtask bundle windows --target x86_64-pc-windows-msvc
 | `crates/wlan-app` | `wlanlogin-cli`，CLI、TUI、后台服务与平台集成 |
 | `xtask` | 应用打包与架构边界检查工具 |
 | `packaging/windows` | Windows 安装向导与 MSI 自定义动作 |
+| `packaging/{macos,debian,fedora,archlinux,linux}` | macOS 应用资源、Linux 软件包定义与双语 man 手册 |
 | `docs` | 校园网门户协议说明 |
 
 本地验证命令：

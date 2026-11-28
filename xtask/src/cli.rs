@@ -148,6 +148,8 @@ mod tests {
             vec!["xtask", "bundle", "--help"],
             vec!["xtask", "bundle", "macos", "--help"],
             vec!["xtask", "bundle", "windows", "--help"],
+            vec!["xtask", "bundle", "deb", "--help"],
+            vec!["xtask", "bundle", "rpm", "--help"],
         ] {
             let error = match Cli::try_parse_from(arguments) {
                 Err(error) => error,
@@ -182,6 +184,37 @@ mod tests {
         assert!(
             Cli::try_parse_from(["xtask", "bundle", "windows", "--codesign-identity=-"]).is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn linux_package_options_are_validated_and_scoped_to_each_platform() -> anyhow::Result<()> {
+        let deb = Cli::try_parse_from(["xtask", "bundle", "deb", "--revision", "3"])?;
+        let Command::Bundle(deb) = deb.command else {
+            panic!("expected bundle")
+        };
+        let BundlePlatform::Deb(deb) = deb.platform else {
+            panic!("expected Debian")
+        };
+        assert_eq!(deb.revision, 3);
+
+        let rpm = Cli::try_parse_from(["xtask", "bundle", "rpm", "--release", "2"])?;
+        let Command::Bundle(rpm) = rpm.command else {
+            panic!("expected bundle")
+        };
+        let BundlePlatform::Rpm(rpm) = rpm.platform else {
+            panic!("expected RPM")
+        };
+        assert_eq!(rpm.release, 2);
+
+        for invalid in [
+            vec!["xtask", "bundle", "deb", "--revision", "0"],
+            vec!["xtask", "bundle", "deb", "--release", "2"],
+            vec!["xtask", "bundle", "rpm", "--release", "0"],
+            vec!["xtask", "bundle", "rpm", "--revision", "2"],
+        ] {
+            assert!(Cli::try_parse_from(invalid).is_err());
+        }
         Ok(())
     }
 }

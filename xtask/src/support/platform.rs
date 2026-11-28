@@ -15,3 +15,15 @@ mod other;
 pub use macos::require_macos;
 #[cfg(not(target_os = "macos"))]
 pub use other::require_macos;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::{require_linux, set_mode};
+#[cfg(not(target_os = "linux"))]
+pub fn require_linux() -> anyhow::Result<()> {
+    anyhow::bail!("Linux packaging requires a Linux host")
+}
+#[cfg(not(target_os = "linux"))]
+pub fn set_mode(_path: &std::path::Path, _mode: u32) -> anyhow::Result<()> {
+    require_linux()
+}

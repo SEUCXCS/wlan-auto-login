@@ -87,7 +87,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes build-essential pkg-config libdbus-1-dev
+          sudo apt-get install --yes build-essential pkg-config libdbus-1-dev rpm
 
       - name: Build Linux and Windows binaries
         if: runner.os != 'macOS'
@@ -134,6 +134,13 @@ jobs:
           Copy-Item "target/$env:BUILD_TARGET/release/wlanlogin.exe", README.md, LICENSE stage/
           Compress-Archive -Path stage/* -DestinationPath "dist/$env:ASSET_NAME"
 
+      - name: Build the Debian and RPM packages
+        if: runner.os == 'Linux'
+        run: |
+          cargo xtask bundle deb --profile release --target "$BUILD_TARGET" --target-dir target
+          cargo xtask bundle rpm --profile release --target "$BUILD_TARGET" --target-dir target
+          cp "target/$BUILD_TARGET/release/bundle/"wlanlogin_*.deb "target/$BUILD_TARGET/release/bundle/"wlanlogin-*.rpm dist/
+
       - name: Build the Windows setup executable
         if: runner.os == 'Windows'
         shell: pwsh
@@ -157,9 +164,44 @@ jobs:
           compression-level: 0
           retention-days: 7
 
+  archlinux:
+    name: Build Arch Linux package
+    needs: prepare
+    runs-on: ubuntu-22.04
+    container: docker.io/library/archlinux:base-devel
+    timeout-minutes: 45
+    steps:
+      # makepkg also checks runtime dependencies; git must precede checkout to keep history.
+      - name: Install packaging dependencies
+        run: pacman -Syu --noconfirm --needed git rust pkgconf dbus networkmanager
+
+      # The PKGBUILD derives pkgver from the commit count, so fetch the full history.
+      - name: Check out the resolved commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build the package as an unprivileged user
+        run: |
+          useradd --create-home builder
+          chown -R builder: "$GITHUB_WORKSPACE"
+          cd packaging/archlinux
+          runuser -u builder -- makepkg --noconfirm
+
+      - name: Upload the packaged asset
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-archlinux
+          path: packaging/archlinux/*.pkg.tar.zst
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
   upload:
     name: Upload release assets
-    needs: build
+    needs: [build, archlinux]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -175,7 +217,7 @@ jobs:
       - name: Generate SHA-256 checksums
         working-directory: dist
         run: |
-          sha256sum -- *.tar.gz *.zip *.exe > SHA256SUMS
+          sha256sum -- *.tar.gz *.zip *.exe *.deb *.rpm *.pkg.tar.zst > SHA256SUMS
           sha256sum --check SHA256SUMS
 
       - name: Upload to the existing release
@@ -184,4 +226,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release upload --clobber -- "$RELEASE_TAG" ./*.tar.gz ./*.zip ./*.exe SHA256SUMS
+          gh release upload --clobber -- "$RELEASE_TAG" ./*.tar.gz ./*.zip ./*.exe ./*.deb ./*.rpm ./*.pkg.tar.zst SHA256SUMS

@@ -1,0 +1,60 @@
+# Maintainer: Goldbro233 <bowensun_06@outlook.com>
+#
+# Packages the committed HEAD of the checkout makepkg runs in; uncommitted
+# changes are not included. Run from this directory: makepkg -s
+
+_repo=$(git rev-parse --show-toplevel)
+_commit=$(git -C "$_repo" rev-parse HEAD)
+# Read from the packaged commit, not the working tree. Computing pkgver here
+# instead of in pkgver() keeps makepkg from rewriting this tracked file.
+_version=$(git -C "$_repo" show "$_commit:Cargo.toml" |
+  sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\([^"]*\)"/\1/p')
+
+pkgname=wlanlogin
+# Pacman versions cannot contain '-'; a joined pre-release still sorts first.
+pkgver=${_version//-/}.r$(git -C "$_repo" rev-list --count "$_commit").g${_commit::7}
+pkgrel=1
+pkgdesc='Automatic login for the Student_CX campus Wi-Fi portal'
+arch=('x86_64' 'aarch64')
+url='https://github.com/SEUCXCS/wlan-auto-login'
+license=('MIT')
+depends=('dbus' 'glibc' 'libgcc' 'networkmanager' 'systemd')
+makedepends=('cargo' 'git' 'pkgconf')
+optdepends=('gnome-keyring: Secret Service provider for user-scope credentials')
+# The release profile already enables Rust LTO and strips symbols.
+options=('!lto' '!debug')
+source=("$pkgname::git+file://$_repo#commit=$_commit")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+  cd "$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p wlanlogin-cli --bin wlanlogin
+}
+
+check() {
+  cd "$pkgname"
+  local binary=target/release/wlanlogin
+  [[ "$("$binary" --version)" == "wlanlogin $_version" ]]
+  "$binary" --help >/dev/null
+  local command
+  for command in login logout service permission config daemon; do
+    "$binary" "$command" --help >/dev/null
+  done
+}
+
+package() {
+  cd "$pkgname"
+  install -Dm755 target/release/wlanlogin -t "$pkgdir/usr/bin"
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
+  install -Dm644 README.md -t "$pkgdir/usr/share/doc/$pkgname"
+  install -Dm644 packaging/linux/man/wlanlogin.1 -t "$pkgdir/usr/share/man/man1"
+  install -Dm644 packaging/linux/man/zh_CN/wlanlogin.1 -t "$pkgdir/usr/share/man/zh_CN/man1"
+}

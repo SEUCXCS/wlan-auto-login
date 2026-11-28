@@ -1,0 +1,241 @@
+.TH WLANLOGIN 1 2026-11-26 wlanlogin "用户命令"
+.\" Allow breaks between CJK characters; justification cannot stretch CJK text,
+.\" so adjust left (AD for groff 1.23+, .ad for 1.22).
+.\" A source line break renders as a space, so keep joined Chinese text on one line.
+.ds AD l
+.ad l
+.mso zh.tmac
+.SH 名称
+wlanlogin \- Student_CX 校园网自动登录工具
+.SH 概要
+.B wlanlogin
+.RB [ \-\-user | \-\-system ]
+.I 命令
+.RI [ 选项 ]
+.br
+.B wlanlogin
+.BR \-\-help " | " \-\-version
+.SH 描述
+.B wlanlogin
+登录 Student_CX 校园网门户并保持在线。仅在接入 Student_CX 无线网络时提交认证；其他网络下可预先保存凭据。
+.PP
+.B service install
+注册 systemd 后台服务：服务跟随 NetworkManager 报告的 Wi\-Fi 变化自动登录，并定期检查会话。各命令均支持
+.BR \-\-help 。
+.SH 作用域
+安装、配置与凭据按两种作用域分别保存。作用域参数可位于命令之前或之后。切换作用域前，请先卸载原作用域的服务。
+.TP
+.B \-\-user
+用户模式：当前用户登录后启动服务，凭据保存在 Secret Service（GNOME Keyring、KWallet 等）。普通用户默认使用此模式。
+.TP
+.B \-\-system
+系统模式：随系统开机启动服务，凭据由
+.BR systemd\-creds (1)
+加密保存，需要 root 权限。以 root 身份运行时默认使用此模式，例如通过
+.BR sudo (8)
+运行。
+.SH 命令
+.TP
+.BR login " [\fI凭据选项\fR]"
+使用已保存的凭据登录；缺少凭据时打开终端表单。未接入 Student_CX 时仅保存凭据。手动登录会恢复被
+.B logout
+暂停的自动登录。
+.TP
+.BR logout " [" \-\-forget ]
+注销当前会话，并暂停当前连接的自动登录（重启服务后仍保持暂停）。在同一作用域手动
+.B login
+或重新接入无线网络后恢复。
+.B \-\-forget
+同时删除该作用域已保存的凭据；离线或门户请求失败时仍会删除。
+.TP
+.BR "service install" " [\fI凭据选项\fR]"
+保存凭据（首次安装时必须保存），将程序副本安装为后台专用程序，然后注册并启动 systemd 单元。升级
+.B wlanlogin
+后再次执行即可更新后台副本。
+.TP
+.BR "service uninstall" " [" \-\-purge ]
+停止并卸载服务，保留已保存的凭据。
+.B \-\-purge
+同时清除该作用域的日志、配置、运行文件与凭据。
+.TP
+.BR "service start" "、" "service stop" "、" "service restart"
+启动、停止或重启已安装的服务。
+.B stop
+保留安装与开机自动启动设置。
+.TP
+.B service status
+查看服务的安装、注册与运行状态以及已安装的版本。
+.TP
+.BR "service logs" " [" \-n " \fI行数\fR] [" \-f ]
+查看服务日志。
+.B \-n
+指定显示的最近行数（默认 100；0 表示不显示历史日志）；
+.B \-f
+持续显示新日志，按 Ctrl+C 退出。
+.TP
+.BR "service session\-ready" "、" "service session\-end"
+仅限用户模式。桌面环境未使用标准图形会话目标时，
+.B session\-ready
+在图形会话就绪后同步 D\-Bus 激活环境，
+.B session\-end
+在注销前撤销该通知。
+.TP
+.BR "config get " \fI名称\fR "、" "config set " "\fI名称 值\fR"
+读取或保存该作用域的配置值。
+.TP
+.BR "config remove " \fI名称\fR "、" "config list"
+恢复默认值，或列出全部配置值。目前仅有
+.B log.level
+一项：
+.B info
+（默认）仅记录失败的门户请求；
+.B debug
+记录全部门户请求与响应，其中凭据、Cookie 与设备标识均已脱敏。修改后需重启服务生效。
+.TP
+.BR "permission list" "、" "permission check " "[\fIID\fR]、" "permission get " \fIID\fR
+列出、查询或申请平台权限，均支持
+.BR \-\-json 。
+Linux 未定义任何权限，列表为空。
+.TP
+.B daemon
+在当前进程前台运行自动登录循环。
+.SH 凭据选项
+适用于
+.B login
+与
+.BR "service install" 。
+.TP
+.BR \-u ", " \-\-username " \fI账号\fR"
+校园网账号。
+.TP
+.BR \-p ", " \-\-password " \fI密码\fR"
+密码。密码会出现在进程列表与 shell 历史中，建议改用
+.BR \-\-password\-stdin 。
+.TP
+.B \-\-password\-stdin
+从标准输入读取一行作为密码，不能与
+.B \-p
+同时使用。
+.TP
+.BR \-\-line " \fBfree1\fR|\fBfree2\fR|\fBcampus\fR"
+线路：免费 1、免费 2 或校园内网。
+.TP
+.B \-\-remember\-me
+将账号和密码保存至该作用域的凭据存储（未接入 Student_CX 时仅保存凭据）。
+.TP
+.B \-\-interactive
+即使已保存凭据，也打开终端表单以修改账号、密码或线路。
+.TP
+.B \-\-non\-interactive
+缺少必要信息时直接报错，不打开终端表单。
+.TP
+.BR \-\-credential\-store " \fBnative\fR|\fBprotected\-file\fR"
+系统模式的凭据存储。
+.B native
+使用 systemd\-creds；
+.B protected\-file
+将账号和密码以明文保存在仅 root 可读的文件中，供缺少 systemd\-creds 的旧系统使用。
+.SH 环境变量
+.TP
+.B WLANLOGIN_USERNAME
+.B \-\-username
+的默认值。
+.TP
+.B WLANLOGIN_PASSWORD
+.B \-\-password
+的默认值。
+.TP
+.B WLANLOGIN_LINE
+.B \-\-line
+的默认值。
+.TP
+.B RUST_LOG
+覆盖前台运行的日志过滤规则，例如
+.BR RUST_LOG=wlanlogin::portal::page_config=debug 。
+.SH 文件
+.TP
+.I ~/.config/SEUCXCS/wlanlogin/
+用户模式的配置（\fIconfig.json\fR）、线路偏好（\fIpreferences.json\fR）、服务日志（\fIdaemon.log\fR）与运行文件。
+.TP
+.I ~/.local/share/SEUCXCS/wlanlogin/bin/wlanlogin\-daemon
+用户模式的后台程序。
+.TP
+.I /var/lib/SEUCXCS/wlanlogin/
+系统模式的配置、线路偏好与服务日志。
+.TP
+.I /run/SEUCXCS/wlanlogin/
+系统模式的运行文件。
+.TP
+.I /etc/SEUCXCS/wlanlogin/
+系统模式的凭据。
+.TP
+.I /usr/local/libexec/SEUCXCS/wlanlogin/wlanlogin\-daemon
+系统模式的后台程序。
+.TP
+.I dev.cxcs.tools.wlanlogin.service
+两种作用域使用的 systemd 单元名称。
+.SH 退出状态
+.TP
+.B 0
+成功。
+.TP
+.B 1
+命令失败，原因输出至标准错误。
+.TP
+.B 2
+命令行参数无效。
+.SH 示例
+安装并检查用户模式服务：
+.PP
+.RS
+.EX
+wlanlogin \-\-user service install
+wlanlogin \-\-user service status
+.EE
+.RE
+.PP
+安装系统模式服务：
+.PP
+.RS
+.EX
+sudo wlanlogin \-\-system service install
+.EE
+.RE
+.PP
+在脚本中登录且不暴露密码：
+.PP
+.RS
+.EX
+printf \(aq%s\en\(aq "$PASSWORD" | wlanlogin login \-u 2026000000 \e
+    \-\-password\-stdin \-\-line free1 \-\-non\-interactive
+.EE
+.RE
+.PP
+切换账号或线路：
+.PP
+.RS
+.EX
+wlanlogin logout
+wlanlogin login \-\-interactive \-\-remember\-me
+.EE
+.RE
+.PP
+收集门户诊断日志：
+.PP
+.RS
+.EX
+wlanlogin \-\-user config set log.level debug
+wlanlogin \-\-user service restart
+wlanlogin \-\-user service logs \-f
+.EE
+.RE
+.SH 注意
+软件包只安装命令本身。升级软件包后，请在已安装服务的每个作用域重新执行
+.BR "service install" ；移除软件包前，请先在该作用域执行
+.BR "service uninstall" 。
+.SH 参见
+.BR systemctl (1),
+.BR systemd\-creds (1),
+.BR NetworkManager (8)
+.PP
+https://github.com/SEUCXCS/wlan\-auto\-login

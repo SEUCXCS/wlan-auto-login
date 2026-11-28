@@ -1,0 +1,17 @@
+Package: @APP_NAME@
+Version: @VERSION@
+Architecture: @ARCHITECTURE@
+Maintainer: Goldbro233 <bowensun_06@outlook.com>
+Installed-Size: @INSTALLED_SIZE@
+Depends: @DEPENDS@, network-manager, systemd
+Suggests: gnome-keyring
+Section: net
+Priority: optional
+Homepage: https://github.com/SEUCXCS/wlan-auto-login
+Description: Automatic login for the Student_CX campus Wi-Fi portal
+ wlanlogin signs in to the Student_CX captive portal and keeps the session
+ online from a systemd service. User-scope credentials are kept in the
+ Secret Service; system-scope credentials use systemd-creds.
+ .
+ The package installs only the command. Run "wlanlogin service install"
+ to save credentials and register the background service.

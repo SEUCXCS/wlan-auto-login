@@ -10,14 +10,15 @@
 | --- | --- | --- |
 | `crates/wlan-api` | `wlanlogin-lib` | 校园网门户协议、JSONP 解析、认证状态与 HTTP 诊断 |
 | `crates/wlan-app` | `wlanlogin-cli` | CLI / TUI、业务控制、后台守护与操作系统集成 |
-| `xtask` | `xtask` | macOS / Windows 打包与平台源码边界检查 |
+| `xtask` | `xtask` | macOS / Windows / Debian / RPM 打包与平台源码边界检查 |
 | `packaging/windows` | `wlanlogin-installer` | 独立 workspace 的 Windows 安装向导与 MSI 自定义动作 |
+| `packaging/{macos,debian,fedora,archlinux,linux}` | — | macOS 应用资源、Debian/Fedora/Arch 打包定义与双语 man 手册 |
 | `docs` | — | 门户协议说明与研究记录 |
 
 原生构建依赖：
 
 - **通用**：Rust、Cargo、`rustfmt`、`clippy`、Git。
-- **Linux**：C 工具链、`pkg-config`、D-Bus 开发库、`dbus-daemon` 及标准 POSIX 工具（Debian/Ubuntu：`build-essential pkg-config libdbus-1-dev dbus-daemon`）。
+- **Linux**：C 工具链、`pkg-config`、D-Bus 开发库、`dbus-daemon` 及标准 POSIX 工具（Debian/Ubuntu：`build-essential pkg-config libdbus-1-dev dbus-daemon`；Fedora：`gcc pkgconf-pkg-config dbus-devel dbus-daemon`）。
 - **macOS**：Xcode Command Line Tools。
 - **Windows**：与目标架构对应的 MSVC 或 GNU 构建工具；打包安装向导另需 .NET 8 SDK 与 WiX 6.0.2（含 `WixToolset.UI.wixext/6.0.2`）。
 
@@ -85,9 +86,21 @@
 | `commands/bundle.rs` | 打包平台分发 |
 | `commands/bundle/macos.rs` 及子模块 | macOS 应用构建、组装（`assemble.rs`）、构建号原子分配（`build_number.rs`）、签名验证（`sign.rs`）与原子发布回滚（`publish.rs`） |
 | `commands/bundle/windows.rs` | Windows CLI / 安装动作 / 初始化 DLL 构建、MSI 与安装向导打包及 cabinet 逐字节校验 |
+| `commands/bundle/deb.rs` | Linux CLI 构建、`dpkg-shlibdeps` 计算共享库依赖并校验 Debian 12 glibc 下限、生成 Debian 变更记录、按 `packaging/debian/` 模板生成元数据并用 `dpkg-deb` 打包 |
+| `commands/bundle/rpm.rs` | Linux CLI 构建、按 `packaging/fedora/wlanlogin.spec` 模板用 `rpmbuild` 打包，并按生成的 `GLIBC_*` 依赖校验 Fedora 43 glibc 下限 |
+| `commands/bundle/linux.rs` | Debian 与 RPM 共用的工具检查、打包日期格式化与文件暂存 |
 | `support/` | Cargo JSON 产物构建（`cargo.rs`）、外部进程（`process.rs`）、工作区资源（`workspace.rs`）与平台工具检查（`platform/`）；不依赖 `cli` 或 `commands`，复用 `infra/identity.rs` |
 
 新增顶层命令需在 `cli.rs` 与 `commands.rs` 注册并实现 `commands/<command>.rs`；新增打包平台需在 `cli/bundle.rs`、`commands/bundle.rs` 注册并实现 `commands/bundle/<platform>.rs`，打包资源存放于 `packaging/<platform>/`。
+
+**Linux 软件包（Debian / Fedora / Arch）**
+
+- **统一安装内容**：三份软件包仅安装 `/usr/bin/wlanlogin`、许可证、README 与 `packaging/linux/man/` 下的中英文 man 手册（Debian / RPM 另附各自格式的变更记录）。systemd unit 与后台副本始终由 `service install/uninstall` 管理，软件包不得放置 unit、启用服务或写入运行数据目录。
+- **同步约束**：修改运行依赖或安装文件时同步更新 Debian、RPM 与 Arch 三份定义；修改命令、选项、作用域、配置项、环境变量或路径时同步更新两份 man 手册。
+- **Debian（`bundle deb`）**：最低支持 Debian 12 / Ubuntu 24.04（`libc6` 要求高于 2.36 时失败，须在 Debian 12 或更旧系统构建）。版本格式 `<workspace>-<revision>`（预发布 `-` 转 `~`，`--revision` 默认 1）；`Depends` 合并 `dpkg-shlibdeps` 与 `packaging/debian/control`，维护者取自模板并生成单条目 `changelog.Debian.gz`。
+- **Fedora（`bundle rpm`）**：最低支持 Fedora 43（最高 `GLIBC_*` 符号版本高于 2.42 或未生成该依赖时失败）。`packaging/fedora/wlanlogin.spec` 由 xtask 填充 `@NAME@` 占位符，`%install` 直接安装 `%{_sourcedir}` 中已编译的 CLI 与文档（兼容 Fedora `rpm-build` 与 Debian/Ubuntu `rpm`）。版本格式 `<workspace>-<release>%{?dist}`（预发布 `-` 转 `~`，`--release` 默认 1）。
+- **变更日期与发布说明**：Debian / RPM 变更记录日期按 UTC 格式化，优先读取 `SOURCE_DATE_EPOCH`（非负 Unix 秒级时间戳），否则读取当前 Git 提交时间（无 `.git` 的源码压缩包须显式设置 `SOURCE_DATE_EPOCH`）。面向用户的版本说明通过 GitHub Release 的 **Generate release notes** 生成。
+- **Arch Linux（`packaging/archlinux/PKGBUILD`）**：通过 `git+file` 拉取检出的已提交 HEAD，在解析阶段计算 `pkgver`（不使用 `pkgver()`，避免 `makepkg` 改写受控文件）；`check()` 仅执行 `--version` 与 `--help`。
 
 `packaging/windows` 使用独立 Cargo workspace 与 `Cargo.lock`：
 - `installer.wxs` 定义 WixUI 向导页、文件组件、PATH、升级与动作顺序；`initialize.rs` 准备唯一事务 ID 与一次性 DPAPI 凭据文件。
@@ -163,7 +176,8 @@
 
 ### 4.1 CI 与组织规则
 
-- `.github/workflows/test.yml` 在推送或 PR 至 `main` / `develop` 以及手动触发时运行。原生测试矩阵覆盖 **Linux x86_64**、**Windows x86_64 MSVC** 与 **macOS Apple Silicon**（均使用 stable Rust 与 `Cargo.lock`），格式与平台边界检查单独运行。
+- `.github/workflows/test.yml` 在推送或 PR 至 `main` 以及手动触发时运行（纯 `docs/**`、`CONTRIBUTING.md`、`AGENT.md` 改动通过 `paths-ignore` 跳过）。先执行独立的格式与平台边界检查门禁（`quality`），通过后再并行运行 **Linux x86_64**、**Windows x86_64 MSVC**、**macOS Apple Silicon** 原生测试矩阵（均使用 stable Rust 与 `Cargo.lock`）及 `archlinux` 容器构建：Linux 以 dev profile 验证 `bundle deb` 与 `bundle rpm`，macOS 以 dev profile 验证 ad-hoc `bundle macos`，Windows 验证安装器测试与 dev profile `bundle windows`，`archlinux` 在 `archlinux:base-devel` 容器中以非 root 用户运行 `makepkg` 构建并检查 PKGBUILD。
+- `.github/workflows/release.yml` 在发布时于 Ubuntu 22.04（glibc 2.35，低于 Debian 12 与 Fedora 43 下限）由同一 release 二进制构建 Linux 压缩包、`.deb` 与 `.rpm`，在同样的 Arch Linux 容器中构建 `.pkg.tar.zst`，与其他平台产物一同上传并生成 `SHA256SUMS`。
 - `crates/wlan-app` 的单元测试统一放在所属源码文件末尾的 `#[cfg(test)] mod tests`，不拆分为 `tests.rs`、独立测试目录或 `#[path]` 引入。共用假实现可放在基础模块测试中（如 `infra::command::tests`）。`crates/wlan-api` 保持现有集成测试与 fixtures 结构。
 - 跨平台行为只维护一份表驱动测试套件，平台目录仅保留原生特例：
 
