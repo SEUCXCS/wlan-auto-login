@@ -7,7 +7,7 @@
 东南大学成贤学院 `Student_CX` 校园 Wi-Fi 自动登录工具
 
 [![Release](https://img.shields.io/github/v/release/SEUCXCS/wlan-auto-login?style=flat-square)](https://github.com/SEUCXCS/wlan-auto-login/releases)
-[![Tests](https://img.shields.io/github/actions/workflow/status/SEUCXCS/wlan-auto-login/test.yml?branch=develop&label=tests&style=flat-square)](https://github.com/SEUCXCS/wlan-auto-login/actions/workflows/test.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/SEUCXCS/wlan-auto-login/test.yml?branch=main&label=tests&style=flat-square)](https://github.com/SEUCXCS/wlan-auto-login/actions/workflows/test.yml)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)](#安装指南)
 [![License](https://img.shields.io/github/license/SEUCXCS/wlan-auto-login?style=flat-square)](LICENSE)
 

@@ -52,7 +52,7 @@ cargo xtask bundle rpm [--release <n>]     # rpmbuild host: Fedora rpm-build or 
 ```
 
 - Safe CLI smoke checks: use `--help`, `<subcommand> --help`, and `--version` only. Never invoke operational commands without `--help` to probe behavior.
-- CI (`.github/workflows/test.yml`) runs native checks on Linux x86_64, Windows x86_64 MSVC, and macOS Apple Silicon (stable Rust + `Cargo.lock`), plus a dedicated format & boundary job. The Linux job also runs `bundle deb` and `bundle rpm` (dev profile, Ubuntu `rpm` package); the `archlinux` job runs `makepkg` as a non-root user in an `archlinux:base-devel` container.
+- CI (`.github/workflows/test.yml`) runs on pushes and PRs targeting `main` (ignoring `docs/**`, `CONTRIBUTING.md`, `AGENT.md`). A `quality` job gates the native matrix (Linux x86_64, Windows x86_64 MSVC, macOS Apple Silicon; stable Rust + `Cargo.lock`) and the `archlinux` container job: Linux checks dev `bundle deb` and `bundle rpm`, macOS checks dev ad-hoc `bundle macos`, Windows checks installer lint/tests and dev `bundle windows`, and `archlinux` runs `makepkg` as a non-root user.
 - Releases (`.github/workflows/release.yml`) build the Linux archive, `.deb`, and `.rpm` from one release binary on Ubuntu 22.04 (glibc 2.35, below the Debian 12 and Fedora 43 floors) and the Arch package in the same container setup, then upload them with `SHA256SUMS`.
 
 ## 2. Architecture & Source Boundaries
