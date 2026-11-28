@@ -1,5 +1,4 @@
 //! Operation entrypoints and platform-specific workflow steps.
-pub(crate) mod control;
 pub(crate) mod credentials;
 pub(crate) mod install;
 pub(crate) mod logs;

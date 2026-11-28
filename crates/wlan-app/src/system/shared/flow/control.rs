@@ -1,10 +1,32 @@
+use super::hooks::{Hooks, step};
 use crate::infra::command::{Runner, SystemRunner};
 use crate::infra::error::Message;
 use crate::infra::error::{Result, bail};
 pub(crate) use crate::system::define::services::Action;
-use crate::system::define::services::ServiceManager;
+use crate::system::define::services::{ServiceManager, ServiceState};
 use crate::system::shared::services::artifacts::{Artifacts, Plan, plan};
 use crate::{infra::control, infra::paths::Paths};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Step {
+    Lock,
+    Inspect,
+    Query,
+    StopRegistered,
+    Apply,
+}
+
+pub(crate) struct ControlContext<'a> {
+    pub paths: &'a Paths,
+    pub plan: &'a Plan,
+}
+
+pub(crate) trait ControlHooks: for<'a> Hooks<Step, ControlContext<'a>> {
+    fn separate_stop(&self, _context: &ControlContext<'_>) -> bool {
+        false
+    }
+}
+impl ControlHooks for super::hooks::NoHooks {}
 
 pub async fn manage(paths: &Paths, action: Action) -> Result<()> {
     // Start/restart must not create competing user and system daemons.
@@ -33,24 +55,53 @@ async fn manage_plan(
     action: Action,
     runner: &impl Runner,
 ) -> Result<()> {
-    // Serialize mutations and reject partial installations before issuing commands.
-    let _service_lock = control::service_lock(paths)?;
-    let files = Artifacts::read(plan)?;
-    if !files.definition && !files.executable {
-        bail!(Message::ServiceNotInstalled);
-    }
-    if !files.complete() {
-        bail!(Message::InstallationIncomplete);
-    }
+    let hooks = super::NativeControl;
+    let context = ControlContext { paths, plan };
+    let _service_lock = step(&hooks, Step::Lock, &context, async {
+        control::service_lock(context.paths)
+    })
+    .await?;
+    step(&hooks, Step::Inspect, &context, async {
+        let files = Artifacts::read(context.plan)?;
+        if !files.definition && !files.executable {
+            bail!(Message::ServiceNotInstalled);
+        }
+        if !files.complete() {
+            bail!(Message::InstallationIncomplete);
+        }
+        Ok(())
+    })
+    .await?;
 
-    // Registration is separate from files and from liveness.
-    let state = plan.manager.query(runner).await?;
-    if !plan.manager.installed(&state) {
-        bail!(Message::ServiceNotRegistered);
-    }
+    let mut state = step(&hooks, Step::Query, &context, async {
+        let state = plan.manager.query(runner).await?;
+        if !plan.manager.installed(&state) {
+            bail!(Message::ServiceNotRegistered);
+        }
+        Ok(state)
+    })
+    .await?;
 
-    // Native overrides add hosting/readiness while common policy stays here.
-    crate::system::native::flow::control::apply(paths, plan, action, state, runner).await
+    if hooks.separate_stop(&context) && matches!(action, Action::Stop | Action::Restart) {
+        step(
+            &hooks,
+            Step::StopRegistered,
+            &context,
+            plan.manager.manage(plan, Action::Stop, state, runner),
+        )
+        .await?;
+        if matches!(action, Action::Stop) {
+            return Ok(());
+        }
+        state = ServiceState::absent();
+    }
+    step(
+        &hooks,
+        Step::Apply,
+        &context,
+        plan.manager.manage(plan, action, state, runner),
+    )
+    .await
 }
 
 #[cfg(test)]

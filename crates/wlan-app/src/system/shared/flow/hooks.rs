@@ -16,6 +16,10 @@ pub(crate) trait Hooks<Step, Context> {
     }
 }
 
+#[allow(dead_code)] // The native control hooks are selected on macOS.
+pub(crate) struct NoHooks;
+impl<S, C> Hooks<S, C> for NoHooks {}
+
 pub(crate) async fn step<S: Copy, C, T>(
     hooks: &impl Hooks<S, C>,
     stage: S,

@@ -13,6 +13,11 @@ pub(crate) mod stop;
 pub(crate) mod uninstall;
 pub(crate) mod wifi;
 
+#[cfg(target_os = "macos")]
+pub(super) use crate::system::macos::flow::control::NativeHooks as NativeControl;
+#[cfg(not(target_os = "macos"))]
+pub(super) use hooks::NoHooks as NativeControl;
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::uninstall::uninstall_plan;
