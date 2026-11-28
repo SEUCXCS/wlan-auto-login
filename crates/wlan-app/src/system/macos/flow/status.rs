@@ -1,21 +1,27 @@
-//! SMAppService registration, wrapper liveness and managed-daemon readiness differ.
-use crate::infra::{command::Runner, error::Result, paths::Paths, scope::Scope};
-use crate::system::define::services::{Plan, ServiceState};
+//! Refine launchd wrapper status using the authenticated daemon endpoint.
+use crate::infra::{error::Result, scope::Scope};
+#[cfg(test)]
+pub(crate) use crate::system::shared::flow::status::inspect;
+pub(crate) use crate::system::shared::flow::status::run;
+use crate::system::{
+    define::services::ServiceState,
+    shared::flow::{
+        hooks::Hooks,
+        status::{StatusContext, StatusHooks, Step},
+    },
+};
 
-struct NativeBackend;
-impl crate::system::shared::flow::status::Backend for NativeBackend {
-    async fn query(
+pub(crate) struct NativeHooks;
+impl Hooks<Step, StatusContext<'_>> for NativeHooks {}
+impl StatusHooks for NativeHooks {
+    async fn after_query(
         &self,
-        paths: Option<&Paths>,
-        plan: &Plan,
-        runner: &impl Runner,
-    ) -> Result<ServiceState> {
-        use crate::system::shared::flow::status::DefaultBackend;
-        // Registration and the managed IPC endpoint establish different readiness facts.
-        let mut state = DefaultBackend.query(paths, plan, runner).await?;
-        if plan.scope == Scope::User
-            && let Some(paths) = paths
-            && crate::system::macos::services::bundle::enclosing(&plan.executable).is_some()
+        context: &StatusContext<'_>,
+        state: &mut ServiceState,
+    ) -> Result<()> {
+        if context.plan.scope == Scope::User
+            && let Some(paths) = context.paths
+            && crate::system::macos::services::bundle::enclosing(&context.plan.executable).is_some()
         {
             let actual = crate::infra::control::managed_pid(paths).await;
             let wrapper_running = state.running;
@@ -26,16 +32,6 @@ impl crate::system::shared::flow::status::Backend for NativeBackend {
                 state.pending = true;
             }
         }
-        Ok(state)
+        Ok(())
     }
 }
-
-pub(crate) async fn run(
-    paths: &Paths,
-    discover: bool,
-) -> Result<Vec<crate::system::define::services::InstallationReport>> {
-    crate::system::shared::flow::status::run_with(paths, discover, &NativeBackend).await
-}
-
-#[cfg(test)]
-pub(crate) use crate::system::shared::flow::status::inspect;

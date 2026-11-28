@@ -18,6 +18,17 @@ pub(super) use crate::system::macos::flow::control::NativeHooks as NativeControl
 #[cfg(not(target_os = "macos"))]
 pub(super) use hooks::NoHooks as NativeControl;
 
+#[cfg(target_os = "macos")]
+pub(super) use crate::system::macos::flow::{
+    run::NativeHooks as NativeRun, status::NativeHooks as NativeStatus,
+};
+#[cfg(target_os = "windows")]
+pub(super) use crate::system::windows::flow::run::NativeHooks as NativeRun;
+#[cfg(target_os = "linux")]
+pub(super) use hooks::NoHooks as NativeRun;
+#[cfg(not(target_os = "macos"))]
+pub(super) use hooks::NoHooks as NativeStatus;
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::uninstall::uninstall_plan;
