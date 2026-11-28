@@ -152,6 +152,20 @@ pub(crate) mod tests {
         })
     }
 
+    pub(crate) fn assert_purged(paths: &Paths) -> Result<()> {
+        assert!(!paths.runtime.exists() && !paths.secrets.exists());
+        if control::RETAIN_LOCKS_ON_PURGE {
+            let mut files = fs::read_dir(&paths.config)?
+                .map(|entry| entry.map(|entry| entry.file_name()))
+                .collect::<std::io::Result<Vec<_>>>()?;
+            files.sort();
+            assert_eq!(files, ["daemon.lock", "operation.lock", "service.lock"]);
+        } else {
+            assert!(!paths.config.exists());
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn purge_cleans_each_platform_and_scope_without_removing_shared_files() -> Result<()> {
         for kind in 0..6 {
@@ -169,8 +183,7 @@ pub(crate) mod tests {
             .await?;
             assert!(deleted.get());
             assert!(!plan.definition.exists() && !plan.executable.exists());
-            assert!(!paths.config.exists() && !paths.runtime.exists() && !paths.secrets.exists());
-            assert!(!dir.path().join("SEUCXCS/wlanlogin").exists());
+            assert_purged(&paths)?;
             assert_eq!(
                 fs::read_to_string(sibling.join("settings.json"))?,
                 "preserve"
@@ -265,7 +278,7 @@ pub(crate) mod tests {
         let calls = runner.calls.borrow();
         assert_eq!(calls[1].args[1], "stop");
         assert_eq!(calls[4].args[1], "disable");
-        assert!(!paths.config.exists());
+        assert_purged(&paths)?;
         Ok(())
     }
 
@@ -326,7 +339,7 @@ pub(crate) mod tests {
         })
         .await?;
         assert!(!plan.executable.exists());
-        assert!(!dir.path().join("SEUCXCS/wlanlogin").exists());
+        assert_purged(&paths)?;
         Ok(())
     }
 
@@ -335,6 +348,10 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir()?;
         let (paths, plan) = fixture(dir.path(), 0)?;
         fs::write(paths.config.join("personal-note"), "preserve")?;
+        let lock_path = paths.config.join("operation.lock");
+        if control::RETAIN_LOCKS_ON_PURGE {
+            fs::write(&lock_path, "existing lock inode")?;
+        }
         uninstall_plan(&paths, &plan, true, &removal_runner(0), async {
             cleanup::remove_file(&paths.secrets.join("login.cred"))
         })
@@ -351,6 +368,9 @@ pub(crate) mod tests {
         );
         assert!(!paths.config.join("daemon.log").exists());
         assert!(!paths.runtime.exists());
+        if control::RETAIN_LOCKS_ON_PURGE {
+            assert_eq!(fs::read_to_string(lock_path)?, "existing lock inode");
+        }
         Ok(())
     }
 
@@ -395,9 +415,7 @@ pub(crate) mod tests {
                 })
                 .await?;
                 assert!(deleted.get());
-                assert!(
-                    !paths.config.exists() && !paths.runtime.exists() && !paths.secrets.exists()
-                );
+                assert_purged(&paths)?;
             }
         }
         Ok(())

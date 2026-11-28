@@ -49,16 +49,11 @@ impl UninstallHooks for Hooks {
         if bundle::enclosing(&plan.executable).is_none() {
             return Vec::new();
         }
-        let mut files = vec!["managed.lock"];
         if paths.scope == crate::infra::scope::Scope::User {
-            files.extend([
-                "wifi-foreground.lock",
-                "wifi-service.lock",
-                "wifi-foreground.sock",
-                "wifi-service.sock",
-            ]);
+            vec!["wifi-foreground.sock", "wifi-service.sock"]
+        } else {
+            Vec::new()
         }
-        files
     }
 }
 

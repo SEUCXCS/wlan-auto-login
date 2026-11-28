@@ -219,7 +219,15 @@ mod tests {
         #[tokio::test]
         async fn instance_lock_is_exclusive_and_released_on_drop() -> Result<()> {
             let dir = tempfile::tempdir()?;
-            let paths = Paths::test(dir.path());
+            let mut paths = Paths::test(dir.path());
+            if RETAIN_LOCKS_ON_PURGE {
+                paths.runtime = dir.path().join("run");
+                std::fs::create_dir(&paths.runtime)?;
+                let legacy = std::fs::File::create(paths.runtime.join("daemon.lock"))?;
+                fs2::FileExt::try_lock_exclusive(&legacy)?;
+                assert!(singleton(&paths).is_err());
+                drop(legacy);
+            }
             let lock = singleton(&paths)?;
             assert!(singleton(&paths).is_err());
             drop(lock);

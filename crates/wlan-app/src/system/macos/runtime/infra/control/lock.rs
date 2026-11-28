@@ -16,19 +16,34 @@ fn open_lock(path: &Path) -> Result<File> {
 
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
     Ok(options.open(path)?)
 }
 
 pub fn singleton(paths: &Paths) -> Result<File> {
-    let file = open_lock(&paths.runtime.join("daemon.lock"))?;
+    let file = open_lock(&paths.config.join("daemon.lock"))?;
     fs2::FileExt::try_lock_exclusive(&file).context(Message::DaemonIsAlreadyRunning)?;
+    if paths.config != paths.runtime {
+        // An installed older daemon may still hold the runtime-directory lock.
+        use std::os::unix::fs::OpenOptionsExt;
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(paths.runtime.join("daemon.lock"))
+        {
+            Ok(legacy) => fs2::FileExt::try_lock_exclusive(&legacy)
+                .context(Message::DaemonIsAlreadyRunning)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     Ok(file)
 }
 
 pub fn managed_lock(paths: &Paths) -> Result<File> {
-    let file = open_lock(&paths.runtime.join("managed.lock"))?;
+    let file = open_lock(&paths.config.join("managed.lock"))?;
     fs2::FileExt::try_lock_exclusive(&file).context(Message::DaemonIsAlreadyRunning)?;
     Ok(file)
 }
@@ -41,7 +56,7 @@ pub fn service_lock(paths: &Paths) -> Result<File> {
 }
 
 pub async fn operation_lock(paths: &Paths) -> Result<File> {
-    let file = open_lock(&paths.runtime.join("operation.lock"))?;
+    let file = open_lock(&paths.config.join("operation.lock"))?;
     for _ in 0..250 {
         match fs2::FileExt::try_lock_exclusive(&file) {
             Ok(()) => return Ok(file),

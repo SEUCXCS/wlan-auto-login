@@ -90,7 +90,7 @@ async fn uninstall_with(
     hooks.validate(plan).await?;
 
     // Serialize service mutation, then inspect registration independently of files.
-    let service_lock = control::service_lock(paths)?;
+    let _service_lock = control::service_lock(paths)?;
     // Query registrations even when the definition was manually removed.
     let state = plan.manager.query(runner).await?;
     if hooks.must_stop(plan, &state) {
@@ -105,8 +105,8 @@ async fn uninstall_with(
     hooks.stop_helpers(paths, plan).await?;
 
     // Hold daemon and operation locks across unregistration and optional data deletion.
-    let daemon_lock = control::singleton(paths)?;
-    let operation_lock = control::operation_lock(paths).await?;
+    let _daemon_lock = control::singleton(paths)?;
+    let _operation_lock = control::operation_lock(paths).await?;
     if state.registered {
         for command in &plan.remove {
             execute(runner, command).await?;
@@ -142,17 +142,11 @@ async fn uninstall_with(
         for name in ["daemon-endpoint.json", "daemon.sock"] {
             cleanup::remove_file(&paths.runtime.join(name))?;
         }
-        // Windows requires the handles closed before their lock files are removed.
-        drop(operation_lock);
-        drop(daemon_lock);
+        // A waiting process may already have a descriptor for a scope lock.
+        // Keep its inode, and carry the guards through data cleanup and pruning.
         for name in hooks.runtime_files(paths, plan) {
             cleanup::remove_file(&paths.runtime.join(name))?;
         }
-        for name in ["operation.lock", "daemon.lock"] {
-            cleanup::remove_file(&paths.runtime.join(name))?;
-        }
-        drop(service_lock);
-        cleanup::remove_file(&paths.config.join("service.lock"))?;
         for directory in [&paths.runtime, &paths.secrets, &paths.config] {
             cleanup::prune_empty_directories(directory)?;
         }

@@ -16,3 +16,6 @@ pub(crate) use ipc::{CredentialState, RuntimeStatus, Signal, serve_with_mode, st
 
 pub(crate) use lock::{operation_lock, service_lock, singleton, wait_stopped};
 pub(crate) use state::State;
+
+#[cfg(test)]
+pub(crate) const RETAIN_LOCKS_ON_PURGE: bool = false;

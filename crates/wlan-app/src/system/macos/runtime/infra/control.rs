@@ -19,3 +19,6 @@ pub(crate) use ipc::{managed_pid, managed_running, stop_managed};
 pub(crate) use lock::managed_lock;
 pub(crate) use lock::{operation_lock, service_lock, singleton, wait_stopped};
 pub(crate) use state::State;
+
+#[cfg(test)]
+pub(crate) const RETAIN_LOCKS_ON_PURGE: bool = true;

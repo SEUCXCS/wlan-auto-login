@@ -18,3 +18,6 @@ pub(crate) use lock::{operation_lock, service_lock, singleton, wait_stopped};
 pub(crate) use state::State;
 
 pub(crate) use ipc::{session_end, session_ready};
+
+#[cfg(test)]
+pub(crate) const RETAIN_LOCKS_ON_PURGE: bool = true;
