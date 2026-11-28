@@ -63,7 +63,7 @@ impl Cursor {
             };
             if same { offset } else { 0 }
         } else {
-            tail_start(&mut file, end, options.lines)?
+            Self::tail_start(&mut file, end, options.lines)?
         };
         file.seek(SeekFrom::Start(start))?;
         let mut consumed = 0;
@@ -90,30 +90,30 @@ impl Cursor {
         output.flush()?;
         Ok(Some(consumed))
     }
-}
 
-fn tail_start(file: &mut File, end: u64, lines: u32) -> Result<u64> {
-    if lines == 0 {
-        return Ok(end);
-    }
-    let mut position = end;
-    let mut found = 0;
-    let mut block = [0; 8192];
-    while position > 0 {
-        let count = position.min(block.len() as u64) as usize;
-        position -= count as u64;
-        file.seek(SeekFrom::Start(position))?;
-        file.read_exact(&mut block[..count])?;
-        for index in (0..count).rev() {
-            if block[index] == b'\n' && position + index as u64 != end - 1 {
-                found += 1;
-                if found == lines {
-                    return Ok(position + index as u64 + 1);
+    fn tail_start(file: &mut File, end: u64, lines: u32) -> Result<u64> {
+        if lines == 0 {
+            return Ok(end);
+        }
+        let mut position = end;
+        let mut found = 0;
+        let mut block = [0; 8192];
+        while position > 0 {
+            let count = position.min(block.len() as u64) as usize;
+            position -= count as u64;
+            file.seek(SeekFrom::Start(position))?;
+            file.read_exact(&mut block[..count])?;
+            for index in (0..count).rev() {
+                if block[index] == b'\n' && position + index as u64 != end - 1 {
+                    found += 1;
+                    if found == lines {
+                        return Ok(position + index as u64 + 1);
+                    }
                 }
             }
         }
+        Ok(0)
     }
-    Ok(0)
 }
 
 pub(crate) async fn file_logs(

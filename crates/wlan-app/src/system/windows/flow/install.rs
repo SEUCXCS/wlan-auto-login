@@ -17,18 +17,8 @@ use crate::{
 use std::{fs, path::Path};
 
 pub async fn run(paths: &Paths) -> Result<()> {
-    run_with(paths, Ok).await
-}
-
-pub(crate) async fn run_with(
-    paths: &Paths,
-    prepare: impl FnOnce(Plan) -> Result<Plan>,
-) -> Result<()> {
-    // Validate scope ownership before constructing or changing native artifacts.
     ensure_no_conflicting_install(paths)?;
-    let plan = prepare(plan(paths)?)?;
-
-    // Stage and publish through the common transaction.
+    let plan = plan(paths)?;
     install_plan(paths, plan, &std::env::current_exe()?, &SystemRunner).await
 }
 
