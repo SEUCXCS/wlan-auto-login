@@ -133,4 +133,4 @@ dr1({"result":0,"msg":"Portal协议认证超时！","ret_code":8})
 
 ## 客户端流程
 
-`Client::login()` 先查询 `chkstatus`：终端已在线时直接返回 `AlreadyOnline`，仅在确认离线时加载配置并提交认证。切换线路前需先调用[注销接口](./eportal-logout.md)，待 `chkstatus` 确认离线后再发起登录。
+`Client::login()` 先查询 `chkstatus`。终端已在线时返回 `AlreadyOnline`，状态未知时停止，确认离线后才加载配置并提交认证。CLI 和守护进程通过 `prepare_login()` 完成门户预检，在实际提交前复核当前 Wi-Fi 会话。切换线路前先调用[注销接口](./eportal-logout.md)，待 `chkstatus` 确认离线后再发起登录。

@@ -60,8 +60,8 @@
 | `infra/identity.rs` | 应用 ID、目录名、命令名与原生服务/凭据标识 |
 | `system.rs` | 编译期选择原生平台，暴露系统能力入口 |
 | `system/define/` | `credentials`、`services`、`wifi`、`permission` 的公共契约、数据模型与报告类型 |
-| `system/shared/` | 跨平台共用适配器、凭据编码与诊断分类、通用服务事务与默认 `flow` |
-| `system/{linux,macos,windows}/flow/` | 各平台 `install`、`uninstall`、`start`、`stop`、`restart`、`status`、`logs`、`run` 及领域操作统一入口 |
+| `system/shared/` | 跨平台共用适配器、凭据编码与诊断分类，以及 `system::flow` 导出的统一流程 |
+| `system/{linux,macos,windows}/flow/` | 原生步骤、平台 hook 和 Linux 会话通知等平台专属入口 |
 | `system/{linux,macos,windows}/services/` | 原生服务模板（`definition.rs`）、管理器命令与状态解析（`manager.rs`）、产物与就绪检查 |
 | `system/{linux,macos,windows}/credentials/` | 平台用户与系统凭据后端 |
 | `system/{linux,macos,windows}/wifi/` | 平台 SSID 查询、会话标识与网络变更事件 |
@@ -73,7 +73,7 @@
 - 平台相关实现全部位于 `system/linux`、`system/macos` 或 `system/windows`。
 - 其余目录中，目标平台相关的 `cfg`、`cfg_attr`、`cfg!` 仅允许出现在受 `cargo xtask check-boundaries` 检查的门面文件中用于模块选择和重导出。测试代码遵守相同约束（普通 `#[cfg(test)]` 允许）。禁止用运行时操作系统名判断替代编译期分支。
 - `system/<platform>/runtime/infra` 下的原生基础设施代码仅通过 `infra.rs` 门面编译一次，属于源级平台选择，不构成 `infra → system` 反向依赖；共享状态与协议文件保留在 `infra/control`。
-- 共享流程（`system/shared`）不包含原生 API、XML 编码、ACL 或任务注册分支；平台没有额外差异时显式复用 `system/shared/flow`，不得以空实现返回成功。
+- `shared/flow` 负责步骤顺序、锁、验证和回滚。每个业务步骤提供前后 hook，平台模块只处理原生差异，包括 API、XML、ACL 和任务注册。前置 hook 失败时跳过步骤，后置 hook 接收已执行步骤的结果。回滚失败时必须保留恢复资料。
 
 ### 2.4 `xtask` 与 `packaging/windows`
 
@@ -115,7 +115,7 @@
 - 调整 daemon 行为时，先在 `app/daemon/policy.rs` 定义状态转换，再接入 `check.rs` 或 `runtime.rs`。
 - 关键守护边界：
   - `AuthState::Unknown` 不得触发自动登录。
-  - 每次 `await` 后提交认证前必须复检 Wi-Fi 会话。
+  - 完成门户状态和页面预检后复核凭据许可及 Wi-Fi 会话。最终 Wi-Fi 查询返回后检查本地会话和凭据代次，随即提交认证。
   - 手动登录只恢复相同作用域的 daemon；保持停机监听器存活并持续排空 Linux D-Bus 事件流。
   - 限制原生调用与凭据读取超时，至多保留一个在途后台凭据读取任务。
 
@@ -136,10 +136,11 @@
 
 - `define/credentials.rs` 只定义契约与状态（`Available` / `Missing` / `Waiting` / `Failed`），不执行 I/O；`shared/credentials/codec.rs` 负责格式编码，`flow/credentials` 为统一入口。
 - **延迟读取**：daemon 启动时禁止预读凭据，仅在通过目标 Wi-Fi、暂停状态、策略期限与门户明确 `Offline` 校验后才发起后台读取。
-- **凭据新鲜度（`CredentialPermit`）**：读取结果封装于不可打印的 `CredentialPermit`，绑定作用域、配置根目录与持久化于 `control.json` 的独立字段 `credential_generation`（不复用暂停/调度 revision；文件缺失时初始化为 `0`）。
+- **凭据新鲜度（`CredentialPermit`）**：读取结果封装于不可打印的 `CredentialPermit`，绑定作用域、配置根目录与 `control.json` 中独立的 `credential_generation`。缺少文件或旧文件缺少字段时按 `0` 读取，随后正常保存时持久化。
   - 常规保存（`save.rs`）与删除（`delete.rs`）在持有 operation lock 下先原子递增并持久化 `credential_generation`，再调用原生后端；持久化失败必须中止变更，原生变更失败不得回退旧代次。
   - 任何完成结果（含超时后保留的任务）在消费时及最终 Wi-Fi `await` 后均须复检许可；超时、注销或失效不得另起第二个原生读任务。
   - `service uninstall --purge` 在确认服务注销、后台停止并持有 daemon / operation lock 后直接删除作用域凭据，不要求解析待删除的 `control.json`。
+  - Linux 和 macOS 在持久状态目录保留私有锁文件。停止旧版后台进程时同时检查旧运行目录中的守护进程锁。
 - **诊断分类与 IPC**：类型化错误定义于 `infra/error/credentials.rs`，由 `shared/credentials/diagnostics.rs` 分类。锁定、前台交互、拒绝访问与缺少 provider 归为 `Waiting`；超时（含 D-Bus `NoReply`）、格式/版本错误、重复条目、解密、校验与任务失败归为 `Failed`；未知错误保持中性类别，禁止误判为权限等待。
 - `Waiting` 与 `Failed` 均保持 daemon 存活并保留凭据，不触发门户网络退避，也不解除门户凭据拒绝。状态 IPC 仅接受版本 3 有界 JSON 帧，校验作用域与令牌，不得激活 Keyring 或暴露凭据与原始自由文本。
 
@@ -150,6 +151,7 @@
 - 用户后台读取前依次检查活动 logind 会话、显示 socket 与用户 systemd 环境，同步 D-Bus 激活环境后，再使用官方 `dbus-secret-service`（DH 加密、零 prompt 超时）连接标准 `org.freedesktop.secrets` 并允许标准 D-Bus 激活（包括 provider 已运行的情况）。不 vendor 依赖、不固定 owner、不按桌面/钱包类型分支，`default.target` 保持不变。
 - 用户 `CredentialPermit` 额外绑定 logind 会话 ID、`TimestampMonotonic` 与本地会话代次，实时查询前后均做校验；`session-ready` / `session-end` 提示仅存内存并绑定实际会话。
 - 通过独立持续排空的 D-Bus 流监听 provider / 解锁事件，断连后自动重建并辅以定时重试。系统作用域完全独立于图形会话。
+- 系统凭据每次从当前受保护文件读取或命中与文件标识和代次绑定的缓存。安装回滚按 systemd 原有启用与运行状态恢复。
 
 #### macOS
 
@@ -163,6 +165,7 @@
 
 - **路径与服务**：系统路径仅解析 Program Files 与 ProgramData Known Folders（兼容无交互用户配置的 LocalSystem）；`service.lock` 位于 `state`，`daemon.lock` 与 `operation.lock` 位于 `run`。SCM 接入留在 bootstrap（Tokio 启动前）；服务创建、查询、启停与回调共用同一服务 ID；用户计划任务名追加 `{SID}`。
 - **任务 XML 与安装验证**：计划任务定义使用匹配的 UTF-16 声明、UTF-16LE 字节与 BOM（读取兼容旧版 UTF-8）。停止旧任务前先以 `TASK_VALIDATE_ONLY` 校验暂存文件；独立快照实际注册 XML；恢复任务仅在原状态为运行或排队时重启；删除失败前通过数值 COM 查询确认任务不存在；回滚未完成时同时保留原生 XML 与文件备份；安装成功要求任务已注册、启用且处于运行或排队状态。
+- SCM 回滚恢复原启动类型和运行状态。MSI 恢复凭据前在锁内重新确认代次，并给回滚自身写入的代次记录事务标识，以便识别可重试的恢复。
 - **编码、资源与安装器**：`schtasks` / `sc` 输出在原生进程边界按系统 OEM 代码页解码，PowerShell 查询显式输出 UTF-8，不修改全局控制台或系统区域设置；`SHGetKnownFolderPath` 返回内存必须通过作用域守卫在所有路径调用 `CoTaskMemFree`。安装器使用 GUI 子系统与 180 秒 Job Object 超时终止进程树并回滚；日志目录继承引导器私有目录 ACL；通过 `WIX_UPGRADE_DETECTED` 跳过升级账号页并避免清理旧凭据；构建时解包 MSI cabinet 逐字节校验 CLI、`README.md` 与 `LICENSE`。
 
 ### 3.6 错误处理与日志
@@ -191,6 +194,8 @@
 目录重定向测试使用平台测试辅助函数（Unix 符号链接或 Windows junction），不得因权限原因在 Windows 上跳过公共保护测试。
 
 ### 4.2 隔离要求与检查命令
+
+- 修改公共流程前先确认现有回归测试覆盖顺序与失败恢复。Smoke test 只验证入口能走通，IPC 和 shutdown 的共用断言在各自的原生传输或信号实现上运行。
 
 - 严禁在开发测试中访问真实校园网门户、切换 Wi-Fi、读取真实密钥环或操作真实系统服务；一律使用 loopback mock、临时目录、假凭据、模拟命令、私有 `dbus-daemon` 与隔离子进程。
 - `signal_child`、`provider_child`、`read_child` 为父测试显式调用的 `#[ignore]` 辅助用例，禁止对整个套件使用 `--include-ignored`。
