@@ -79,6 +79,7 @@ jobs:
     env:
       BUILD_TARGET: ${{ matrix.target }}
       MACOSX_DEPLOYMENT_TARGET: '13.0'
+      WIX_VERSION: '6.0.2'
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -113,15 +114,14 @@ jobs:
             . -> target
             packaging/windows -> packaging/windows/target
 
-      - name: Cache WiX toolset
+      - name: Cache WiX toolset and UI extension
         if: runner.os == 'Windows'
-        id: wix-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ runner.temp }}/wlanlogin-wix
-            ~/.wix
-          key: wix-6.0.2-${{ runner.os }}-${{ runner.arch }}
+            ${{ github.workspace }}/.wix/extensions
+          key: wix-${{ env.WIX_VERSION }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Lint all targets
         run: cargo clippy --workspace --all-targets --locked --target "$BUILD_TARGET" -- -D warnings
@@ -157,8 +157,6 @@ jobs:
       - name: Check Windows installer code and payload
         if: runner.os == 'Windows'
         shell: pwsh
-        env:
-          WIX_CACHE_HIT: ${{ steps.wix-cache.outputs.cache-hit }}
         run: |
           cargo clippy --manifest-path packaging/windows/Cargo.toml --all-targets --locked -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -166,10 +164,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $wixTools = Join-Path $env:RUNNER_TEMP 'wlanlogin-wix'
           $wix = Join-Path $wixTools 'wix.exe'
-          if ($env:WIX_CACHE_HIT -ne 'true' -or -not (Test-Path $wix)) {
-            dotnet tool install wix --version 6.0.2 --tool-path $wixTools
+          if (-not (Test-Path -LiteralPath $wix -PathType Leaf)) {
+            dotnet tool install wix --version $env:WIX_VERSION --tool-path $wixTools
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            & $wix extension add WixToolset.UI.wixext/6.0.2
+          }
+          $uiExtension = "WixToolset.UI.wixext/$env:WIX_VERSION"
+          $uiDll = Join-Path $env:GITHUB_WORKSPACE ".wix/extensions/$uiExtension/wixext6/WixToolset.UI.wixext.dll"
+          if (-not (Test-Path -LiteralPath $uiDll -PathType Leaf)) {
+            & $wix extension add $uiExtension
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           cargo xtask bundle windows --profile dev --target $env:BUILD_TARGET --target-dir target --wix $wix
