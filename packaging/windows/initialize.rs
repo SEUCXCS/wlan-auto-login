@@ -48,32 +48,49 @@ fn wide(value: &str) -> Vec<u16> {
 }
 fn property(session: u32, name: &str) -> Result<String, u32> {
     let name = wide(name);
+    let mut empty = 0u16;
     let mut length = 0;
-    let result = unsafe { MsiGetPropertyW(session, name.as_ptr(), ptr::null_mut(), &mut length) };
-    if result != 0 && result != 234 {
-        return Err(result);
+    let result = unsafe { MsiGetPropertyW(session, name.as_ptr(), &mut empty, &mut length) };
+    match result {
+        0 => return Ok(String::new()),
+        234 => {} // ERROR_MORE_DATA supplies the number of UTF-16 units.
+        error => return Err(error),
     }
-    let mut value = vec![0; length as usize + 1];
-    length += 1;
+    length = length.checked_add(1).ok_or(1603u32)?;
+    let mut value = SecretBuffer(vec![0u16; length as usize]);
     let result =
-        unsafe { MsiGetPropertyW(session, name.as_ptr(), value.as_mut_ptr(), &mut length) };
-    let text = String::from_utf16(&value[..length as usize]).map_err(|_| 1603u32);
-    value.fill(0);
+        unsafe { MsiGetPropertyW(session, name.as_ptr(), value.0.as_mut_ptr(), &mut length) };
     if result != 0 {
         return Err(result);
     }
-    text
+    let text = value.0.get(..length as usize).ok_or(1603u32)?;
+    String::from_utf16(text).map_err(|_| 1603u32)
 }
 fn set_property(session: u32, name: &str, value: &str) -> Result<(), u32> {
     let result = unsafe { MsiSetPropertyW(session, wide(name).as_ptr(), wide(value).as_ptr()) };
     if result == 0 { Ok(()) } else { Err(result) }
 }
+fn scrub<T: Copy + Default>(buffer: &mut [T]) {
+    for value in buffer {
+        // The slot is live and exclusively borrowed. Keep the wipe under -O.
+        unsafe { ptr::write_volatile(value, T::default()) };
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+}
+
+struct SecretBuffer<T: Copy + Default>(Vec<T>);
+impl<T: Copy + Default> Drop for SecretBuffer<T> {
+    fn drop(&mut self) {
+        scrub(&mut self.0);
+    }
+}
+
 struct Secrets(Vec<String>);
 impl Drop for Secrets {
     fn drop(&mut self) {
         for field in &mut self.0 {
             unsafe {
-                field.as_bytes_mut().fill(0);
+                scrub(field.as_bytes_mut());
             }
         }
     }
@@ -119,11 +136,10 @@ fn initialize(session: u32) -> Result<(), u32> {
         .map_err(|_| 1603u32)?;
     let transaction = format!("{:032x}", time.as_nanos() ^ u128::from(std::process::id()));
     set_property(session, "WLANLOGIN_TRANSACTION", &transaction)?;
-    let fields = Secrets(vec![
-        property(session, "WLANLOGIN_USERNAME")?,
-        property(session, "WLANLOGIN_PASSWORD")?,
-        property(session, "WLANLOGIN_LINE")?,
-    ]);
+    let mut fields = Secrets(Vec::with_capacity(3));
+    for name in ["WLANLOGIN_USERNAME", "WLANLOGIN_PASSWORD", "WLANLOGIN_LINE"] {
+        fields.0.push(property(session, name)?);
+    }
     let log_root = property(session, "WLANLOGIN_LOG_ROOT")?;
     let inherit_security = !log_root.is_empty();
     let root = if log_root.is_empty() {
@@ -148,14 +164,16 @@ fn initialize(session: u32) -> Result<(), u32> {
     }
     let file = directory.join("credentials.bin");
     let outcome = (|| {
-        let mut bytes = Vec::new();
+        let mut bytes = SecretBuffer(Vec::new());
         for field in &fields.0 {
-            bytes.extend_from_slice(&(field.len() as u32).to_le_bytes());
-            bytes.extend_from_slice(field.as_bytes());
+            bytes
+                .0
+                .extend_from_slice(&(field.len() as u32).to_le_bytes());
+            bytes.0.extend_from_slice(field.as_bytes());
         }
         let input = Blob {
-            length: bytes.len() as u32,
-            data: bytes.as_mut_ptr(),
+            length: bytes.0.len() as u32,
+            data: bytes.0.as_mut_ptr(),
         };
         let mut output = Blob {
             length: 0,
@@ -177,7 +195,7 @@ fn initialize(session: u32) -> Result<(), u32> {
                 &mut output,
             )
         };
-        bytes.fill(0);
+        drop(bytes);
         if encrypted == 0 {
             return Err(1603);
         }
