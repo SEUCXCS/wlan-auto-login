@@ -14,15 +14,6 @@ use crate::{
 };
 use std::{fs, path::Path};
 
-async fn run_with(paths: &Paths, prepare: impl FnOnce(Plan) -> Result<Plan>) -> Result<()> {
-    // Validate scope ownership before constructing or changing native artifacts.
-    ensure_no_conflicting_install(paths)?;
-    let plan = prepare(plan(paths)?)?;
-
-    // Stage and publish through the common transaction.
-    install_plan(paths, plan, &std::env::current_exe()?).await
-}
-
 async fn install_plan(paths: &Paths, plan: Plan, source: &Path) -> Result<()> {
     crate::infra::error::ensure!(
         plan.scope == paths.scope,
@@ -173,17 +164,15 @@ pub(crate) fn write_definition(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 pub(crate) async fn run(paths: &Paths) -> Result<()> {
-    // System services receive native encrypted credentials through systemd.
-    run_with(paths, |mut plan| {
-        if paths.scope == Scope::System {
-            plan.content = plan.content.replace(
-                "# CREDENTIALS\n",
-                &crate::system::credentials::linux_credential_directive(paths)?,
-            );
-        }
-        Ok(plan)
-    })
-    .await
+    ensure_no_conflicting_install(paths)?;
+    if paths.scope == Scope::System {
+        crate::infra::error::ensure!(
+            paths.secrets.join("login.cred").try_exists()?
+                || paths.secrets.join("login.json").try_exists()?,
+            Message::SystemCredentialsAreMissingRunLoginSystemRemember
+        );
+    }
+    install_plan(paths, plan(paths)?, &std::env::current_exe()?).await
 }
 
 pub(crate) use crate::system::shared::services::artifacts::ensure_no_conflicting_install as validate_scope;

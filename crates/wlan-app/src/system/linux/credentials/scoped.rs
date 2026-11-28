@@ -2,7 +2,6 @@
 use crate::infra::error::Message;
 pub(crate) use crate::system::define::credentials::{CredentialMode, Store};
 
-pub(crate) use crate::system::native::credentials::machine::linux_credential_directive;
 pub(crate) use crate::system::native::credentials::user::prepare_daemon;
 use crate::system::native::credentials::{machine, user};
 /// Delete without loading or decoding secrets, including damaged or duplicate files.
@@ -56,7 +55,7 @@ impl ScopedStore {
         // System storage never depends on a user's graphical session.
         if let Some(store) = &self.machine {
             return store
-                .load(true)
+                .load(Some(permit.generation))
                 .await
                 .map(|saved| BackgroundRead::from_saved(saved, permit))
                 .map_err(|error| {
@@ -71,7 +70,7 @@ impl ScopedStore {
 impl Store for ScopedStore {
     async fn load(&self) -> Result<Option<Credentials>> {
         match &self.machine {
-            Some(store) => store.load(false).await,
+            Some(store) => store.load(None).await,
             None => user::load().await,
         }
     }
