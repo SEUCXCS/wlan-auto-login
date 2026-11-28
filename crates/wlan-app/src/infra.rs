@@ -235,4 +235,235 @@ mod tests {
             Ok(())
         }
     }
+
+    mod ipc {
+        use crate::infra::{
+            control::{
+                Command, CredentialState, Endpoint, Request, Response, Signal, VERSION, read,
+                request, serve, status, test_connect, wake, write,
+            },
+            error::Result,
+            paths::Paths,
+        };
+        use std::{fs, time::Duration};
+        #[tokio::test]
+        async fn status_and_session_notifications_are_authenticated_versioned_and_scope_bound()
+        -> Result<()> {
+            let directory = tempfile::tempdir()?;
+            let paths = Paths::test(directory.path().join("user"));
+            let (server, mut commands) = serve(&paths).await?;
+            if let Ok(mut status) = server.status.write() {
+                status.credentials = CredentialState::WaitingForUnlock;
+            }
+            assert_eq!(
+                status(&paths).await?.credentials,
+                CredentialState::WaitingForUnlock
+            );
+            assert!(commands.try_recv().is_err());
+            let endpoint: Endpoint =
+                serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json"))?)?;
+            for (version, scope) in [(VERSION + 1, "user"), (VERSION, "system")] {
+                let mut socket = test_connect(&endpoint.address).await?;
+                write(
+                    &mut socket,
+                    &Request {
+                        version,
+                        scope: scope.into(),
+                        token: endpoint.token.clone(),
+                        action: Command::Stop,
+                    },
+                )
+                .await?;
+                assert!(read::<Response>(&mut socket).await.is_err());
+                assert!(commands.try_recv().is_err());
+            }
+            request(
+                &paths,
+                Command::SessionReady {
+                    session: "session-1".into(),
+                },
+            )
+            .await?;
+            assert_eq!(
+                commands.recv().await,
+                Some(Signal::SessionReady("session-1".into()))
+            );
+            request(
+                &paths,
+                Command::SessionEnd {
+                    session: "session-1".into(),
+                },
+            )
+            .await?;
+            assert_eq!(
+                commands.recv().await,
+                Some(Signal::SessionEnd("session-1".into()))
+            );
+            let mut other = Paths::test(directory.path().join("system"));
+            other.scope = crate::infra::scope::Scope::System;
+            let (_system, mut system_commands) = serve(&other).await?;
+            assert!(
+                request(
+                    &other,
+                    Command::SessionReady {
+                        session: "session-1".into()
+                    }
+                )
+                .await
+                .is_err()
+            );
+            wake(&paths).await;
+            assert_eq!(commands.recv().await, Some(Signal::Wake));
+            assert!(system_commands.try_recv().is_err());
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn local_ipc_requires_token_and_wakes_daemon() -> Result<()> {
+            let dir = tempfile::tempdir()?;
+            let paths = Paths::test(dir.path());
+            let (_server, mut receiver) = serve(&paths).await?;
+            let endpoint: Endpoint =
+                serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json"))?)?;
+            let mut stranger = test_connect(&endpoint.address).await?;
+            write(
+                &mut stranger,
+                &Request {
+                    version: VERSION,
+                    scope: "user".into(),
+                    token: "x".repeat(64),
+                    action: Command::Wake,
+                },
+            )
+            .await?;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), receiver.recv())
+                    .await
+                    .is_err()
+            );
+            wake(&paths).await;
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), receiver.recv()).await?,
+                Some(Signal::Wake)
+            );
+
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) mod unix_shutdown {
+        use crate::infra::{
+            error::Result,
+            shutdown::{RUNTIME_GRACE, Shutdown, until_stopped},
+        };
+        use std::time::Duration;
+        use std::{
+            path::Path,
+            process::{Child, Command, Stdio},
+            time::Instant,
+        };
+
+        struct TestChild(Child);
+        impl Drop for TestChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        pub(in crate::infra) fn assert_signal_shutdown(
+            send: impl FnOnce(u32) -> Result<()>,
+        ) -> Result<()> {
+            let dir = tempfile::tempdir()?;
+            let mut child = TestChild(
+                Command::new(std::env::current_exe()?)
+                    .args([
+                        "--ignored",
+                        "--exact",
+                        "infra::shutdown::tests::signal_child",
+                        "--nocapture",
+                    ])
+                    .env("WLAN_SHUTDOWN_TEST_DIR", dir.path())
+                    .stdin(Stdio::null())
+                    .spawn()?,
+            );
+            let deadline = Instant::now() + Duration::from_secs(8);
+            while !dir.path().join("ready").exists() {
+                crate::infra::error::ensure!(
+                    child.0.try_wait()?.is_none(),
+                    "signal test child exited before ready"
+                );
+                crate::infra::error::ensure!(
+                    Instant::now() < deadline,
+                    "signal test child did not become ready"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            send(child.0.id())?;
+            loop {
+                if let Some(status) = child.0.try_wait()? {
+                    crate::infra::error::ensure!(
+                        status.success(),
+                        "signal test child failed: {status}"
+                    );
+                    break;
+                }
+                crate::infra::error::ensure!(
+                    Instant::now() < deadline,
+                    "daemon shutdown did not interrupt busy work"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            crate::infra::error::ensure!(
+                dir.path().join("stopped").exists(),
+                "child skipped graceful shutdown"
+            );
+            Ok(())
+        }
+
+        pub(in crate::infra) fn signal_child() -> Result<()> {
+            let Some(directory) = std::env::var_os("WLAN_SHUTDOWN_TEST_DIR") else {
+                return Ok(());
+            };
+            let directory = Path::new(&directory);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(async {
+                let mut shutdown = Shutdown::new()?;
+                // Cancelling a wait must preserve the listener for subsequent shutdown signals.
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(10), shutdown.wait())
+                        .await
+                        .is_err()
+                );
+                let paths = crate::infra::paths::Paths::test(directory);
+                let work = async {
+                    let _lock = crate::infra::control::operation_lock(&paths).await?;
+                    let (started, ready) = tokio::sync::oneshot::channel();
+                    tokio::task::spawn_blocking(move || {
+                        let _ = started.send(());
+                        // A native OS call can outlive cancellation of its async caller.
+                        loop {
+                            std::thread::park();
+                        }
+                    });
+                    ready.await?;
+                    std::fs::write(directory.join("ready"), [])?;
+                    std::future::pending::<Result<()>>().await
+                };
+                until_stopped(work, shutdown.wait()).await?;
+                let _lock = tokio::time::timeout(
+                    Duration::from_millis(200),
+                    crate::infra::control::operation_lock(&paths),
+                )
+                .await??;
+                Ok::<_, crate::infra::error::Error>(())
+            })?;
+            runtime.shutdown_timeout(RUNTIME_GRACE);
+            std::fs::write(directory.join("stopped"), [])?;
+            Ok(())
+        }
+    }
 }

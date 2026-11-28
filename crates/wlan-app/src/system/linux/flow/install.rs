@@ -201,14 +201,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_registration_restores_the_previous_service_and_binary() -> Result<()> {
-        let scopes = if true {
-            vec![
-                crate::infra::scope::Scope::User,
-                crate::infra::scope::Scope::System,
-            ]
-        } else {
-            vec![crate::infra::scope::Scope::User]
-        };
+        let scopes = [Scope::User, Scope::System];
         for scope in scopes {
             let dir = tempfile::tempdir()?;
             let mut paths = Paths::test(dir.path().join("config"));
@@ -255,14 +248,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_first_install_removes_new_artifacts() -> Result<()> {
-        let scopes = if true {
-            vec![
-                crate::infra::scope::Scope::User,
-                crate::infra::scope::Scope::System,
-            ]
-        } else {
-            vec![crate::infra::scope::Scope::User]
-        };
+        let scopes = [Scope::User, Scope::System];
         for scope in scopes {
             let dir = tempfile::tempdir()?;
             let mut paths = Paths::test(dir.path().join("config"));

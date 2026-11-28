@@ -10,3 +10,22 @@ pub(crate) async fn run(
     // The application supplies its daemon future, preserving app -> system -> infra.
     operation.await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn foreground_run_drives_the_supplied_operation() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let paths = Paths::test(directory.path());
+        let mut ran = false;
+        run(&paths, false, async {
+            ran = true;
+            Ok(())
+        })
+        .await?;
+        assert!(ran);
+        Ok(())
+    }
+}

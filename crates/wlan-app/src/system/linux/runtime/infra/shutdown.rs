@@ -53,73 +53,19 @@ pub async fn until_stopped(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        path::Path,
-        process::{Child, Command, Stdio},
-        time::Instant,
-    };
-
-    struct TestChild(Child);
-    impl Drop for TestChild {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
+    use crate::infra::tests::unix_shutdown;
 
     #[test]
     fn termination_interrupts_busy_work_and_stalled_blocking_tasks() -> Result<()> {
-        // Signals only target these fresh test children, never the test runner
-        // or a real daemon. No portal, keyring or installed service is involved.
         for signal in [libc::SIGTERM, libc::SIGINT] {
-            let dir = tempfile::tempdir()?;
-            let mut child = TestChild(
-                Command::new(std::env::current_exe()?)
-                    .args([
-                        "--ignored",
-                        "--exact",
-                        "infra::shutdown::tests::signal_child",
-                        "--nocapture",
-                    ])
-                    .env("WLAN_SHUTDOWN_TEST_DIR", dir.path())
-                    .stdin(Stdio::null())
-                    .spawn()?,
-            );
-            let deadline = Instant::now() + Duration::from_secs(8);
-            while !dir.path().join("ready").exists() {
+            unix_shutdown::assert_signal_shutdown(|pid| {
+                // SAFETY: the harness supplies the live PID of its test child.
                 crate::infra::error::ensure!(
-                    child.0.try_wait()?.is_none(),
-                    "signal test child exited before ready"
+                    unsafe { libc::kill(pid as i32, signal) } == 0,
+                    "cannot signal test child"
                 );
-                crate::infra::error::ensure!(
-                    Instant::now() < deadline,
-                    "signal test child did not become ready"
-                );
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            // SAFETY: this is the PID of our live child; it has installed handlers.
-            crate::infra::error::ensure!(
-                unsafe { libc::kill(child.0.id() as i32, signal) } == 0,
-                "cannot signal test child"
-            );
-            loop {
-                if let Some(status) = child.0.try_wait()? {
-                    crate::infra::error::ensure!(
-                        status.success(),
-                        "signal test child failed: {status}"
-                    );
-                    break;
-                }
-                crate::infra::error::ensure!(
-                    Instant::now() < deadline,
-                    "daemon shutdown did not interrupt busy work"
-                );
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            crate::infra::error::ensure!(
-                dir.path().join("stopped").exists(),
-                "child skipped graceful shutdown"
-            );
+                Ok(())
+            })?;
         }
         Ok(())
     }
@@ -127,46 +73,6 @@ mod tests {
     #[test]
     #[ignore = "subprocess helper; invoked by termination_interrupts_busy_work_and_stalled_blocking_tasks"]
     fn signal_child() -> Result<()> {
-        let Some(directory) = std::env::var_os("WLAN_SHUTDOWN_TEST_DIR") else {
-            return Ok(());
-        };
-        let directory = Path::new(&directory);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        runtime.block_on(async {
-            let mut shutdown = Shutdown::new()?;
-            // Cancelling a wait must preserve the listener for subsequent shutdown signals.
-            assert!(
-                tokio::time::timeout(Duration::from_millis(10), shutdown.wait())
-                    .await
-                    .is_err()
-            );
-            let paths = crate::infra::paths::Paths::test(directory);
-            let work = async {
-                let _lock = crate::infra::control::operation_lock(&paths).await?;
-                let (started, ready) = tokio::sync::oneshot::channel();
-                tokio::task::spawn_blocking(move || {
-                    let _ = started.send(());
-                    // A native OS call can outlive cancellation of its async caller.
-                    loop {
-                        std::thread::park();
-                    }
-                });
-                ready.await?;
-                std::fs::write(directory.join("ready"), [])?;
-                std::future::pending::<Result<()>>().await
-            };
-            until_stopped(work, shutdown.wait()).await?;
-            let _lock = tokio::time::timeout(
-                Duration::from_millis(200),
-                crate::infra::control::operation_lock(&paths),
-            )
-            .await??;
-            Ok::<_, crate::infra::error::Error>(())
-        })?;
-        runtime.shutdown_timeout(RUNTIME_GRACE);
-        std::fs::write(directory.join("stopped"), [])?;
-        Ok(())
+        unix_shutdown::signal_child()
     }
 }

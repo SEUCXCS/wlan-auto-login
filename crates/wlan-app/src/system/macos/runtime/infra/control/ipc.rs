@@ -18,11 +18,11 @@ use tokio::sync::mpsc;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Endpoint {
+pub(crate) struct Endpoint {
     version: u32,
     scope: String,
-    address: String,
-    token: String,
+    pub(crate) address: String,
+    pub(crate) token: String,
     pid: u32,
 }
 
@@ -145,7 +145,7 @@ pub async fn serve_with_mode(
     ))
 }
 
-async fn request(paths: &Paths, action: Command) -> Result<Response> {
+pub(crate) async fn request(paths: &Paths, action: Command) -> Result<Response> {
     tokio::time::timeout(Duration::from_secs(2), async {
         let endpoint: Endpoint =
             serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json"))?)?;
@@ -214,78 +214,21 @@ pub async fn stop_managed(paths: &Paths) -> Result<()> {
     .await
     .map_err(|_| crate::infra::error::error!(Message::DaemonHasNotExitedStopTheRunningDaemon))
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[tokio::test]
-    async fn status_and_session_notifications_are_authenticated_versioned_and_scope_bound()
-    -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let paths = Paths::test(directory.path().join("user"));
-        let (server, mut commands) = serve(&paths).await?;
-        if let Ok(mut status) = server.status.write() {
-            status.credentials = CredentialState::WaitingForUnlock;
-        }
-        assert_eq!(
-            status(&paths).await?.credentials,
-            CredentialState::WaitingForUnlock
-        );
-        assert!(commands.try_recv().is_err());
-        let endpoint: Endpoint =
-            serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json"))?)?;
-        for (version, scope) in [(VERSION + 1, "user"), (VERSION, "system")] {
-            let mut socket = transport::connect(&endpoint.address).await?;
-            protocol::write(
-                &mut socket,
-                &Request {
-                    version,
-                    scope: scope.into(),
-                    token: endpoint.token.clone(),
-                    action: Command::Stop,
-                },
-            )
-            .await?;
-            assert!(protocol::read::<Response>(&mut socket).await.is_err());
-            assert!(commands.try_recv().is_err());
-        }
-        request(
-            &paths,
-            Command::SessionReady {
-                session: "session-1".into(),
-            },
-        )
-        .await?;
-        assert_eq!(
-            commands.recv().await,
-            Some(Signal::SessionReady("session-1".into()))
-        );
-        request(
-            &paths,
-            Command::SessionEnd {
-                session: "session-1".into(),
-            },
-        )
-        .await?;
-        assert_eq!(
-            commands.recv().await,
-            Some(Signal::SessionEnd("session-1".into()))
-        );
-        let mut other = Paths::test(directory.path().join("system"));
-        other.scope = crate::infra::scope::Scope::System;
-        let (_system, mut system_commands) = serve(&other).await?;
-        assert!(
-            request(
-                &other,
-                Command::SessionReady {
-                    session: "session-1".into()
-                }
-            )
-            .await
-            .is_err()
-        );
-        wake(&paths).await;
-        assert_eq!(commands.recv().await, Some(Signal::Wake));
-        assert!(system_commands.try_recv().is_err());
+    async fn local_socket_is_private() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::test(dir.path());
+        let (_server, _) = serve(&paths).await?;
+        let mode = fs::metadata(paths.runtime.join("daemon.sock"))?
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
         Ok(())
     }
 
@@ -304,48 +247,6 @@ mod tests {
         assert!(receiver.try_recv().is_err());
         wake(&paths).await;
         assert_eq!(receiver.recv().await, Some(Signal::Wake));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn local_ipc_requires_token_and_wakes_daemon() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let paths = Paths::test(dir.path());
-        let (_server, mut receiver) = serve(&paths).await?;
-        let endpoint: Endpoint =
-            serde_json::from_slice(&fs::read(paths.runtime.join("daemon-endpoint.json"))?)?;
-        let mut stranger = transport::connect(&endpoint.address).await?;
-        protocol::write(
-            &mut stranger,
-            &Request {
-                version: VERSION,
-                scope: "user".into(),
-                token: "x".repeat(64),
-                action: Command::Wake,
-            },
-        )
-        .await?;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), receiver.recv())
-                .await
-                .is_err()
-        );
-        wake(&paths).await;
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(1), receiver.recv()).await?,
-            Some(Signal::Wake)
-        );
-
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(paths.runtime.join("daemon.sock"))?
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o600
-            );
-        }
         Ok(())
     }
 }
