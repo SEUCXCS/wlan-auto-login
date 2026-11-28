@@ -1,4 +1,4 @@
-.TH WLANLOGIN 1 2026-11-26 wlanlogin "User Commands"
+.TH WLANLOGIN 1 2026-11-28 wlanlogin "User Commands"
 .SH NAME
 wlanlogin \- automatic login for the Student_CX campus Wi\-Fi portal
 .SH SYNOPSIS
@@ -12,17 +12,16 @@ wlanlogin \- automatic login for the Student_CX campus Wi\-Fi portal
 .SH DESCRIPTION
 .B wlanlogin
 signs in to the Student_CX captive portal and keeps the session online.
-Authentication is submitted only while the computer is connected to the
-Student_CX Wi\-Fi network; elsewhere, credentials can be saved in advance.
+Authentication runs only while connected to the Student_CX Wi\-Fi network;
+on other networks, credentials can still be saved in advance.
 .PP
 .B service install
-registers a systemd service that follows Wi\-Fi changes reported by
-NetworkManager, signs in automatically and checks the session periodically.
+registers a systemd service that watches NetworkManager for Wi\-Fi changes,
+signs in automatically and checks the session periodically.
 Every command accepts
 .BR \-\-help .
 .SH SCOPES
-Installations, configuration and credentials are kept separately for two
-scopes.
+Services, configuration and credentials are kept separately for two scopes.
 The scope options may appear before or after the command.
 Uninstall the service of one scope before switching to the other.
 .TP
@@ -30,59 +29,58 @@ Uninstall the service of one scope before switching to the other.
 The current user.
 The service starts when the user logs in, and credentials are stored in the
 Secret Service (GNOME Keyring, KWallet and similar).
-This is the default for ordinary users.
+Default for non\-root users.
 .TP
 .B \-\-system
-The whole machine.
+System\-wide.
 The service starts at boot, credentials are encrypted with
 .BR systemd\-creds (1),
 and root privileges are required.
-This is the default when run as root, for example through
+Default when run as root, for example through
 .BR sudo (8).
 .SH COMMANDS
 .TP
 .BR login " [\fIcredential options\fR]"
 Sign in with the saved credentials.
-A terminal form opens when credentials are missing.
-When the computer is not connected to Student_CX, the credentials are only
-saved.
-A manual login resumes automatic login that was paused by
+Opens a terminal form when credentials are missing.
+When not connected to Student_CX, credentials are saved without
+authenticating.
+A manual login resumes automatic login paused by
 .BR logout .
 .TP
 .BR logout " [" \-\-forget ]
 Sign out of the current session and pause automatic login for the current
-connection, also across service restarts.
-It resumes after a manual
+connection, even across service restarts.
+Automatic login resumes after a manual
 .B login
 in the same scope or after reconnecting to the Wi\-Fi network.
 .B \-\-forget
-also deletes the saved credentials of the scope, even when offline or when
-the portal request fails.
+also stops the background service and deletes the saved credentials of the
+scope, even when offline or when the portal request fails.
 .TP
 .BR "service install" " [\fIcredential options\fR]"
-Save credentials (required on first installation), install a private copy of
-the program as the background executable, then register and start the
-systemd unit.
+Save credentials (required on first installation), copy the executable for
+the background service, then register and start the systemd unit.
 Run it again after upgrading
 .B wlanlogin
 to update the background copy.
 .TP
 .BR "service uninstall" " [" \-\-purge ]
-Stop and remove the service, keeping the saved credentials.
+Stop and remove the service, keeping saved credentials.
 .B \-\-purge
-also removes the logs, configuration, runtime files and credentials of the
+also removes logs, configuration, runtime files and credentials of the
 scope.
 .TP
 .BR "service start" ", " "service stop" ", " "service restart"
 Start, stop or restart the installed service.
 .B stop
-keeps the installation and the automatic start.
+keeps the installation and automatic start enabled.
 .TP
 .B service status
 Show whether the service is installed, registered and running, and which
 version is installed.
 .TP
-.BR "service logs" " [" \-n " \fIlines\fR] [" \-f ]
+.BR "service logs" " [" \-n | \-\-lines " \fIlines\fR] [" \-f | \-\-follow ]
 Show the service log.
 .B \-n
 sets the number of recent lines (default 100; 0 shows no history);
@@ -91,17 +89,18 @@ follows new entries until interrupted with Ctrl+C.
 .TP
 .BR "service session\-ready" ", " "service session\-end"
 User scope only.
-For desktops that do not reach the standard graphical session target,
+For desktops or window managers that do not reach
+.BR graphical\-session.target ,
 .B session\-ready
 synchronizes the D\-Bus activation environment once the graphical session is
 ready, and
 .B session\-end
 withdraws that notice before logging out.
 .TP
-.BR "config get " \fIname\fR ", " "config set " "\fIname value\fR"
+.BR "config get " "\fIname\fR, " "config set " "\fIname value\fR"
 Read or save a configuration value of the scope.
 .TP
-.BR "config remove " \fIname\fR ", " "config list"
+.BR "config remove " "\fIname\fR, " "config list"
 Restore the default value, or list all values.
 The only key is
 .BR log.level :
@@ -130,7 +129,7 @@ Campus network account.
 .TP
 .BR \-p ", " \-\-password " \fIpassword\fR"
 Password.
-It is visible in the process list and shell history; prefer
+Visible in the process list and shell history; prefer
 .BR \-\-password\-stdin .
 .TP
 .B \-\-password\-stdin
@@ -138,12 +137,13 @@ Read one line from standard input as the password.
 Cannot be combined with
 .BR \-p .
 .TP
-.BR \-\-line " \fBfree1\fR|\fBfree2\fR|\fBcampus\fR"
+.BR \-\-line " " free1 | free2 | campus
 Portal line: free line 1, free line 2, or campus intranet.
 .TP
 .B \-\-remember\-me
-Save the account and password in the credential store of the scope (when not
-connected to Student_CX, credentials are saved without authenticating).
+Save the account and password in the credential store of the scope
+.RB ( "service install"
+always saves credentials).
 .TP
 .B \-\-interactive
 Open the terminal form even when credentials are saved, to change the
@@ -152,10 +152,11 @@ account, password or line.
 .B \-\-non\-interactive
 Fail instead of opening the terminal form when information is missing.
 .TP
-.BR \-\-credential\-store " \fBnative\fR|\fBprotected\-file\fR"
+.BR \-\-credential\-store " " native | protected\-file
 System scope credential store.
 .B native
-uses systemd\-creds;
+uses
+.BR systemd\-creds (1);
 .B protected\-file
 stores the account and password in plain text in a file readable only by
 root, for older systems without systemd\-creds.

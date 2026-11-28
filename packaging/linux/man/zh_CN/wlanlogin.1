@@ -1,4 +1,4 @@
-.TH WLANLOGIN 1 2026-11-26 wlanlogin "用户命令"
+.TH WLANLOGIN 1 2026-11-28 wlanlogin "用户命令"
 .\" Allow breaks between CJK characters; justification cannot stretch CJK text,
 .\" so adjust left (AD for groff 1.23+, .ad for 1.22).
 .\" A source line break renders as a space, so keep joined Chinese text on one line.
@@ -17,13 +17,13 @@ wlanlogin \- Student_CX 校园网自动登录工具
 .BR \-\-help " | " \-\-version
 .SH 描述
 .B wlanlogin
-登录 Student_CX 校园网门户并保持在线。仅在接入 Student_CX 无线网络时提交认证；其他网络下可预先保存凭据。
+用于登录 Student_CX 校园网门户并保持在线。仅在接入 Student_CX 无线网络时提交认证；在其他网络下可预先保存凭据。
 .PP
 .B service install
-注册 systemd 后台服务：服务跟随 NetworkManager 报告的 Wi\-Fi 变化自动登录，并定期检查会话。各命令均支持
+注册 systemd 后台服务，监听 NetworkManager 的 Wi\-Fi 状态变化，接入后自动登录并定期检查会话。各命令均支持
 .BR \-\-help 。
 .SH 作用域
-安装、配置与凭据按两种作用域分别保存。作用域参数可位于命令之前或之后。切换作用域前，请先卸载原作用域的服务。
+服务、配置与凭据按两种作用域分别保存。作用域参数可位于命令之前或之后。切换作用域前，请先卸载原作用域的服务。
 .TP
 .B \-\-user
 用户模式：当前用户登录后启动服务，凭据保存在 Secret Service（GNOME Keyring、KWallet 等）。普通用户默认使用此模式。
@@ -46,10 +46,10 @@ wlanlogin \- Student_CX 校园网自动登录工具
 .B login
 或重新接入无线网络后恢复。
 .B \-\-forget
-同时删除该作用域已保存的凭据；离线或门户请求失败时仍会删除。
+同时停止后台服务并删除该作用域已保存的凭据，离线或门户请求失败时仍会删除。
 .TP
 .BR "service install" " [\fI凭据选项\fR]"
-保存凭据（首次安装时必须保存），将程序副本安装为后台专用程序，然后注册并启动 systemd 单元。升级
+保存凭据（首次安装时必须保存），复制一份后台程序副本，然后注册并启动 systemd 单元。升级
 .B wlanlogin
 后再次执行即可更新后台副本。
 .TP
@@ -66,7 +66,7 @@ wlanlogin \- Student_CX 校园网自动登录工具
 .B service status
 查看服务的安装、注册与运行状态以及已安装的版本。
 .TP
-.BR "service logs" " [" \-n " \fI行数\fR] [" \-f ]
+.BR "service logs" " [" \-n | \-\-lines " \fI行数\fR] [" \-f | \-\-follow ]
 查看服务日志。
 .B \-n
 指定显示的最近行数（默认 100；0 表示不显示历史日志）；
@@ -74,16 +74,18 @@ wlanlogin \- Student_CX 校园网自动登录工具
 持续显示新日志，按 Ctrl+C 退出。
 .TP
 .BR "service session\-ready" "、" "service session\-end"
-仅限用户模式。桌面环境未使用标准图形会话目标时，
+仅限用户模式。在不会启动
+.B graphical\-session.target
+的桌面环境或窗口管理器中，
 .B session\-ready
-在图形会话就绪后同步 D\-Bus 激活环境，
+用于在图形会话就绪后同步 D\-Bus 激活环境，
 .B session\-end
 在注销前撤销该通知。
 .TP
-.BR "config get " \fI名称\fR "、" "config set " "\fI名称 值\fR"
+.BR "config get " "\fI名称\fR、" "config set " "\fI名称 值\fR"
 读取或保存该作用域的配置值。
 .TP
-.BR "config remove " \fI名称\fR "、" "config list"
+.BR "config remove " "\fI名称\fR、" "config list"
 恢复默认值，或列出全部配置值。目前仅有
 .B log.level
 一项：
@@ -117,11 +119,11 @@ Linux 未定义任何权限，列表为空。
 .B \-p
 同时使用。
 .TP
-.BR \-\-line " \fBfree1\fR|\fBfree2\fR|\fBcampus\fR"
+.BR \-\-line " " free1 | free2 | campus
 线路：免费 1、免费 2 或校园内网。
 .TP
 .B \-\-remember\-me
-将账号和密码保存至该作用域的凭据存储（未接入 Student_CX 时仅保存凭据）。
+将账号和密码保存至该作用域的凭据存储（\fBservice install\fR 始终保存凭据）。
 .TP
 .B \-\-interactive
 即使已保存凭据，也打开终端表单以修改账号、密码或线路。
@@ -129,10 +131,11 @@ Linux 未定义任何权限，列表为空。
 .B \-\-non\-interactive
 缺少必要信息时直接报错，不打开终端表单。
 .TP
-.BR \-\-credential\-store " \fBnative\fR|\fBprotected\-file\fR"
+.BR \-\-credential\-store " " native | protected\-file
 系统模式的凭据存储。
 .B native
-使用 systemd\-creds；
+使用
+.BR systemd\-creds (1)；
 .B protected\-file
 将账号和密码以明文保存在仅 root 可读的文件中，供缺少 systemd\-creds 的旧系统使用。
 .SH 环境变量
@@ -230,8 +233,8 @@ wlanlogin \-\-user service logs \-f
 .EE
 .RE
 .SH 注意
-软件包只安装命令本身。升级软件包后，请在已安装服务的每个作用域重新执行
-.BR "service install" ；移除软件包前，请先在该作用域执行
+软件包只安装命令本身。如已安装后台服务，升级软件包后需在对应作用域重新执行
+.BR "service install" ；移除软件包前，请先执行
 .BR "service uninstall" 。
 .SH 参见
 .BR systemctl (1),

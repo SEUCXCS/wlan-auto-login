@@ -1,0 +1,290 @@
+.TH WLANLOGIN 1 2026-11-28 wlanlogin "General Commands Manual"
+.SH NAME
+wlanlogin \- automatic login for the Student_CX campus Wi\-Fi portal
+.SH SYNOPSIS
+.B wlanlogin
+.RB [ \-\-user | \-\-system ]
+.I command
+.RI [ options ]
+.br
+.B wlanlogin
+.BR \-\-help " | " \-\-version
+.SH DESCRIPTION
+.B wlanlogin
+signs in to the Student_CX captive portal and keeps the session online.
+Authentication runs only while connected to the Student_CX Wi\-Fi network;
+on other networks, credentials can still be saved in advance.
+.PP
+.B service install
+copies the signed
+.I wlanlogin.app
+bundle into Application Support and registers a LaunchAgent or LaunchDaemon
+through SMAppService (macOS 13.0 or later).
+The background service monitors Wi\-Fi changes through CoreWLAN and Location
+Services, signs in automatically and checks the session periodically.
+Every command accepts
+.BR \-\-help .
+.SH SCOPES
+Services, configuration and credentials are kept separately for two scopes.
+The scope options may appear before or after the command.
+Uninstall the service of one scope before switching to the other.
+.TP
+.B \-\-user
+The current user.
+Registers a LaunchAgent that starts at login and stores credentials in the
+login keychain (service
+.IR dev.cxcs.tools.wlanlogin ,
+account
+.IR saved\-login ).
+Default for non\-root users.
+.TP
+.B \-\-system
+System\-wide.
+Registers a LaunchDaemon that starts at boot and stores credentials in the
+system keychain (service
+.IR dev.cxcs.tools.wlanlogin.system ,
+account
+.IR saved\-login ).
+Requires root privileges and is the default when run as root, for example
+through
+.BR sudo (8).
+Reading the Wi\-Fi SSID still relies on Location Services authorization in an
+active desktop session.
+.SH COMMANDS
+.TP
+.BR login " [\fIcredential options\fR]"
+Sign in with the saved credentials.
+Opens a terminal form when credentials are missing.
+When not connected to Student_CX, credentials are saved without
+authenticating.
+A manual login resumes automatic login paused by
+.BR logout .
+.TP
+.BR logout " [" \-\-forget ]
+Sign out of the current session and pause automatic login for the current
+connection, even across service restarts.
+Automatic login resumes after a manual
+.B login
+in the same scope or after reconnecting to the Wi\-Fi network.
+.B \-\-forget
+also stops the background service and deletes the saved credentials of the
+scope, even when offline or when the portal request fails.
+.TP
+.BR "service install" " [\fIcredential options\fR]"
+Save credentials (required on first installation), copy the signed
+.I wlanlogin.app
+bundle as the background installation, authorize Keychain and Location
+access, then register and start the service through SMAppService.
+Run it again after upgrading and re\-signing
+.I wlanlogin.app
+to update the background copy.
+.TP
+.BR "service uninstall" " [" \-\-purge ]
+Stop and unregister the service and remove the background bundle copy,
+keeping saved credentials.
+.B \-\-purge
+also removes logs, configuration, runtime files and credentials of the
+scope.
+Location Services permission is managed by macOS and is not reset.
+.TP
+.BR "service start" ", " "service stop" ", " "service restart"
+Start, stop or restart the installed service.
+.B stop
+keeps the installation and automatic start enabled.
+.TP
+.B service status
+Show whether the service is installed, registered and running, and which
+version is installed.
+.TP
+.BR "service logs" " [" \-n | \-\-lines " \fIlines\fR] [" \-f | \-\-follow ]
+Show the service log.
+.B \-n
+sets the number of recent lines (default 100; 0 shows no history);
+.B \-f
+follows new entries until interrupted with Ctrl+C.
+.TP
+.BR "config get " "\fIname\fR, " "config set " "\fIname value\fR"
+Read or save a configuration value of the scope.
+.TP
+.BR "config remove " "\fIname\fR, " "config list"
+Restore the default value, or list all values.
+The only key is
+.BR log.level :
+.B info
+(default) logs failed portal requests;
+.B debug
+logs every portal request and response with credentials, cookies and device
+identifiers redacted.
+Restart the service to apply the change.
+.TP
+.BR "permission list" ", " "permission check " "[\fIid\fR], " "permission get " \fIid\fR
+List, check or request macOS permissions; each accepts
+.BR \-\-json .
+Available IDs are
+.B macos.location
+(Location Services for reading the Wi\-Fi SSID) and
+.B macos.keychain
+(Keychain access for the selected scope).
+.B check
+queries status without prompting;
+.B get
+requests the permission in an interactive terminal.
+.TP
+.B daemon
+Run the automatic login loop in the foreground of the current process.
+.SH CREDENTIAL OPTIONS
+Accepted by
+.B login
+and
+.BR "service install" .
+.TP
+.BR \-u ", " \-\-username " \fIusername\fR"
+Campus network account.
+.TP
+.BR \-p ", " \-\-password " \fIpassword\fR"
+Password.
+Visible in the process list and shell history; prefer
+.BR \-\-password\-stdin .
+.TP
+.B \-\-password\-stdin
+Read one line from standard input as the password.
+Cannot be combined with
+.BR \-p .
+.TP
+.BR \-\-line " " free1 | free2 | campus
+Portal line: free line 1, free line 2, or campus intranet.
+.TP
+.B \-\-remember\-me
+Save the account and password in the keychain of the scope
+.RB ( "service install"
+always saves credentials).
+.TP
+.B \-\-interactive
+Open the terminal form even when credentials are saved, to change the
+account, password or line.
+.TP
+.B \-\-non\-interactive
+Fail instead of opening the terminal form when information is missing.
+.SH ENVIRONMENT
+.TP
+.B WLANLOGIN_USERNAME
+Default for
+.BR \-\-username .
+.TP
+.B WLANLOGIN_PASSWORD
+Default for
+.BR \-\-password .
+.TP
+.B WLANLOGIN_LINE
+Default for
+.BR \-\-line .
+.TP
+.B RUST_LOG
+Overrides the log filter of a foreground run, for example
+.BR RUST_LOG=wlanlogin::portal::page_config=debug .
+.SH FILES
+.TP
+.I ~/Library/Application Support/SEUCXCS/wlanlogin/
+User scope configuration
+.RI ( config.json ),
+line preference
+.RI ( preferences.json ),
+service log
+.RI ( daemon.log )
+and runtime files.
+.TP
+.I ~/Library/Application Support/SEUCXCS/wlanlogin/wlanlogin.app
+User scope background application bundle.
+.TP
+.I /Library/Application Support/SEUCXCS/wlanlogin/state/
+System scope configuration, line preference and service log.
+.TP
+.I /Library/Application Support/SEUCXCS/wlanlogin/wlanlogin.app
+System scope background application bundle.
+.TP
+.I /var/run/SEUCXCS/wlanlogin/
+System scope runtime files.
+.TP
+.I dev.cxcs.tools.wlanlogin
+Launchd job label in both scopes (embedded as
+.IR dev.cxcs.tools.wlanlogin.plist ).
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+The command failed; the reason is printed on standard error.
+.TP
+.B 2
+Invalid command line.
+.SH EXAMPLES
+Install the user service and check it:
+.PP
+.RS
+.EX
+wlanlogin \-\-user service install
+wlanlogin \-\-user service status
+.EE
+.RE
+.PP
+Check or request macOS permissions:
+.PP
+.RS
+.EX
+wlanlogin \-\-user permission check
+wlanlogin \-\-user permission get macos.location
+.EE
+.RE
+.PP
+Sign in from a script without exposing the password:
+.PP
+.RS
+.EX
+printf \(aq%s\en\(aq "$PASSWORD" | wlanlogin login \-u 2026000000 \e
+    \-\-password\-stdin \-\-line free1 \-\-non\-interactive
+.EE
+.RE
+.PP
+Switch account or line:
+.PP
+.RS
+.EX
+wlanlogin logout
+wlanlogin login \-\-interactive \-\-remember\-me
+.EE
+.RE
+.PP
+Collect portal diagnostics:
+.PP
+.RS
+.EX
+wlanlogin \-\-user config set log.level debug
+wlanlogin \-\-user service restart
+wlanlogin \-\-user service logs \-f
+.EE
+.RE
+.SH NOTES
+Requires macOS 13.0 or later and a signed
+.I wlanlogin.app
+bundle.
+Do not modify files inside the bundle after signing, and reuse the same
+signing identity when upgrading so Location Services and Keychain approvals
+carry over.
+.PP
+If background activity requires approval after
+.BR "service install" ,
+enable CXCS WLAN Login under System Settings \(-> General \(-> Login Items,
+then run
+.BR "wlanlogin \-\-user service start" .
+.PP
+Apple requires notarization for native LaunchDaemons, so locally
+self\-signed bundles may be rejected in
+.B \-\-system
+scope.
+.SH SEE ALSO
+.BR launchctl (1),
+.BR codesign (1),
+.BR security (1)
+.PP
+https://github.com/SEUCXCS/wlan\-auto\-login
