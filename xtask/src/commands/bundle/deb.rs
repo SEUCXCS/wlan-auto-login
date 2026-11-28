@@ -26,8 +26,8 @@ pub fn run(options: &DebArgs) -> Result<()> {
     let architecture = architecture(target)?;
     // Fail before compiling when the host or the sources cannot produce a package.
     linux::require_tools(
-        &["dpkg-deb", "dpkg-shlibdeps"],
-        "install dpkg-dev on a Debian or Ubuntu host",
+        &["dpkg", "dpkg-deb", "dpkg-shlibdeps", "gzip"],
+        "install dpkg-dev and gzip on a Debian or Ubuntu host",
     )?;
     let root = workspace::root()?;
     let upstream = env!("CARGO_PKG_VERSION");
@@ -208,9 +208,9 @@ fn substvar(output: &str) -> Result<&str> {
 
 /// Refuse packages that would not install on the oldest supported release.
 fn require_supported_glibc(depends: &str) -> Result<()> {
-    let Some(required) = glibc_requirement(depends) else {
-        return Ok(());
-    };
+    let required = glibc_requirement(depends).context(
+        "dpkg-shlibdeps reported no versioned libc6 dependency; cannot verify Debian 12 glibc compatibility",
+    )?;
     let status = Command::new("dpkg")
         .args(["--compare-versions", required, "le", OLDEST_GLIBC])
         .status()
@@ -223,9 +223,12 @@ fn require_supported_glibc(depends: &str) -> Result<()> {
 }
 
 fn glibc_requirement(depends: &str) -> Option<&str> {
-    depends
-        .split(", ")
-        .find_map(|dependency| dependency.strip_prefix("libc6 (>= ")?.strip_suffix(')'))
+    depends.split(", ").find_map(|dependency| {
+        dependency
+            .strip_prefix("libc6 (>= ")?
+            .strip_suffix(')')
+            .filter(|version| !version.is_empty())
+    })
 }
 
 #[cfg(test)]
@@ -270,5 +273,18 @@ mod tests {
             Some("2.39")
         );
         assert_eq!(glibc_requirement("libdbus-1-3 (>= 1.10)"), None);
+        assert_eq!(glibc_requirement("libc6, libdbus-1-3 (>= 1.10)"), None);
+        assert_eq!(glibc_requirement("libc6 (>= )"), None);
+    }
+
+    #[test]
+    fn glibc_floor_rejects_missing_or_unversioned_libc6() {
+        for depends in [
+            "libdbus-1-3 (>= 1.10)",
+            "libc6, libdbus-1-3 (>= 1.10)",
+            "libc6 (>= )",
+        ] {
+            assert!(require_supported_glibc(depends).is_err());
+        }
     }
 }
