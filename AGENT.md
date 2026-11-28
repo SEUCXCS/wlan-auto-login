@@ -48,7 +48,7 @@ cargo xtask bundle macos [--codesign-identity <id>]
 cargo xtask bundle windows --target x86_64-pc-windows-msvc
 cargo xtask bundle deb [--revision <n>]    # Debian 12 host with dpkg-dev (oldest supported glibc)
 cargo xtask bundle rpm [--release <n>]     # rpmbuild host: Fedora rpm-build or Debian/Ubuntu rpm
-(cd packaging/archlinux && makepkg -s)      # Arch: packages the committed HEAD
+(cd packaging/linux/distro/archlinux && makepkg -s) # Arch: packages the committed HEAD
 ```
 
 - Safe CLI smoke checks: use `--help`, `<subcommand> --help`, and `--version` only. Never invoke operational commands without `--help` to probe behavior.
@@ -67,7 +67,7 @@ Module roots in `crates/wlan-app/src`: `app.rs`, `infra.rs`, `system.rs`.
   - `system/<platform>/runtime/infra` compiles once via the `infra.rs` facade; shared state/protocol stays in `infra/control`.
   - Keep native API, XML encoding, ACL, and task-registration logic out of `system/shared`. Re-export `system/shared/flow` defaults when a platform has no override; never stub an unimplemented operation with success.
 - **`xtask` layout**: `main.rs` delegates to `commands::run`; `cli.rs` + `cli/bundle.rs` declare commands (build flags after platform subcommand; `--codesign-identity` macOS-only); `commands/<cmd>.rs` and `commands/bundle/<platform>.rs` implement tasks; `support/` must not depend on `cli` or `commands` and locates binaries via Cargo JSON output.
-- **Linux packages**: `.deb` (`packaging/debian/`), `.rpm` (`packaging/fedora/wlanlogin.spec`), and Arch (`packaging/archlinux/PKGBUILD`) ship only `/usr/bin/wlanlogin`, license, README, and both man pages in `packaging/linux/man/`. Never ship systemd units, enable services, or write runtime data from a package. Keep dependencies and installed files synced across all three packages, and update both man pages on any CLI/config/env/path change.
+- **Linux packages**: `.deb` (`packaging/linux/distro/debian/`), `.rpm` (`packaging/linux/distro/fedora/wlanlogin.spec`), and Arch (`packaging/linux/distro/archlinux/PKGBUILD`) ship only `/usr/bin/wlanlogin`, license, README, and both man pages in `packaging/linux/man/`. Never ship systemd units, enable services, or write runtime data from a package. Keep dependencies and installed files synced across all three packages, and update both man pages on any CLI/config/env/path change.
 - **Linux package floors & dates**: `.deb` targets Debian 12 / Ubuntu 24.04 (`libc6 <= 2.36`, build on Debian 12); `.rpm` targets Fedora 43 (`GLIBC_* <= 2.42`, fail if none generated, packages prebuilt CLI from `%{_sourcedir}`). Package changelog dates format in UTC from `SOURCE_DATE_EPOCH` (required for archives without `.git`) or current Git `HEAD`. User-facing release notes live on GitHub Releases.
 - **Cleanup boundary**: Delete only app-owned files and empty `wlanlogin` directories. Preserve the shared `SEUCXCS` parent and sibling tools, and validate symlink / reparse-point boundaries.
 

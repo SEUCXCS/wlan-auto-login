@@ -210,5 +210,5 @@ jobs:
           useradd --create-home builder
           mkdir -p "$RUNNER_TEMP/cargo-home"
           chown -R builder: "$GITHUB_WORKSPACE" "$RUNNER_TEMP/cargo-home"
-          cd packaging/archlinux
+          cd packaging/linux/distro/archlinux
           runuser -u builder -- env CARGO_HOME="$RUNNER_TEMP/cargo-home" makepkg --noconfirm

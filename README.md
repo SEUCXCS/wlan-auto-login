@@ -456,14 +456,14 @@ cargo xtask bundle rpm
 
 **Arch Linux（`.pkg.tar.zst`）**
 
-`packaging/archlinux/PKGBUILD` 打包当前检出的已提交 HEAD：
+`packaging/linux/distro/archlinux/PKGBUILD` 打包当前检出的已提交 HEAD：
 
 ```sh
-cd packaging/archlinux
+cd packaging/linux/distro/archlinux
 makepkg -s
 ```
 
-产物为 `packaging/archlinux/wlanlogin-<pkgver>-<pkgrel>-<arch>.pkg.tar.zst`，`pkgver` 形如 `<version>.r<提交数>.g<短哈希>`。
+产物为 `packaging/linux/distro/archlinux/wlanlogin-<pkgver>-<pkgrel>-<arch>.pkg.tar.zst`，`pkgver` 形如 `<version>.r<提交数>.g<短哈希>`。
 
 </details>
 
@@ -524,7 +524,7 @@ cargo xtask bundle windows --target x86_64-pc-windows-msvc
 | `crates/wlan-app` | `wlanlogin-cli`，CLI、TUI、后台服务与平台集成 |
 | `xtask` | 应用打包与架构边界检查工具 |
 | `packaging/windows` | Windows 安装向导与 MSI 自定义动作 |
-| `packaging/{macos,debian,fedora,archlinux,linux}` | macOS 应用资源、Linux 软件包定义与双语 man 手册 |
+| `packaging/{macos,linux}` | macOS 应用资源与 man 手册、Linux 发行版打包定义与双语 man 手册 |
 | `docs` | 校园网门户协议说明 |
 
 本地验证命令：

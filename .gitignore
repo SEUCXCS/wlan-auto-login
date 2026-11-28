@@ -12,7 +12,7 @@
 /.test-tmp/
 
 # Arch Linux makepkg output
-/packaging/archlinux/src/
-/packaging/archlinux/pkg/
-/packaging/archlinux/wlanlogin/
-/packaging/archlinux/*.pkg.tar.*
+/packaging/linux/distro/archlinux/src/
+/packaging/linux/distro/archlinux/pkg/
+/packaging/linux/distro/archlinux/wlanlogin/
+/packaging/linux/distro/archlinux/*.pkg.tar.*

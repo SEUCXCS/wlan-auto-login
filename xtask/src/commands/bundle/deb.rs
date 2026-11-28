@@ -33,7 +33,7 @@ pub fn run(options: &DebArgs) -> Result<()> {
     let upstream = env!("CARGO_PKG_VERSION");
     let version = debian_version(upstream, options.revision);
     let date = linux::package_date(root, "+%a, %d %b %Y %H:%M:%S %z")?;
-    let control_template = fs::read_to_string(root.join("packaging/debian/control"))?;
+    let control_template = fs::read_to_string(root.join("packaging/linux/distro/debian/control"))?;
     let maintainer = control_field(&control_template, "Maintainer")?;
 
     let binary = cargo::build(
@@ -58,7 +58,7 @@ pub fn run(options: &DebArgs) -> Result<()> {
     let documents = package.join("usr/share/doc").join(identity::APP_NAME);
     write_file(
         &documents.join("copyright"),
-        &fs::read_to_string(root.join("packaging/debian/copyright"))?.replace(
+        &fs::read_to_string(root.join("packaging/linux/distro/debian/copyright"))?.replace(
             "@LICENSE@",
             fs::read_to_string(root.join("LICENSE"))?.trim_end(),
         ),
@@ -136,7 +136,7 @@ fn control_field<'a>(control: &'a str, name: &str) -> Result<&'a str> {
     control
         .lines()
         .find_map(|line| line.strip_prefix(name)?.strip_prefix(": "))
-        .with_context(|| format!("packaging/debian/control has no {name} field"))
+        .with_context(|| format!("packaging/linux/distro/debian/control has no {name} field"))
 }
 
 fn debian_changelog_entry(version: &str, upstream: &str, maintainer: &str, date: &str) -> String {

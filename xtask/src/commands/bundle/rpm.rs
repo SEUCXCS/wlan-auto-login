@@ -33,7 +33,8 @@ pub fn run(options: &RpmArgs) -> Result<()> {
     let upstream = env!("CARGO_PKG_VERSION");
     let version = rpm_version(upstream)?;
     let date = linux::package_date(root, "+%a %b %d %Y")?;
-    let spec_template = fs::read_to_string(root.join("packaging/fedora/wlanlogin.spec"))?;
+    let spec_template =
+        fs::read_to_string(root.join("packaging/linux/distro/fedora/wlanlogin.spec"))?;
 
     let binary = cargo::build(
         root,
