@@ -7,7 +7,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use super::linux::{self, release_date, stage, write_file};
+use super::linux::{self, stage, write_file};
 use crate::{
     cli::bundle::RpmArgs,
     support::{cargo, identity, platform, process, workspace},
@@ -32,8 +32,7 @@ pub fn run(options: &RpmArgs) -> Result<()> {
     let root = workspace::root()?;
     let upstream = env!("CARGO_PKG_VERSION");
     let version = rpm_version(upstream)?;
-    let changelog = fs::read_to_string(root.join("CHANGELOG.md"))?;
-    let date = linux::format_date(release_date(&changelog, upstream)?, "+%a %b %d %Y")?;
+    let date = linux::package_date(root, "+%a %b %d %Y")?;
     let spec_template = fs::read_to_string(root.join("packaging/fedora/wlanlogin.spec"))?;
 
     let binary = cargo::build(
@@ -54,7 +53,7 @@ pub fn run(options: &RpmArgs) -> Result<()> {
     // The spec installs these sources under the names it expects in %{_sourcedir}.
     let sources = staging.path().join("SOURCES");
     stage(&binary, &sources.join(identity::APP_NAME), 0o755)?;
-    for document in ["LICENSE", "README.md", "CHANGELOG.md"] {
+    for document in ["LICENSE", "README.md"] {
         stage(&root.join(document), &sources.join(document), 0o644)?;
     }
     let page = format!("{}.1", identity::APP_NAME);

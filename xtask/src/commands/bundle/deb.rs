@@ -7,7 +7,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use super::linux::{self, release_date, stage, write_file};
+use super::linux::{self, stage, write_file};
 use crate::{
     cli::bundle::DebArgs,
     support::{cargo, identity, platform, process, workspace},
@@ -32,11 +32,7 @@ pub fn run(options: &DebArgs) -> Result<()> {
     let root = workspace::root()?;
     let upstream = env!("CARGO_PKG_VERSION");
     let version = debian_version(upstream, options.revision);
-    let changelog = fs::read_to_string(root.join("CHANGELOG.md"))?;
-    let date = linux::format_date(
-        release_date(&changelog, upstream)?,
-        "+%a, %d %b %Y %H:%M:%S %z",
-    )?;
+    let date = linux::package_date(root, "+%a, %d %b %Y %H:%M:%S %z")?;
     let control_template = fs::read_to_string(root.join("packaging/debian/control"))?;
     let maintainer = control_field(&control_template, "Maintainer")?;
 
@@ -68,7 +64,6 @@ pub fn run(options: &DebArgs) -> Result<()> {
         ),
     )?;
     stage_document(&root.join("README.md"), &documents.join("README.md"))?;
-    stage_document(&root.join("CHANGELOG.md"), &documents.join("changelog"))?;
     let debian_changelog = documents.join("changelog.Debian");
     write_file(
         &debian_changelog,
@@ -146,7 +141,7 @@ fn control_field<'a>(control: &'a str, name: &str) -> Result<&'a str> {
 
 fn debian_changelog_entry(version: &str, upstream: &str, maintainer: &str, date: &str) -> String {
     format!(
-        "{} ({version}) unstable; urgency=medium\n\n  * Package upstream release {upstream}; see changelog.gz.\n\n -- {maintainer}  {date}\n",
+        "{} ({version}) unstable; urgency=medium\n\n  * Package upstream release {upstream}.\n    See README.md.gz for the release notes link.\n\n -- {maintainer}  {date}\n",
         identity::APP_NAME
     )
 }

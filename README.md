@@ -11,7 +11,7 @@
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)](#安装指南)
 [![License](https://img.shields.io/github/license/SEUCXCS/wlan-auto-login?style=flat-square)](LICENSE)
 
-[下载 Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) · [快速开始](#快速开始) · [使用指南](#使用指南) · [协议文档](#相关文档) · [提交问题](https://github.com/SEUCXCS/wlan-auto-login/issues)
+[下载与版本更新](https://github.com/SEUCXCS/wlan-auto-login/releases) · [快速开始](#快速开始) · [使用指南](#使用指南) · [协议文档](#相关文档) · [提交问题](https://github.com/SEUCXCS/wlan-auto-login/issues)
 
 </div>
 
@@ -29,7 +29,7 @@
 | 平台 | 推荐安装方式 |
 | --- | --- |
 | **Windows** | 从 [Releases](https://github.com/SEUCXCS/wlan-auto-login/releases) 下载 `wlanlogin-windows-setup-<arch>.exe`，运行安装向导并填写账号即可。 |
-| **Linux** | 下载对应架构二进制放到 `~/.local/bin/wlanlogin`，执行 `wlanlogin --user service install`。 |
+| **Linux** | 从 Releases 安装 `.deb` / `.rpm` / Arch 软件包，或将二进制放入 `~/.local/bin/wlanlogin`，再执行 `wlanlogin --user service install`。 |
 | **macOS** | 下载 `wlanlogin.app` 放入 `~/Applications`，完成[本地签名](#macos)并软链至 PATH 后执行 `wlanlogin --user service install`。 |
 
 ## 安装指南
@@ -122,7 +122,7 @@ sudo dnf install ./wlanlogin-<version>-<release>.x86_64.rpm
 sudo pacman -U ./wlanlogin-<pkgver>-<pkgrel>-x86_64.pkg.tar.zst
 ```
 
-软件包将命令安装为 `/usr/bin/wlanlogin`，附带英文与中文 man 手册（`man wlanlogin`；中文环境如 `LANG=zh_CN.UTF-8` 下显示中文版），并依赖 NetworkManager、systemd 与 D-Bus；它不注册服务，也不预置配置或凭据。安装后执行上文第 3 步的 `service install`，系统模式使用 `sudo wlanlogin --system service install`。
+软件包安装 `/usr/bin/wlanlogin` 与中英文 man 手册（`man wlanlogin`，中文环境如 `LANG=zh_CN.UTF-8` 下显示中文版），并自动声明 NetworkManager、systemd 与 D-Bus 依赖。后台服务仍通过上文第 3 步的 `service install` 注册（系统模式使用 `sudo wlanlogin --system service install`）。
 
 升级软件包后，在原作用域重新执行 `service install` 更新后台副本；移除软件包前，先执行同作用域的 `service uninstall`（需清除配置与凭据时加 `--purge`）。
 
@@ -421,15 +421,20 @@ install -Dm 0755 target/release/wlanlogin "$HOME/.local/bin/wlanlogin"
 
 <a id="build-linux-packages"></a>
 
-#### 软件包打包
+<details>
+<summary>构建 Debian / Fedora / Arch 软件包</summary>
 
-**Debian / Ubuntu**：`.deb` 最低支持 Debian 12 与 Ubuntu 24.04。共享库依赖版本由 `dpkg-shlibdeps` 按构建主机计算，因此须在 Debian 12（glibc 2.36）或更旧的系统上构建；若二进制要求的 glibc 高于 2.36，打包会直接失败。在 Debian 12 主机上额外安装 `dpkg-dev`（`build-essential` 已包含）后执行：
+`.deb` 与 `.rpm` 的共享库依赖均按构建主机生成：`.deb` 最低支持 Debian 12 / Ubuntu 24.04（glibc 2.36），`.rpm` 最低支持 Fedora 43（glibc 2.42），二进制要求的 glibc 高于对应下限时打包会直接报错。两者的变更记录日期默认取自当前 Git 提交；使用不含 `.git` 的源码压缩包构建时，需通过 `SOURCE_DATE_EPOCH` 指定 Unix 秒级时间戳。
+
+**Debian / Ubuntu（`.deb`）**
+
+在 Debian 12（或更旧）主机安装 `dpkg-dev` 后执行：
 
 ```sh
 cargo xtask bundle deb
 ```
 
-其他发行版可在 Debian 12 容器中构建：
+也可在 Debian 12 容器中构建：
 
 ```sh
 podman run --rm -v "$PWD":/work -w /work docker.io/library/rust:1-bookworm sh -c '
@@ -437,24 +442,30 @@ podman run --rm -v "$PWD":/work -w /work docker.io/library/rust:1-bookworm sh -c
   cargo xtask bundle deb --target-dir target/debian12'
 ```
 
-产物为 `<target-dir>/release/bundle/wlanlogin_<version>-<revision>_<arch>.deb`（默认 target 目录为 `target`），指定 `--target` 时路径增加 target 层级，以输出的 `Bundle:` 路径为准。同一版本重新打包时用 `--revision 2` 等递增 Debian 修订号。软件包附带 `CHANGELOG.md`、由其生成的 Debian 变更记录及中英文 man 手册；打包要求 `CHANGELOG.md` 已有当前版本的 `## [<version>] - <YYYY-MM-DD>` 条目。
+产物位于 `<target-dir>/release/bundle/wlanlogin_<version>-<revision>_<arch>.deb`（同版本重打可通过 `--revision` 递增修订号）。
 
-**Fedora**：`.rpm` 最低支持 Fedora 43。共享库依赖由 `rpmbuild` 按构建主机生成，若二进制要求的 glibc 高于 Fedora 43 的 2.42，打包会直接失败。在 Fedora 上额外安装 `rpm-build` 后执行：
+**Fedora（`.rpm`）**
+
+在 Fedora 安装 `rpm-build`（或在 Debian/Ubuntu 安装 `rpm`）后执行：
 
 ```sh
 cargo xtask bundle rpm
 ```
 
-Debian / Ubuntu 主机安装 `rpm` 软件包后也可执行同一命令。产物为 `<target-dir>/release/bundle/wlanlogin-<version>-<release>.<arch>.rpm`，在 Fedora 上构建时 release 带 `.fc44` 等发行版后缀；同一版本重新打包时用 `--release 2` 等递增。软件包附带 `CHANGELOG.md` 与中英文 man 手册，RPM 变更记录同样取 `CHANGELOG.md` 中当前版本条目的日期。
+产物位于 `<target-dir>/release/bundle/wlanlogin-<version>-<release>.<arch>.rpm`（同版本重打可通过 `--release` 递增）。
 
-**Arch Linux**：`packaging/archlinux/PKGBUILD` 打包当前检出的已提交 HEAD，未提交的修改不会进入软件包：
+**Arch Linux（`.pkg.tar.zst`）**
+
+`packaging/archlinux/PKGBUILD` 打包当前检出的已提交 HEAD：
 
 ```sh
 cd packaging/archlinux
 makepkg -s
 ```
 
-产物为 `packaging/archlinux/wlanlogin-<pkgver>-<pkgrel>-<arch>.pkg.tar.zst`，`pkgver` 形如 `2.0.0.r117.g0c2984b`（workspace 版本、提交数与短哈希）。
+产物为 `packaging/archlinux/wlanlogin-<pkgver>-<pkgrel>-<arch>.pkg.tar.zst`，`pkgver` 形如 `<version>.r<提交数>.g<短哈希>`。
+
+</details>
 
 <a id="build-macos"></a>
 
@@ -513,6 +524,7 @@ cargo xtask bundle windows --target x86_64-pc-windows-msvc
 | `crates/wlan-app` | `wlanlogin-cli`，CLI、TUI、后台服务与平台集成 |
 | `xtask` | 应用打包与架构边界检查工具 |
 | `packaging/windows` | Windows 安装向导与 MSI 自定义动作 |
+| `packaging/{macos,debian,fedora,archlinux,linux}` | macOS 应用资源、Linux 软件包定义与双语 man 手册 |
 | `docs` | 校园网门户协议说明 |
 
 本地验证命令：

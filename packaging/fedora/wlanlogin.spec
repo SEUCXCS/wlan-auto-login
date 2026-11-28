@@ -26,7 +26,7 @@ to save credentials and register the background service.
 %install
 install -Dpm 0755 %{_sourcedir}/%{name} -t %{buildroot}%{_bindir}
 install -Dpm 0644 %{_sourcedir}/LICENSE -t %{buildroot}%{_licensedir}/%{name}
-install -Dpm 0644 %{_sourcedir}/README.md %{_sourcedir}/CHANGELOG.md -t %{buildroot}%{_docdir}/%{name}
+install -Dpm 0644 %{_sourcedir}/README.md -t %{buildroot}%{_docdir}/%{name}
 install -Dpm 0644 %{_sourcedir}/%{name}.1 -t %{buildroot}%{_mandir}/man1
 install -Dpm 0644 %{_sourcedir}/%{name}.zh_CN.1 %{buildroot}%{_mandir}/zh_CN/man1/%{name}.1
 
@@ -35,11 +35,10 @@ install -Dpm 0644 %{_sourcedir}/%{name}.zh_CN.1 %{buildroot}%{_mandir}/zh_CN/man
 %license %{_licensedir}/%{name}/LICENSE
 %dir %{_docdir}/%{name}
 %doc %{_docdir}/%{name}/README.md
-%doc %{_docdir}/%{name}/CHANGELOG.md
 %{_bindir}/%{name}
 %{_mandir}/man1/%{name}.1*
 %lang(zh_CN) %{_mandir}/zh_CN/man1/%{name}.1*
 
 %changelog
 * @DATE@ Goldbro233 <bowensun_06@outlook.com> - @VERSION@-@RELEASE@
-- Package upstream release @UPSTREAM@; see CHANGELOG.md.
+- Package upstream release @UPSTREAM@. See README.md for the release notes link.
