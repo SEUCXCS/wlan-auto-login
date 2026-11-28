@@ -154,31 +154,46 @@ fn query(package: &Path, arguments: &[&str]) -> Result<String> {
 
 /// Refuse packages that would not install on the oldest supported release.
 fn require_supported_glibc(requires: &str) -> Result<&str> {
+    ensure!(
+        !requires
+            .lines()
+            .any(|line| line.contains("(GLIBC_PRIVATE)")),
+        "The binary depends on GLIBC_PRIVATE internal symbols and cannot be packaged for Fedora"
+    );
     let required = glibc_requirement(requires).context(
         "rpmbuild generated no glibc requirement; is rpm's ELF dependency generator installed?",
     )?;
+    let required_parts =
+        version_parts(required).context("Failed to parse generated glibc symbol version")?;
+    let oldest_parts = version_parts(OLDEST_GLIBC).context("Invalid OLDEST_GLIBC constant")?;
     ensure!(
-        version_parts(required) <= version_parts(OLDEST_GLIBC),
+        required_parts <= oldest_parts,
         "The binary requires glibc {required}, but Fedora 43 provides {OLDEST_GLIBC}; build the package on an older host"
     );
     Ok(required)
 }
 
-/// The highest `GLIBC_x.y` symbol version across the generated glibc library requirements.
+/// The highest numeric `GLIBC_x.y` symbol version across the generated glibc library requirements.
 fn glibc_requirement(requires: &str) -> Option<&str> {
     requires
         .lines()
         .filter_map(|line| {
             let (_, version) = line.split_once("(GLIBC_")?;
-            version.split_once(')').map(|(version, _)| version)
+            let (version, _) = version.split_once(')')?;
+            let parts = version_parts(version)?;
+            Some((parts, version))
         })
-        .max_by_key(|version| version_parts(version))
+        .max_by(|(left, _), (right, _)| left.cmp(right))
+        .map(|(_, version)| version)
 }
 
-fn version_parts(version: &str) -> Vec<u32> {
+fn version_parts(version: &str) -> Option<Vec<u32>> {
+    if version.is_empty() {
+        return None;
+    }
     version
         .split('.')
-        .map(|part| part.parse().unwrap_or(0))
+        .map(|part| part.parse::<u32>().ok())
         .collect()
 }
 
@@ -206,10 +221,14 @@ mod tests {
 
     #[test]
     fn glibc_requirement_is_the_highest_symbol_version() {
-        let requires = "NetworkManager\nlibc.so.6()(64bit)\nlibc.so.6(GLIBC_2.2.5)(64bit)\nlibc.so.6(GLIBC_2.34)(64bit)\nlibc.so.6(GLIBC_2.9)(64bit)\nlibdbus-1.so.3(LIBDBUS_1_3)(64bit)\nlibm.so.6(GLIBC_2.38)(64bit)\nsystemd";
+        let requires = "NetworkManager\nlibc.so.6()(64bit)\nlibc.so.6(GLIBC_2.2.5)(64bit)\nlibc.so.6(GLIBC_2.34)(64bit)\nlibc.so.6(GLIBC_2.9)(64bit)\nlibc.so.6(GLIBC_ABI_DT_RELR)(64bit)\nlibdbus-1.so.3(LIBDBUS_1_3)(64bit)\nlibm.so.6(GLIBC_2.38)(64bit)\nsystemd";
         assert_eq!(glibc_requirement(requires), Some("2.38"));
         assert_eq!(
             glibc_requirement("NetworkManager\nlibc.so.6()(64bit)"),
+            None
+        );
+        assert_eq!(
+            glibc_requirement("libc.so.6(GLIBC_ABI_DT_RELR)(64bit)"),
             None
         );
     }
@@ -219,5 +238,13 @@ mod tests {
         assert!(require_supported_glibc("libc.so.6(GLIBC_2.42)(64bit)").is_ok());
         assert!(require_supported_glibc("libc.so.6(GLIBC_2.43)(64bit)").is_err());
         assert!(require_supported_glibc("systemd").is_err());
+        assert!(require_supported_glibc("libc.so.6(GLIBC_ABI_DT_RELR)(64bit)").is_err());
+        assert!(require_supported_glibc("libc.so.6(GLIBC_PRIVATE)(64bit)").is_err());
+        assert!(
+            require_supported_glibc(
+                "libc.so.6(GLIBC_2.34)(64bit)\nlibc.so.6(GLIBC_PRIVATE)(64bit)"
+            )
+            .is_err()
+        );
     }
 }
