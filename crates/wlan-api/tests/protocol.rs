@@ -587,6 +587,30 @@ async fn unknown_status_never_reaches_page_or_login() -> TestResult {
 }
 
 #[tokio::test]
+async fn status_skips_invalid_ip_candidates_and_keeps_valid_priority() -> TestResult {
+    for (body, expected) in [
+        (
+            include_str!("fixtures/chkstatus-ipv4-fallback.jsonp"),
+            Some("192.0.2.14"),
+        ),
+        (
+            r#"dr1({"result":0,"v46ip":"192.0.2.12","v4ip":"192.0.2.14"});"#,
+            Some("192.0.2.12"),
+        ),
+        (r#"dr1({"result":0,"v46ip":"0.0.0.0","v4ip":"bad"});"#, None),
+    ] {
+        let (client, task) = server(vec![body]).await?;
+        let status = client.status().await;
+        match expected {
+            Some(ip) => assert_eq!(status?.ip.to_string(), ip),
+            None => assert!(status.is_err()),
+        }
+        tokio::time::timeout(Duration::from_secs(3), task).await??;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_device_status_prevents_action_request() -> TestResult {
     let (client, task) = server(vec![r#"dr1({"result":1});"#]).await?;
     assert!(client.logout().await.is_err());

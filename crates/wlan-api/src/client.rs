@@ -456,13 +456,11 @@ fn text_field(value: &Value, names: &[&str]) -> Option<String> {
 }
 
 fn parse_status(value: &Value) -> Result<Status, Error> {
-    let ip: Ipv4Addr = text_field(
-        value,
-        &["v46ip", "v4ip", "userip", "user_ip", "wlan_user_ip"],
-    )
-    .and_then(|v| v.parse().ok())
-    .filter(|ip: &Ipv4Addr| !ip.is_unspecified() && !ip.is_broadcast() && !ip.is_multicast())
-    .ok_or(Error::MissingIp)?;
+    let ip = ["v46ip", "v4ip", "userip", "user_ip", "wlan_user_ip"]
+        .into_iter()
+        .filter_map(|name| value[name].as_str()?.parse::<Ipv4Addr>().ok())
+        .find(|ip| !ip.is_unspecified() && !ip.is_broadcast() && !ip.is_multicast())
+        .ok_or(Error::MissingIp)?;
     // Dr.COM a41.js checkStatus defines result: 0 offline, 1 online. Keep
     // explicit compatibility flags first; an invalid present flag stays unknown.
     let auth = match value.get("online").or_else(|| value.get("is_login")) {
