@@ -1,6 +1,7 @@
 //! Default workflows composed from shared steps and native adapters.
 pub(crate) mod control;
 pub(crate) mod credentials;
+pub(crate) mod hooks;
 pub(crate) mod logs;
 pub(crate) mod permission;
 pub(crate) mod restart;
@@ -8,14 +9,6 @@ pub(crate) mod run;
 pub(crate) mod start;
 pub(crate) mod status;
 pub(crate) mod stop;
-#[cfg(target_os = "linux")]
-#[path = "../../linux/flow/uninstall_default.rs"]
-pub(crate) mod uninstall;
-#[cfg(target_os = "macos")]
-#[path = "../../macos/flow/uninstall_default.rs"]
-pub(crate) mod uninstall;
-#[cfg(target_os = "windows")]
-#[path = "../../windows/flow/uninstall_default.rs"]
 pub(crate) mod uninstall;
 pub(crate) mod wifi;
 
@@ -40,7 +33,14 @@ pub(crate) mod tests {
     const MAC_SYSTEM_REMOVED: &str = r#"{"version":1,"service":"dev.cxcs.tools.wlanlogin","scope":"system","status":"not_registered"}"#;
 
     pub(crate) struct FixtureHooks;
-    impl crate::system::shared::services::hooks::UninstallHooks for FixtureHooks {
+    impl super::hooks::Hooks<super::uninstall::Step, super::uninstall::UninstallContext<'_>>
+        for FixtureHooks
+    {
+    }
+    impl super::uninstall::UninstallHooks for FixtureHooks {
+        fn retain_locks(&self) -> bool {
+            control::RETAIN_LOCKS_ON_PURGE
+        }
         fn packaged_definition(&self, plan: &Plan) -> bool {
             matches!(plan.manager, Manager::MacosAppService { .. })
         }

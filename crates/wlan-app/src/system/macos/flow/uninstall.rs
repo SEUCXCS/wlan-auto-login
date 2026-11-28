@@ -1,23 +1,48 @@
 //! Add signed payload and helper cleanup to the common uninstall transaction.
-use crate::infra::{cleanup, command::Runner, control, error::Result, paths::Paths};
+use crate::infra::{
+    cleanup,
+    command::Runner,
+    control,
+    error::{Error, Result},
+    paths::Paths,
+};
 use crate::system::{
     define::services::{Action, Manager, Plan, ServiceManager, ServiceState},
     macos::{
         runtime::host,
         services::{bundle, payload},
     },
-    shared::services::hooks::UninstallHooks,
+    shared::flow::{
+        hooks::Hooks,
+        uninstall::{Step, UninstallContext, UninstallHooks},
+    },
 };
-struct Hooks;
-impl UninstallHooks for Hooks {
-    async fn validate(&self, plan: &Plan) -> Result<()> {
-        if let Some(app) = bundle::enclosing(&plan.executable)
-            && app.exists()
-        {
-            payload::validate(&app).await?;
+pub(crate) struct NativeHooks;
+impl Hooks<Step, UninstallContext<'_>> for NativeHooks {
+    async fn after(
+        &self,
+        step: Step,
+        context: &UninstallContext<'_>,
+        result: std::result::Result<(), &Error>,
+    ) -> Result<()> {
+        if result.is_err() {
+            return Ok(());
+        }
+        let Some(app) = bundle::enclosing(&context.plan.executable) else {
+            return Ok(());
+        };
+        match step {
+            Step::Validate if app.exists() => payload::validate(&app).await?,
+            Step::Stop => {
+                control::stop_managed(context.paths).await?;
+                host::stop_helpers(context.paths.scope, &app).await?;
+            }
+            _ => {}
         }
         Ok(())
     }
+}
+impl UninstallHooks for NativeHooks {
     fn must_stop(&self, plan: &Plan, state: &ServiceState) -> bool {
         state.running
             || state.pending
@@ -28,13 +53,6 @@ impl UninstallHooks for Hooks {
         plan.manager
             .manage(plan, Action::Stop, ServiceState::absent(), runner)
             .await
-    }
-    async fn stop_helpers(&self, paths: &Paths, plan: &Plan) -> Result<()> {
-        if let Some(app) = bundle::enclosing(&plan.executable) {
-            control::stop_managed(paths).await?;
-            host::stop_helpers(paths.scope, &app).await?;
-        }
-        Ok(())
     }
     fn packaged_definition(&self, plan: &Plan) -> bool {
         matches!(plan.manager, Manager::MacosAppService { .. })
@@ -57,7 +75,4 @@ impl UninstallHooks for Hooks {
     }
 }
 
-pub(crate) async fn run(paths: &Paths, purge: bool) -> Result<()> {
-    // Common ordering owns locks, stop barriers, unregistration and scope cleanup.
-    crate::system::shared::flow::uninstall::run_with(paths, purge, &Hooks).await
-}
+pub(crate) use crate::system::shared::flow::uninstall::run;
